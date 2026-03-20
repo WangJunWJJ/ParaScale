@@ -1,0 +1,81 @@
+# ParaScale Docker Compose 配置
+# 支持单节点多 GPU 和多节点分布式训练
+
+version: '3.8'
+
+services:
+  # 单节点训练服务
+  parascale-single:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: parascale:latest
+    container_name: parascale-single
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - CUDA_VISIBLE_DEVICES=0,1,2,3
+    volumes:
+      - ./data:/workspace/data
+      - ./checkpoints:/workspace/checkpoints
+      - ./logs:/workspace/logs
+    working_dir: /workspace
+    command: /bin/bash
+    stdin_open: true
+    tty: true
+
+  # 多节点训练 - 主节点
+  parascale-master:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: parascale:latest
+    container_name: parascale-master
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=0,1
+      - MASTER_ADDR=parascale-master
+      - MASTER_PORT=29500
+      - WORLD_SIZE=2
+      - RANK=0
+      - NODE_RANK=0
+    volumes:
+      - ./data:/workspace/data
+      - ./checkpoints:/workspace/checkpoints
+    working_dir: /workspace
+    command: /bin/bash
+    stdin_open: true
+    tty: true
+    networks:
+      - parascale-network
+
+  # 多节点训练 - 工作节点
+  parascale-worker:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: parascale:latest
+    container_name: parascale-worker
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=2,3
+      - MASTER_ADDR=parascale-master
+      - MASTER_PORT=29500
+      - WORLD_SIZE=2
+      - RANK=1
+      - NODE_RANK=1
+    volumes:
+      - ./data:/workspace/data
+      - ./checkpoints:/workspace/checkpoints
+    working_dir: /workspace
+    command: /bin/bash
+    stdin_open: true
+    tty: true
+    networks:
+      - parascale-network
+    depends_on:
+      - parascale-master
+
+networks:
+  parascale-network:
+    driver: bridge
