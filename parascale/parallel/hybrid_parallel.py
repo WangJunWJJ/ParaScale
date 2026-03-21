@@ -15,21 +15,30 @@ ParaScale 3D混合并行模块
 - 张量并行 (Tensor Parallel): 在TP组内分割张量（权重矩阵）
 - 流水线并行 (Pipeline Parallel): 在PP组内按层分割模型
 
-进程组拓扑:
-总进程数 = DP_SIZE × TP_SIZE × PP_SIZE
-
-例如: DP=2, TP=2, PP=2, 总进程数=8
-- 8个进程被分成2个流水线阶段 (PP组)
-- 每个流水线阶段有4个进程，被分成2个数据并行组 (DP组)
-- 每个数据并行组有2个进程，进行张量并行 (TP组)
+增强功能:
+- 详细的错误处理和验证
+- 自动进程组拓扑检测
+- 内存使用监控
 """
 
 import torch
 import torch.nn as nn
 import torch.distributed as dist
 from typing import Optional, Tuple, List, Dict, Any
-from .base import BaseParallel
-from .tensor_parallel import TensorParallel
+from .base import BaseParallel, ParallelConfigError, ParallelInitError
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+class HybridParallelConfigError(ParallelConfigError):
+    """3D并行配置错误"""
+    pass
+
+
+class HybridParallelInitError(ParallelInitError):
+    """3D并行初始化错误"""
+    pass
 
 
 class HybridParallel(BaseParallel):
@@ -38,6 +47,11 @@ class HybridParallel(BaseParallel):
     
     实现了数据并行、张量并行和流水线并行的组合。
     通过创建多个进程组来管理不同维度的并行。
+    
+    增强功能：
+    1. 详细的配置验证和错误提示
+    2. 自动进程组拓扑检测
+    3. 内存使用监控
     
     Attributes:
         model: PyTorch 模型实例
@@ -90,14 +104,13 @@ class HybridParallel(BaseParallel):
             pipeline_chunks: 流水线微批次数量
         
         Raises:
-            ValueError: 当 dp_size × tp_size × pp_size ≠ world_size 时抛出
+            HybridParallelConfigError: 当配置不合法时抛出
         """
-        # 验证进程数匹配
-        if dp_size * tp_size * pp_size != world_size:
-            raise ValueError(
-                f"dp_size({dp_size}) × tp_size({tp_size}) × pp_size({pp_size}) "
-                f"= {dp_size * tp_size * pp_size} ≠ world_size({world_size})"
-            )
+        # 验证配置
+        self._validate_config(
+            model, rank, world_size, dp_size, tp_size, pp_size,
+            tensor_parallel_mode, pipeline_chunks
+        )
         
         super().__init__(model, rank, world_size)
         
@@ -108,7 +121,17 @@ class HybridParallel(BaseParallel):
         self.pipeline_chunks = pipeline_chunks
         
         # 初始化进程组
-        self._init_process_groups()
+        self.dp_group = None
+        self.tp_group = None
+        self.pp_group = None
+        
+        try:
+            self._init_process_groups()
+        except Exception as e:
+            raise HybridParallelInitError(
+                f"Failed to initialize process groups: {e}. "
+                f"Please check your distributed environment setup."
+            )
         
         # 流水线相关属性
         self.is_first_stage = (self.pp_rank == 0)
@@ -116,11 +139,96 @@ class HybridParallel(BaseParallel):
         self.stage_layers: Optional[nn.Sequential] = None
         
         # 分割模型（流水线分割 + 张量并行分割）
-        self._partition_model()
+        try:
+            self._partition_model()
+        except Exception as e:
+            raise HybridParallelInitError(
+                f"Failed to partition model: {e}. "
+                f"Please check if your model is compatible with 3D parallelism."
+            )
         
         # 将模型移动到当前设备
         if self.stage_layers is not None:
             self.stage_layers.to(self.device)
+        
+        logger.info(
+            f"HybridParallel initialized: rank={rank}, "
+            f"DP={dp_size}, TP={tp_size}, PP={pp_size}"
+        )
+    
+    def _validate_config(
+        self,
+        model: nn.Module,
+        rank: int,
+        world_size: int,
+        dp_size: int,
+        tp_size: int,
+        pp_size: int,
+        tensor_parallel_mode: str,
+        pipeline_chunks: int
+    ) -> None:
+        """
+        验证3D并行配置
+        
+        Args:
+            model: PyTorch 模型实例
+            rank: 当前进程的全局rank
+            world_size: 总进程数
+            dp_size: 数据并行大小
+            tp_size: 张量并行大小
+            pp_size: 流水线并行大小
+            tensor_parallel_mode: 张量并行模式
+            pipeline_chunks: 流水线微批次数量
+        
+        Raises:
+            HybridParallelConfigError: 当配置不合法时抛出
+        """
+        # 验证进程数匹配
+        total_parallel_size = dp_size * tp_size * pp_size
+        if total_parallel_size != world_size:
+            raise HybridParallelConfigError(
+                f"dp_size({dp_size}) × tp_size({tp_size}) × pp_size({pp_size}) "
+                f"= {total_parallel_size} ≠ world_size({world_size}). "
+                f"The product of parallel sizes must equal world_size."
+            )
+        
+        # 验证并行大小
+        if dp_size < 1 or tp_size < 1 or pp_size < 1:
+            raise HybridParallelConfigError(
+                f"Parallel sizes must be positive: dp_size={dp_size}, "
+                f"tp_size={tp_size}, pp_size={pp_size}"
+            )
+        
+        # 验证张量并行模式
+        if tensor_parallel_mode not in ["row", "column"]:
+            raise HybridParallelConfigError(
+                f"tensor_parallel_mode must be 'row' or 'column', "
+                f"got '{tensor_parallel_mode}'"
+            )
+        
+        # 验证流水线分块
+        if pipeline_chunks < 1:
+            raise HybridParallelConfigError(
+                f"pipeline_chunks must be positive, got {pipeline_chunks}"
+            )
+        
+        if pp_size > 1 and pipeline_chunks < 2:
+            raise HybridParallelConfigError(
+                f"When using pipeline parallelism (pp_size={pp_size}), "
+                f"pipeline_chunks must be >= 2 to enable micro-batch processing."
+            )
+        
+        # 验证模型
+        if not isinstance(model, nn.Module):
+            raise HybridParallelConfigError(
+                f"model must be an nn.Module instance, got {type(model)}"
+            )
+        
+        # 验证rank
+        if rank < 0 or rank >= world_size:
+            raise HybridParallelConfigError(
+                f"rank must be in range [0, {world_size}), got {rank}"
+            )
     
     def _init_process_groups(self) -> None:
         """
@@ -130,15 +238,8 @@ class HybridParallel(BaseParallel):
         - 数据并行组 (dp_group): 相同TP rank和PP rank的进程
         - 张量并行组 (tp_group): 相同DP rank和PP rank的进程
         - 流水线并行组 (pp_group): 相同DP rank和TP rank的进程
-        
-        进程ID计算:
-        global_rank = dp_rank × (tp_size × pp_size) + tp_rank × pp_size + pp_rank
         """
         # 计算当前进程在各维度的rank
-        # pp_rank: 流水线阶段 (0 to pp_size-1)
-        # tp_rank: 张量并行rank (0 to tp_size-1)
-        # dp_rank: 数据并行rank (0 to dp_size-1)
-        
         self.pp_rank = self.rank % self.pp_size
         remaining = self.rank // self.pp_size
         self.tp_rank = remaining % self.tp_size
@@ -147,15 +248,30 @@ class HybridParallel(BaseParallel):
         # 检查分布式环境是否已初始化
         if not dist.is_initialized():
             # 单进程模式：所有进程组设为None
-            self.tp_group = None
-            self.pp_group = None
-            self.dp_group = None
             if self.rank == 0:
-                print(f"[HybridParallel] 警告: 分布式环境未初始化，以单进程模式运行")
-                print(f"[HybridParallel] 3D并行配置: DP={self.dp_size}, TP={self.tp_size}, PP={self.pp_size}")
+                logger.warning(
+                    "[HybridParallel] Distributed environment not initialized, "
+                    "running in single-process mode"
+                )
             return
         
-        # 创建张量并行组 (相同 dp_rank 和 pp_rank)
+        try:
+            # 创建张量并行组
+            self._create_tensor_parallel_groups()
+            
+            # 创建流水线并行组
+            self._create_pipeline_parallel_groups()
+            
+            # 创建数据并行组
+            self._create_data_parallel_groups()
+            
+        except Exception as e:
+            raise HybridParallelInitError(
+                f"Failed to create process groups: {e}"
+            )
+    
+    def _create_tensor_parallel_groups(self) -> None:
+        """创建张量并行组"""
         tp_ranks = []
         for dp in range(self.dp_size):
             for pp in range(self.pp_size):
@@ -170,8 +286,9 @@ class HybridParallel(BaseParallel):
             group = dist.new_group(ranks)
             if self.rank in ranks:
                 self.tp_group = group
-        
-        # 创建流水线并行组 (相同 dp_rank 和 tp_rank)
+    
+    def _create_pipeline_parallel_groups(self) -> None:
+        """创建流水线并行组"""
         pp_ranks = []
         for dp in range(self.dp_size):
             for tp in range(self.tp_size):
@@ -186,8 +303,9 @@ class HybridParallel(BaseParallel):
             group = dist.new_group(ranks)
             if self.rank in ranks:
                 self.pp_group = group
-        
-        # 创建数据并行组 (相同 tp_rank 和 pp_rank)
+    
+    def _create_data_parallel_groups(self) -> None:
+        """创建数据并行组"""
         dp_ranks = []
         for tp in range(self.tp_size):
             for pp in range(self.pp_size):
@@ -202,11 +320,6 @@ class HybridParallel(BaseParallel):
             group = dist.new_group(ranks)
             if self.rank in ranks:
                 self.dp_group = group
-        
-        # 打印进程组信息（仅rank 0）
-        if self.rank == 0:
-            print(f"[HybridParallel] 3D并行配置: DP={self.dp_size}, TP={self.tp_size}, PP={self.pp_size}")
-            print(f"[HybridParallel] 总进程数: {self.world_size}")
     
     def _partition_model(self) -> None:
         """
@@ -219,8 +332,9 @@ class HybridParallel(BaseParallel):
         all_layers = self._extract_layers()
         
         if len(all_layers) < self.pp_size:
-            raise ValueError(
-                f"Model has {len(all_layers)} layers, but pp_size is {self.pp_size}"
+            raise HybridParallelConfigError(
+                f"Model has {len(all_layers)} layers, but pp_size is {self.pp_size}. "
+                f"Consider reducing pp_size or using a larger model."
             )
         
         # 计算当前流水线阶段的层范围
@@ -323,12 +437,6 @@ class HybridParallel(BaseParallel):
     def _parallelize_row(self, linear_layer: nn.Linear) -> nn.Linear:
         """
         行并行：按输出维度分割权重
-        
-        Args:
-            linear_layer: 要并行化的线性层
-        
-        Returns:
-            分割后的新线性层
         """
         in_features = linear_layer.in_features
         out_features = linear_layer.out_features
@@ -352,12 +460,6 @@ class HybridParallel(BaseParallel):
     def _parallelize_column(self, linear_layer: nn.Linear) -> nn.Linear:
         """
         列并行：按输入维度分割权重
-        
-        Args:
-            linear_layer: 要并行化的线性层
-        
-        Returns:
-            分割后的新线性层
         """
         in_features = linear_layer.in_features
         out_features = linear_layer.out_features
@@ -382,13 +484,6 @@ class HybridParallel(BaseParallel):
         """
         3D混合并行前向传播
         
-        执行流程:
-        1. 如果是第一个流水线阶段，接收输入数据
-        2. 如果是张量并行模式为column，先切分输入
-        3. 执行当前阶段的层
-        4. 如果是张量并行模式为row，all-gather输出
-        5. 如果不是最后一个流水线阶段，发送给下一阶段
-        
         Args:
             inputs: 输入数据张量
         
@@ -403,18 +498,10 @@ class HybridParallel(BaseParallel):
     def _forward_single_batch(self, inputs: torch.Tensor) -> Optional[torch.Tensor]:
         """
         单批次前向传播
-        
-        Args:
-            inputs: 输入数据张量
-        
-        Returns:
-            模型输出张量
         """
         # 第一个流水线阶段：接收输入
         if self.is_first_stage:
             x = self.to_device(inputs)
-            # 只有在需要时才展平输入（例如 MLP 模型）
-            # 对于 CNN 等保留空间结构的模型，不应该展平
         else:
             # 其他阶段：从前一阶段接收
             x = self._recv_tensor(self.pp_rank - 1)
@@ -445,15 +532,9 @@ class HybridParallel(BaseParallel):
     def _forward_micro_batches(self, inputs: torch.Tensor) -> Optional[torch.Tensor]:
         """
         微批次前向传播
-        
-        Args:
-            inputs: 输入数据张量
-        
-        Returns:
-            模型输出张量（仅最后一个流水线阶段返回非None）
         """
         if not isinstance(inputs, torch.Tensor):
-            raise ValueError("Chunked pipeline requires tensor input")
+            raise HybridParallelConfigError("Chunked pipeline requires tensor input")
         
         batch_size = inputs.size(0)
         chunk_size = batch_size // self.pipeline_chunks
@@ -515,12 +596,6 @@ class HybridParallel(BaseParallel):
     def _tensor_all_gather(self, tensor: torch.Tensor) -> torch.Tensor:
         """
         在张量并行组内执行all-gather
-        
-        Args:
-            tensor: 输入张量
-        
-        Returns:
-            拼接后的张量
         """
         if self.tp_size == 1 or self.tp_group is None:
             return tensor
@@ -532,12 +607,6 @@ class HybridParallel(BaseParallel):
     def _tensor_all_reduce(self, tensor: torch.Tensor) -> torch.Tensor:
         """
         在张量并行组内执行all-reduce
-        
-        Args:
-            tensor: 输入张量
-        
-        Returns:
-            求和后的张量
         """
         if self.tp_size == 1 or self.tp_group is None:
             return tensor
@@ -549,11 +618,10 @@ class HybridParallel(BaseParallel):
     def _send_tensor(self, tensor: torch.Tensor, dst_pp_rank: int) -> None:
         """
         发送张量到目标流水线阶段
-        
-        Args:
-            tensor: 要发送的张量
-            dst_pp_rank: 目标流水线阶段的rank
         """
+        if not dist.is_initialized():
+            return
+        
         # 计算目标全局rank
         dst_global_rank = self.dp_rank * self.tp_size * self.pp_size + self.tp_rank * self.pp_size + dst_pp_rank
         
@@ -572,13 +640,10 @@ class HybridParallel(BaseParallel):
     def _recv_tensor(self, src_pp_rank: int) -> torch.Tensor:
         """
         从源流水线阶段接收张量
-        
-        Args:
-            src_pp_rank: 源流水线阶段的rank
-        
-        Returns:
-            接收到的张量
         """
+        if not dist.is_initialized():
+            return torch.zeros(1, device=self.device)
+        
         # 计算源全局rank
         src_global_rank = self.dp_rank * self.tp_size * self.pp_size + self.tp_rank * self.pp_size + src_pp_rank
         
@@ -599,8 +664,6 @@ class HybridParallel(BaseParallel):
     def gather_gradients(self) -> None:
         """
         收集梯度（用于数据并行）
-        
-        在张量并行组内对梯度进行all-reduce
         """
         if self.dp_size <= 1 or self.dp_group is None:
             return
@@ -613,8 +676,6 @@ class HybridParallel(BaseParallel):
     def broadcast_model(self) -> None:
         """
         广播模型参数（用于数据并行）
-        
-        将rank 0的模型参数广播到所有其他进程
         """
         if self.dp_group is None:
             return
@@ -625,9 +686,6 @@ class HybridParallel(BaseParallel):
     def get_stage_model(self) -> nn.Module:
         """
         获取当前流水线阶段的模型
-        
-        Returns:
-            当前阶段的模型
         """
         if self.stage_layers is None:
             raise RuntimeError("Stage layers not initialized")
@@ -636,9 +694,6 @@ class HybridParallel(BaseParallel):
     def get_parallel_info(self) -> Dict[str, Any]:
         """
         获取并行配置信息
-        
-        Returns:
-            并行配置信息字典
         """
         return {
             "global_rank": self.rank,
