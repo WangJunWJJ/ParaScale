@@ -29,6 +29,7 @@ class QuantizationConfig:
         scheme: 量化方案，"symmetric"（对称）或 "asymmetric"（非对称）
         per_channel: 是否逐通道量化
         observer_type: 观察器类型，"minmax" 或 "moving_average"
+        moving_average_ratio: 移动平均观察器的比率（仅用于 moving_average 观察器）
         fuse_modules: 是否融合模块（Conv+BN+ReLU）
         qat_epochs: QAT 训练轮数
         calib_batches: PTQ 校准批次数量
@@ -39,6 +40,7 @@ class QuantizationConfig:
     scheme: Literal["symmetric", "asymmetric"] = "symmetric"
     per_channel: bool = True
     observer_type: Literal["minmax", "moving_average"] = "minmax"
+    moving_average_ratio: float = 0.9
     fuse_modules: bool = True
     qat_epochs: int = 10
     calib_batches: int = 100
@@ -73,11 +75,12 @@ class QuantizationConfig:
             "scheme": self.scheme,
             "per_channel": self.per_channel,
             "observer_type": self.observer_type,
+            "moving_average_ratio": self.moving_average_ratio,
             "fuse_modules": self.fuse_modules,
             "qat_epochs": self.qat_epochs,
             "calib_batches": self.calib_batches,
         }
-    
+
     @classmethod
     def from_dict(cls, config_dict: dict) -> "QuantizationConfig":
         """从字典创建配置"""
@@ -88,6 +91,7 @@ class QuantizationConfig:
             scheme=config_dict.get("scheme", "symmetric"),
             per_channel=config_dict.get("per_channel", True),
             observer_type=config_dict.get("observer_type", "minmax"),
+            moving_average_ratio=config_dict.get("moving_average_ratio", 0.9),
             fuse_modules=config_dict.get("fuse_modules", True),
             qat_epochs=config_dict.get("qat_epochs", 10),
             calib_batches=config_dict.get("calib_batches", 100),

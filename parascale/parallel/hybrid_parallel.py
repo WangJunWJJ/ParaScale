@@ -29,7 +29,7 @@ import torch.nn as nn
 import torch.distributed as dist
 from typing import Optional, Tuple, List, Dict, Any
 from .base import BaseParallel
-from .tensor_parallel import TensorParallel, AllGatherWithGradient, AllReduceWithGradient
+from .tensor_parallel import TensorParallel
 
 
 class HybridParallel(BaseParallel):
