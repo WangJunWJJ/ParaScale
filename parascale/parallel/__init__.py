@@ -17,6 +17,14 @@ from .model_parallel import ModelParallel
 from .tensor_parallel import TensorParallel
 from .pipeline_parallel import PipelineParallel
 from .hybrid_parallel import HybridParallel
+from .communication import (
+    GradientCompressor,
+    TopKCompressor,
+    OneBitAdamCompressor,
+    CommunicationOverlap,
+    RingAllReduce,
+    OptimizedCommunicator,
+)
 
 __all__ = [
     "BaseParallel",
@@ -24,5 +32,11 @@ __all__ = [
     "ModelParallel",
     "TensorParallel",
     "PipelineParallel",
-    "HybridParallel"
+    "HybridParallel",
+    "GradientCompressor",
+    "TopKCompressor",
+    "OneBitAdamCompressor",
+    "CommunicationOverlap",
+    "RingAllReduce",
+    "OptimizedCommunicator",
 ]
