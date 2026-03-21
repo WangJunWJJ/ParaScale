@@ -431,7 +431,38 @@ class PipelineParallel(BaseParallel):
 - 多进程组管理（TP组、PP组、DP组）
 - 支持行并行和列并行两种张量并行模式
 - 支持微批次流水线处理
+- 1F1B调度优化
 - 进程ID映射：global\_rank = dp\_rank × (tp\_size × pp\_size) + tp\_rank × pp\_size + pp\_rank
+
+**架构层次**：
+
+```
+Layer 3: Data Parallel
+    - 数据分割到不同节点
+    - 梯度同步
+
+Layer 2: Tensor Parallel
+    - 每层内部张量切分
+    - 使用 TensorParallel 的实现
+
+Layer 1: Pipeline Parallel
+    - 模型按层分割到不同 GPU
+    - 1F1B 调度优化
+```
+
+**1F1B 调度算法**：
+
+```
+调度顺序 (以 4 个 stage, 8 个 micro-batch 为例):
+
+Stage 0: F0 F1 F2 F3 F4 F5 F6 F7 B7 B6 B5 B4 B3 B2 B1 B0
+Stage 1:    F0 F1 F2 F3 F4 F5 F6 B7 B6 B5 B4 B3 B2 B1 B0
+Stage 2:       F0 F1 F2 F3 F4 B7 B6 B5 B4 B3 B2 B1 B0
+Stage 3:          F0 F1 F2 B7 B6 B5 B4 B3 B2 B1 B0
+
+Fn = Forward of micro-batch n
+Bn = Backward of micro-batch n
+```
 
 **进程组拓扑**：
 
@@ -442,6 +473,29 @@ class PipelineParallel(BaseParallel):
 - 8个进程被分成2个流水线阶段 (PP组)
 - 每个流水线阶段有4个进程，被分成2个数据并行组 (DP组)
 - 每个数据并行组有2个进程，进行张量并行 (TP组)
+
+Global Ranks:    [0, 1, 2, 3, 4, 5, 6, 7]
+                  │  │  │  │  │  │  │  │
+DP Groups:       [0, 4] [1, 5] [2, 6] [3, 7]
+TP Groups:       [0, 1] [2, 3] [4, 5] [6, 7]
+PP Groups:       [0, 2] [1, 3] [4, 6] [5, 7]
+
+坐标计算:
+- pp_rank = rank % pp_size
+- tp_rank = (rank // pp_size) % tp_size
+- dp_rank = rank // (pp_size * tp_size)
+```
+
+**配置选项**：
+
+```python
+class HybridParallelConfig:
+    dp_size: int                    # 数据并行大小
+    tp_size: int                    # 张量并行大小
+    pp_size: int                    # 流水线并行大小
+    schedule: PipelineSchedule      # 1f1b / fill_drain / interleaved
+    num_micro_batches: int          # 微批次数量
+    enable_overlap: bool            # 是否启用通信重叠
 ```
 
 **代码结构**：

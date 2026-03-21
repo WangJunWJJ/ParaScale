@@ -484,7 +484,7 @@ forward(inputs: torch.Tensor) -> Optional[torch.Tensor]
 
 ### 3.4 TensorParallel
 
-`TensorParallel` 实现张量并行策略，将模型的张量（权重矩阵）分割到不同 GPU。
+`TensorParallel` 实现张量并行策略，将模型的张量（权重矩阵）分割到不同 GPU。参考 Megatron-LM 和 DeepSpeed 的最佳实践。
 
 #### 构造函数
 
@@ -493,50 +493,139 @@ TensorParallel(
     model: nn.Module,
     rank: int,
     world_size: int,
-    mode: Literal["row", "column"] = "row"
+    tp_size: int = 1,
+    strategy: str = "auto",
+    layer_config: Optional[Dict[str, str]] = None,
+    auto_parallelize: bool = True,
+    config: Optional[TensorParallelConfig] = None,
 )
 ```
 
 **参数：**
-- `mode`：张量并行模式，"row"（行并行）或 "column"（列并行），默认为 "row"
+- `model`：PyTorch 模型实例
+- `rank`：当前进程的 rank
+- `world_size`：世界大小
+- `tp_size`：张量并行大小，默认为 1
+- `strategy`：并行策略，"simple" / "transformer" / "auto"，默认为 "auto"
+- `layer_config`：层配置，指定哪些层需要并行化，默认为 None
+- `auto_parallelize`：是否自动并行化模型，默认为 True
+- `config`：TensorParallelConfig 配置对象，如果提供则其他参数被忽略
 
 **成员变量：**
-- `mode`：张量并行模式
-- `parallel_layers`：已并行化的层名称列表
+- `config`：TensorParallelConfig 配置实例
+- `tp_size`：张量并行大小
+- `tp_rank`：张量并行 rank
+- `tp_group`：张量并行进程组
+- `parallelized_layers`：已并行化的层名称列表
+
+#### 配置类
+
+##### TensorParallelConfig
+
+```python
+TensorParallelConfig(
+    tp_size: int = 1,
+    strategy: Union[str, ParallelStrategy] = ParallelStrategy.AUTO,
+    layer_config: Optional[Dict[str, Any]] = None,
+    auto_detect: bool = True,
+    fuse_communication: bool = True,
+)
+```
+
+**参数：**
+- `tp_size`：张量并行大小
+- `strategy`：并行策略，ParallelStrategy.SIMPLE / TRANSFORMER / AUTO
+- `layer_config`：层配置字典
+- `auto_detect`：是否自动检测层类型
+- `fuse_communication`：是否融合通信操作
+
+#### 并行层组件
+
+##### ColumnParallelLinear
+
+按输出维度切分权重的并行线性层。
+
+```python
+ColumnParallelLinear(
+    input_size: int,
+    output_size: int,
+    bias: bool = True,
+    gather_output: bool = False,
+    init_method: Optional[Callable] = None,
+    device: Optional[torch.device] = None,
+    dtype: Optional[torch.dtype] = None,
+)
+```
+
+**适用场景：** Q/K/V 投影
+
+##### RowParallelLinear
+
+按输入维度切分权重的并行线性层。
+
+```python
+RowParallelLinear(
+    input_size: int,
+    output_size: int,
+    bias: bool = True,
+    input_is_parallel: bool = False,
+    init_method: Optional[Callable] = None,
+    device: Optional[torch.device] = None,
+    dtype: Optional[torch.dtype] = None,
+)
+```
+
+**适用场景：** 输出投影
+
+##### VocabParallelEmbedding
+
+按词表维度切分的并行嵌入层。
+
+```python
+VocabParallelEmbedding(
+    num_embeddings: int,
+    embedding_dim: int,
+    init_method: Optional[Callable] = None,
+    device: Optional[torch.device] = None,
+    dtype: Optional[torch.dtype] = None,
+)
+```
+
+**适用场景：** 大词表场景
+
+##### ParallelSelfAttention
+
+针对 Transformer 优化的并行自注意力层。
+
+```python
+ParallelSelfAttention(
+    hidden_size: int,
+    num_attention_heads: int,
+    attention_dropout: float = 0.0,
+    device: Optional[torch.device] = None,
+    dtype: Optional[torch.dtype] = None,
+)
+```
+
+**特点：** 融合 ColumnParallel 和 RowParallel，仅需 2 次 all-reduce
+
+##### ParallelMLP
+
+针对 Transformer 优化的并行 MLP 层。
+
+```python
+ParallelMLP(
+    hidden_size: int,
+    ffn_hidden_size: int,
+    activation: str = "gelu",
+    device: Optional[torch.device] = None,
+    dtype: Optional[torch.dtype] = None,
+)
+```
+
+**特点：** FC1 (ColumnParallel) + FC2 (RowParallel)，仅需 2 次 all-reduce
 
 #### 方法
-
-##### _parallelize_model
-
-```python
-_parallelize_model() -> None
-```
-
-**功能：** 并行化模型中的线性层
-
-##### _parallelize_linear
-
-```python
-_parallelize_linear(linear_layer: nn.Linear) -> nn.Linear
-```
-
-**功能：** 并行化单个线性层
-
-##### _parallelize_row
-
-```python
-_parallelize_row(linear_layer: nn.Linear) -> nn.Linear
-```
-
-**功能：** 行并行，按输出维度分割权重
-
-##### _parallelize_column
-
-```python
-_parallelize_column(linear_layer: nn.Linear) -> nn.Linear
-```
-
-**功能：** 列并行，按输入维度分割权重
 
 ##### forward
 
@@ -544,7 +633,26 @@ _parallelize_column(linear_layer: nn.Linear) -> nn.Linear
 forward(inputs: torch.Tensor) -> torch.Tensor
 ```
 
-**功能：** 前向传播，根据并行模式执行 all-gather 或 all-reduce
+**功能：** 前向传播
+
+##### broadcast_model
+
+```python
+broadcast_model() -> None
+```
+
+**功能：** 广播模型参数到张量并行组
+
+##### get_parallel_info
+
+```python
+get_parallel_info() -> Dict[str, Any]
+```
+
+**功能：** 获取并行配置信息
+
+**返回值：**
+- 包含 tp_size, tp_rank, strategy, parallelized_layers 等信息的字典
 
 ### 3.5 PipelineParallel
 
@@ -647,7 +755,7 @@ get_stage_model() -> nn.Module
 
 ### 3.6 HybridParallel
 
-`HybridParallel` 实现3D混合并行策略，将数据并行、张量并行和流水线并行组合在一起。
+`HybridParallel` 实现3D混合并行策略，将数据并行、张量并行和流水线并行组合在一起。支持1F1B调度优化。
 
 #### 构造函数
 
@@ -659,8 +767,8 @@ HybridParallel(
     dp_size: int = 1,
     tp_size: int = 1,
     pp_size: int = 1,
-    tensor_parallel_mode: str = "row",
-    pipeline_chunks: int = 1
+    num_micro_batches: int = 4,
+    config: Optional[HybridParallelConfig] = None,
 )
 ```
 
@@ -671,13 +779,14 @@ HybridParallel(
 - `dp_size`：数据并行大小，默认为 1
 - `tp_size`：张量并行大小，默认为 1
 - `pp_size`：流水线并行大小，默认为 1
-- `tensor_parallel_mode`：张量并行模式，"row" 或 "column"，默认为 "row"
-- `pipeline_chunks`：流水线微批次数量，默认为 1
+- `num_micro_batches`：微批次数量，默认为 4
+- `config`：HybridParallelConfig 配置对象，如果提供则其他参数被忽略
 
 **约束条件：**
 - `dp_size × tp_size × pp_size` 必须等于 `world_size`
 
 **成员变量：**
+- `config`：HybridParallelConfig 配置实例
 - `dp_size`：数据并行大小
 - `tp_size`：张量并行大小
 - `pp_size`：流水线并行大小
@@ -689,6 +798,72 @@ HybridParallel(
 - `pp_group`：流水线并行进程组
 - `is_first_stage`：是否为流水线第一个阶段
 - `is_last_stage`：是否为流水线最后一个阶段
+- `scheduler`：PipelineScheduler 实例（当 pp_size > 1 时）
+- `communicator`：PipelineCommunicator 实例（当 pp_size > 1 时）
+
+#### 配置类
+
+##### HybridParallelConfig
+
+```python
+HybridParallelConfig(
+    dp_size: int = 1,
+    tp_size: int = 1,
+    pp_size: int = 1,
+    schedule: PipelineSchedule = PipelineSchedule.ONE_FORWARD_ONE_BACKWARD,
+    num_micro_batches: int = 4,
+    tp_config: Optional[TensorParallelConfig] = None,
+    enable_overlap: bool = True,
+)
+```
+
+**参数：**
+- `dp_size`：数据并行大小
+- `tp_size`：张量并行大小
+- `pp_size`：流水线并行大小
+- `schedule`：流水线调度策略，PipelineSchedule.ONE_FORWARD_ONE_BACKWARD / FILL_DRAIN / INTERLEAVED_1F1B
+- `num_micro_batches`：微批次数量
+- `tp_config`：TensorParallelConfig 配置对象
+- `enable_overlap`：是否启用通信重叠
+
+#### 流水线组件
+
+##### PipelineScheduler
+
+1F1B流水线调度器实现。
+
+```python
+PipelineScheduler(
+    num_stages: int,
+    stage_id: int,
+    num_micro_batches: int,
+    communicator: PipelineCommunicator,
+)
+```
+
+**方法：**
+- `forward_step(micro_batch_id, stage_module, input_tensor)`：执行前向步骤
+- `backward_step(micro_batch_id, output_grad)`：执行反向步骤
+- `run_schedule(stage_module, input_batches)`：执行完整的1F1B调度
+
+##### PipelineCommunicator
+
+流水线并行通信器，处理阶段间通信。
+
+```python
+PipelineCommunicator(
+    pp_group: Optional[dist.ProcessGroup],
+    pp_rank: int,
+    pp_size: int,
+    device: torch.device,
+)
+```
+
+**方法：**
+- `send_forward(tensor, dst_rank)`：向前发送张量
+- `recv_forward(src_rank)`：从前一阶段接收张量
+- `send_backward(tensor, dst_rank)`：向后发送梯度
+- `recv_backward(src_rank)`：从后一阶段接收梯度
 - `stage_layers`：当前流水线阶段的层
 - `tensor_parallel_mode`：张量并行模式
 

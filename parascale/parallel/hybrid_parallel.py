@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# @Time    : 2026/3/9 上午10:00
+# @Time    : 2026/3/21
 # @Author  : Jun Wang
 # @File    : hybrid_parallel.py
 # @Software: ParaScale - A PyTorch Distributed Training Framework
@@ -7,76 +7,333 @@
 """
 ParaScale 3D混合并行模块
 
-本模块实现了3D混合并行策略，将数据并行、张量并行和流水线并行组合在一起。
-3D并行可以在大规模分布式训练中实现更高的效率和可扩展性。
+本模块实现了高性能的3D混合并行策略，支持数据并行、张量并行和流水线并行的组合。
 
-3D并行架构:
-- 数据并行 (Data Parallel): 在DP组内分割数据，每个组持有完整的模型副本
-- 张量并行 (Tensor Parallel): 在TP组内分割张量（权重矩阵）
-- 流水线并行 (Pipeline Parallel): 在PP组内按层分割模型
+架构设计:
+    ┌─────────────────────────────────────────────────────────────┐
+    │                  HybridParallel                             │
+    ├─────────────────────────────────────────────────────────────┤
+    │  Layer 1: Pipeline Parallel (PP)                            │
+    │     - 模型按层分割到不同GPU                                  │
+    │     - 1F1B调度优化                                          │
+    │                                                             │
+    │  Layer 2: Tensor Parallel (TP)                              │
+    │     - 每层内部张量切分                                       │
+    │     - 使用tensor_parallel的实现                             │
+    │                                                             │
+    │  Layer 3: Data Parallel (DP)                                │
+    │     - 数据分割到不同节点                                     │
+    │     - 梯度同步                                              │
+    └─────────────────────────────────────────────────────────────┘
 
-增强功能:
-- 详细的错误处理和验证
-- 自动进程组拓扑检测
-- 内存使用监控
+使用示例:
+    >>> from parascale.parallel import HybridParallel, HybridParallelConfig
+    >>> 
+    >>> # 简单使用
+    >>> model = TransformerModel()
+    >>> hp = HybridParallel(model, rank=0, world_size=8, dp_size=2, tp_size=2, pp_size=2)
+    >>> 
+    >>> # 使用配置对象
+    >>> config = HybridParallelConfig(dp_size=2, tp_size=2, pp_size=2)
+    >>> hp = HybridParallel(model, rank=0, world_size=8, config=config)
 """
 
 import torch
 import torch.nn as nn
 import torch.distributed as dist
-from typing import Optional, Tuple, List, Dict, Any
-from .base import BaseParallel, ParallelConfigError, ParallelInitError
+from typing import Optional, List, Dict, Any, Tuple, Union
+from dataclasses import dataclass, field
+from enum import Enum
 import logging
+from collections import deque
+
+from .base import BaseParallel, ParallelConfigError, ParallelInitError
+from .tensor_parallel import (
+    TensorParallelConfig,
+    TensorParallelConverter,
+    ColumnParallelLinear,
+    RowParallelLinear,
+    VocabParallelEmbedding,
+    ParallelStrategy,
+)
 
 logger = logging.getLogger(__name__)
 
 
-class HybridParallelConfigError(ParallelConfigError):
-    """3D并行配置错误"""
-    pass
+# =============================================================================
+# 配置和策略
+# =============================================================================
+
+class PipelineSchedule(Enum):
+    """流水线调度策略"""
+    FILL_DRAIN = "fill_drain"           # 传统填充-排空
+    ONE_FORWARD_ONE_BACKWARD = "1f1b"   # 1F1B调度
+    INTERLEAVED_1F1B = "interleaved"    # 交错1F1B
 
 
-class HybridParallelInitError(ParallelInitError):
-    """3D并行初始化错误"""
-    pass
+@dataclass
+class HybridParallelConfig:
+    """
+    3D并行配置类
+    
+    Attributes:
+        dp_size: 数据并行大小
+        tp_size: 张量并行大小
+        pp_size: 流水线并行大小
+        schedule: 流水线调度策略
+        num_micro_batches: 微批次数量
+        tp_config: 张量并行配置
+        enable_overlap: 是否启用通信重叠
+    """
+    dp_size: int = 1
+    tp_size: int = 1
+    pp_size: int = 1
+    schedule: PipelineSchedule = field(default_factory=lambda: PipelineSchedule.ONE_FORWARD_ONE_BACKWARD)
+    num_micro_batches: int = 4
+    tp_config: Optional[TensorParallelConfig] = None
+    enable_overlap: bool = True
+    
+    def __post_init__(self):
+        if self.tp_config is None:
+            self.tp_config = TensorParallelConfig(
+                tp_size=self.tp_size,
+                strategy=ParallelStrategy.AUTO,
+            )
 
+
+# =============================================================================
+# 流水线通信
+# =============================================================================
+
+class PipelineCommunicator:
+    """
+    流水线并行通信器
+    
+    处理流水线阶段间的张量发送和接收。
+    """
+    
+    def __init__(
+        self,
+        pp_group: Optional[dist.ProcessGroup],
+        pp_rank: int,
+        pp_size: int,
+        device: torch.device,
+    ):
+        self.pp_group = pp_group
+        self.pp_rank = pp_rank
+        self.pp_size = pp_size
+        self.device = device
+    
+    def send_forward(self, tensor: torch.Tensor, dst_rank: int) -> None:
+        """向前发送张量"""
+        if self.pp_group is None:
+            return
+        
+        shape = torch.tensor(tensor.shape, dtype=torch.long, device=self.device)
+        shape_len = torch.tensor([len(tensor.shape)], dtype=torch.long, device=self.device)
+        
+        dist.send(shape_len, dst=dst_rank, group=self.pp_group)
+        dist.send(shape, dst=dst_rank, group=self.pp_group)
+        dist.send(tensor.contiguous(), dst=dst_rank, group=self.pp_group)
+    
+    def recv_forward(self, src_rank: int) -> torch.Tensor:
+        """从前一阶段接收张量"""
+        if self.pp_group is None:
+            return torch.zeros(1, device=self.device)
+        
+        shape_len = torch.zeros(1, dtype=torch.long, device=self.device)
+        dist.recv(shape_len, src=src_rank, group=self.pp_group)
+        
+        shape = torch.zeros(shape_len.item(), dtype=torch.long, device=self.device)
+        dist.recv(shape, src=src_rank, group=self.pp_group)
+        
+        tensor = torch.zeros(*shape.tolist(), device=self.device)
+        dist.recv(tensor, src=src_rank, group=self.pp_group)
+        
+        return tensor
+    
+    def send_backward(self, tensor: torch.Tensor, dst_rank: int) -> None:
+        """向后发送梯度"""
+        self.send_forward(tensor, dst_rank)
+    
+    def recv_backward(self, src_rank: int) -> torch.Tensor:
+        """从后一阶段接收梯度"""
+        return self.recv_forward(src_rank)
+
+
+# =============================================================================
+# 1F1B 调度器
+# =============================================================================
+
+class PipelineScheduler:
+    """
+    1F1B流水线调度器
+    
+    实现1F1B (One Forward One Backward) 调度算法，优化流水线bubble。
+    """
+    
+    def __init__(
+        self,
+        num_stages: int,
+        stage_id: int,
+        num_micro_batches: int,
+        communicator: PipelineCommunicator,
+    ):
+        self.num_stages = num_stages
+        self.stage_id = stage_id
+        self.num_micro_batches = num_micro_batches
+        self.communicator = communicator
+        
+        self.forward_outputs: Dict[int, torch.Tensor] = {}
+        self.is_first_stage = (stage_id == 0)
+        self.is_last_stage = (stage_id == num_stages - 1)
+    
+    def forward_step(
+        self,
+        micro_batch_id: int,
+        stage_module: nn.Module,
+        input_tensor: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        """
+        执行前向步骤
+        
+        Args:
+            micro_batch_id: 微批次ID
+            stage_module: 当前stage的模型
+            input_tensor: 输入张量
+        
+        Returns:
+            输出张量
+        """
+        if not self.is_first_stage and input_tensor is None:
+            src_rank = self.stage_id - 1
+            input_tensor = self.communicator.recv_forward(src_rank)
+        
+        output = stage_module(input_tensor)
+        self.forward_outputs[micro_batch_id] = output
+        
+        if not self.is_last_stage:
+            dst_rank = self.stage_id + 1
+            self.communicator.send_forward(output, dst_rank)
+        
+        return output
+    
+    def backward_step(
+        self,
+        micro_batch_id: int,
+        output_grad: Optional[torch.Tensor],
+    ) -> Optional[torch.Tensor]:
+        """
+        执行反向步骤
+        
+        Args:
+            micro_batch_id: 微批次ID
+            output_grad: 输出梯度
+        
+        Returns:
+            输入梯度
+        """
+        output = self.forward_outputs.pop(micro_batch_id, None)
+        if output is None:
+            return None
+        
+        if not self.is_last_stage and output_grad is None:
+            src_rank = self.stage_id + 1
+            output_grad = self.communicator.recv_backward(src_rank)
+        
+        if output_grad is not None:
+            output.backward(output_grad)
+        else:
+            output.backward()
+        
+        input_grad = None
+        
+        if not self.is_first_stage and input_grad is not None:
+            dst_rank = self.stage_id - 1
+            self.communicator.send_backward(input_grad, dst_rank)
+        
+        return input_grad
+    
+    def run_schedule(
+        self,
+        stage_module: nn.Module,
+        input_batches: List[torch.Tensor],
+    ) -> List[torch.Tensor]:
+        """
+        执行完整的1F1B调度
+        
+        Args:
+            stage_module: 当前stage的模型
+            input_batches: 输入批次列表
+        
+        Returns:
+            输出列表
+        """
+        outputs = []
+        
+        # 预热阶段
+        num_warmup = min(self.num_stages - self.stage_id - 1, self.num_micro_batches)
+        
+        for i in range(num_warmup):
+            if self.is_first_stage:
+                output = self.forward_step(i, stage_module, input_batches[i])
+            else:
+                output = self.forward_step(i, stage_module, None)
+            
+            if self.is_last_stage:
+                outputs.append(output)
+        
+        # 1F1B阶段
+        num_1f1b = self.num_micro_batches - num_warmup
+        
+        for i in range(num_1f1b):
+            forward_id = num_warmup + i
+            if self.is_first_stage:
+                output = self.forward_step(forward_id, stage_module, input_batches[forward_id])
+            else:
+                output = self.forward_step(forward_id, stage_module, None)
+            
+            if self.is_last_stage:
+                outputs.append(output)
+            
+            backward_id = i
+            self.backward_step(backward_id, None)
+        
+        # 冷却阶段
+        for i in range(num_warmup):
+            backward_id = num_1f1b + i
+            self.backward_step(backward_id, None)
+        
+        return outputs
+
+
+# =============================================================================
+# 主类
+# =============================================================================
 
 class HybridParallel(BaseParallel):
     """
     3D混合并行策略类
     
-    实现了数据并行、张量并行和流水线并行的组合。
-    通过创建多个进程组来管理不同维度的并行。
+    实现了数据并行、张量并行和流水线并行的组合，支持1F1B调度。
     
-    增强功能：
-    1. 详细的配置验证和错误提示
-    2. 自动进程组拓扑检测
-    3. 内存使用监控
-    
-    Attributes:
-        model: PyTorch 模型实例
-        rank: 全局rank
+    Args:
+        model: PyTorch模型实例
+        rank: 当前进程的全局rank
         world_size: 总进程数
-        dp_size: 数据并行大小
-        tp_size: 张量并行大小
-        pp_size: 流水线并行大小
-        dp_rank: 数据并行组内的rank
-        tp_rank: 张量并行组内的rank
-        pp_rank: 流水线并行组内的rank (即stage id)
-        dp_group: 数据并行进程组
-        tp_group: 张量并行进程组
-        pp_group: 流水线并行进程组
-        is_first_stage: 是否为流水线第一个阶段
-        is_last_stage: 是否为流水线最后一个阶段
-        stage_layers: 当前流水线阶段的层
+        dp_size: 数据并行大小 (默认: 1)
+        tp_size: 张量并行大小 (默认: 1)
+        pp_size: 流水线并行大小 (默认: 1)
+        num_micro_batches: 微批次数量 (默认: 4)
+        config: 混合并行配置对象 (如果提供，其他参数将被忽略)
     
     Example:
+        >>> from parascale.parallel import HybridParallel
+        >>> 
+        >>> # 简单使用
         >>> model = TransformerModel()
-        >>> hp = HybridParallel(
-        ...     model, rank=0, world_size=8,
-        ...     dp_size=2, tp_size=2, pp_size=2
-        ... )
-        >>> output = hp.forward(inputs)
+        >>> hp = HybridParallel(model, rank=0, world_size=8, dp_size=2, tp_size=2, pp_size=2)
+        >>> output = hp(inputs)
     """
     
     def __init__(
@@ -87,398 +344,224 @@ class HybridParallel(BaseParallel):
         dp_size: int = 1,
         tp_size: int = 1,
         pp_size: int = 1,
-        tensor_parallel_mode: str = "row",
-        pipeline_chunks: int = 1
+        num_micro_batches: int = 4,
+        config: Optional[HybridParallelConfig] = None,
     ):
         """
         初始化3D混合并行策略
         
         Args:
-            model: PyTorch 模型实例
+            model: PyTorch模型实例
             rank: 当前进程的全局rank
             world_size: 总进程数
             dp_size: 数据并行大小
             tp_size: 张量并行大小
             pp_size: 流水线并行大小
-            tensor_parallel_mode: 张量并行模式 ("row" 或 "column")
-            pipeline_chunks: 流水线微批次数量
-        
-        Raises:
-            HybridParallelConfigError: 当配置不合法时抛出
+            num_micro_batches: 微批次数量
+            config: 配置对象
         """
-        # 验证配置
-        self._validate_config(
-            model, rank, world_size, dp_size, tp_size, pp_size,
-            tensor_parallel_mode, pipeline_chunks
-        )
-        
         super().__init__(model, rank, world_size)
         
-        self.dp_size = dp_size
-        self.tp_size = tp_size
-        self.pp_size = pp_size
-        self.tensor_parallel_mode = tensor_parallel_mode
-        self.pipeline_chunks = pipeline_chunks
+        # 使用配置对象或创建新的
+        if config is not None:
+            self.config = config
+        else:
+            self.config = HybridParallelConfig(
+                dp_size=dp_size,
+                tp_size=tp_size,
+                pp_size=pp_size,
+                num_micro_batches=num_micro_batches,
+            )
+        
+        # 验证配置
+        self._validate_config()
+        
+        # 计算各维度的rank
+        self._compute_parallel_ranks()
         
         # 初始化进程组
         self.dp_group = None
         self.tp_group = None
         self.pp_group = None
+        self._init_process_groups()
         
-        try:
-            self._init_process_groups()
-        except Exception as e:
-            raise HybridParallelInitError(
-                f"Failed to initialize process groups: {e}. "
-                f"Please check your distributed environment setup."
-            )
-        
-        # 流水线相关属性
+        # 流水线相关
         self.is_first_stage = (self.pp_rank == 0)
-        self.is_last_stage = (self.pp_rank == self.pp_size - 1)
-        self.stage_layers: Optional[nn.Sequential] = None
+        self.is_last_stage = (self.pp_rank == self.config.pp_size - 1)
         
-        # 分割模型（流水线分割 + 张量并行分割）
-        try:
-            self._partition_model()
-        except Exception as e:
-            raise HybridParallelInitError(
-                f"Failed to partition model: {e}. "
-                f"Please check if your model is compatible with 3D parallelism."
+        # 分割模型
+        self.stage_module: Optional[nn.Module] = None
+        self._partition_model()
+        
+        # 创建流水线调度器
+        self.scheduler: Optional[PipelineScheduler] = None
+        if self.config.pp_size > 1:
+            self.communicator = PipelineCommunicator(
+                self.pp_group, self.pp_rank, self.config.pp_size, self.device
             )
-        
-        # 将模型移动到当前设备
-        if self.stage_layers is not None:
-            self.stage_layers.to(self.device)
+            self.scheduler = PipelineScheduler(
+                self.config.pp_size,
+                self.pp_rank,
+                self.config.num_micro_batches,
+                self.communicator,
+            )
         
         logger.info(
             f"HybridParallel initialized: rank={rank}, "
-            f"DP={dp_size}, TP={tp_size}, PP={pp_size}"
+            f"DP={self.config.dp_size}, TP={self.config.tp_size}, PP={self.config.pp_size}, "
+            f"dp_rank={self.dp_rank}, tp_rank={self.tp_rank}, pp_rank={self.pp_rank}"
         )
     
-    def _validate_config(
-        self,
-        model: nn.Module,
-        rank: int,
-        world_size: int,
-        dp_size: int,
-        tp_size: int,
-        pp_size: int,
-        tensor_parallel_mode: str,
-        pipeline_chunks: int
-    ) -> None:
-        """
-        验证3D并行配置
-        
-        Args:
-            model: PyTorch 模型实例
-            rank: 当前进程的全局rank
-            world_size: 总进程数
-            dp_size: 数据并行大小
-            tp_size: 张量并行大小
-            pp_size: 流水线并行大小
-            tensor_parallel_mode: 张量并行模式
-            pipeline_chunks: 流水线微批次数量
-        
-        Raises:
-            HybridParallelConfigError: 当配置不合法时抛出
-        """
-        # 验证进程数匹配
-        total_parallel_size = dp_size * tp_size * pp_size
-        if total_parallel_size != world_size:
-            raise HybridParallelConfigError(
-                f"dp_size({dp_size}) × tp_size({tp_size}) × pp_size({pp_size}) "
-                f"= {total_parallel_size} ≠ world_size({world_size}). "
-                f"The product of parallel sizes must equal world_size."
+    def _validate_config(self):
+        """验证配置"""
+        total_size = self.config.dp_size * self.config.tp_size * self.config.pp_size
+        if total_size != self.world_size:
+            raise ParallelConfigError(
+                f"dp_size({self.config.dp_size}) × tp_size({self.config.tp_size}) × "
+                f"pp_size({self.config.pp_size}) = {total_size} ≠ world_size({self.world_size})"
             )
         
-        # 验证并行大小
-        if dp_size < 1 or tp_size < 1 or pp_size < 1:
-            raise HybridParallelConfigError(
-                f"Parallel sizes must be positive: dp_size={dp_size}, "
-                f"tp_size={tp_size}, pp_size={pp_size}"
-            )
-        
-        # 验证张量并行模式
-        if tensor_parallel_mode not in ["row", "column"]:
-            raise HybridParallelConfigError(
-                f"tensor_parallel_mode must be 'row' or 'column', "
-                f"got '{tensor_parallel_mode}'"
-            )
-        
-        # 验证流水线分块
-        if pipeline_chunks < 1:
-            raise HybridParallelConfigError(
-                f"pipeline_chunks must be positive, got {pipeline_chunks}"
-            )
-        
-        if pp_size > 1 and pipeline_chunks < 2:
-            raise HybridParallelConfigError(
-                f"When using pipeline parallelism (pp_size={pp_size}), "
-                f"pipeline_chunks must be >= 2 to enable micro-batch processing."
-            )
-        
-        # 验证模型
-        if not isinstance(model, nn.Module):
-            raise HybridParallelConfigError(
-                f"model must be an nn.Module instance, got {type(model)}"
-            )
-        
-        # 验证rank
-        if rank < 0 or rank >= world_size:
-            raise HybridParallelConfigError(
-                f"rank must be in range [0, {world_size}), got {rank}"
+        if self.config.num_micro_batches < self.config.pp_size:
+            logger.warning(
+                f"num_micro_batches({self.config.num_micro_batches}) < pp_size({self.config.pp_size}) "
+                f"may cause pipeline bubble"
             )
     
-    def _init_process_groups(self) -> None:
-        """
-        初始化3D并行的进程组
-        
-        创建三个维度的进程组：
-        - 数据并行组 (dp_group): 相同TP rank和PP rank的进程
-        - 张量并行组 (tp_group): 相同DP rank和PP rank的进程
-        - 流水线并行组 (pp_group): 相同DP rank和TP rank的进程
-        """
-        # 计算当前进程在各维度的rank
-        self.pp_rank = self.rank % self.pp_size
-        remaining = self.rank // self.pp_size
-        self.tp_rank = remaining % self.tp_size
-        self.dp_rank = remaining // self.tp_size
-        
-        # 检查分布式环境是否已初始化
+    def _compute_parallel_ranks(self):
+        """计算各维度的rank"""
+        # rank = dp_rank * tp_size * pp_size + tp_rank * pp_size + pp_rank
+        self.pp_rank = self.rank % self.config.pp_size
+        remaining = self.rank // self.config.pp_size
+        self.tp_rank = remaining % self.config.tp_size
+        self.dp_rank = remaining // self.config.tp_size
+    
+    def _init_process_groups(self):
+        """初始化所有进程组"""
         if not dist.is_initialized():
-            # 单进程模式：所有进程组设为None
-            if self.rank == 0:
-                logger.warning(
-                    "[HybridParallel] Distributed environment not initialized, "
-                    "running in single-process mode"
-                )
             return
         
-        try:
-            # 创建张量并行组
-            self._create_tensor_parallel_groups()
-            
-            # 创建流水线并行组
-            self._create_pipeline_parallel_groups()
-            
-            # 创建数据并行组
-            self._create_data_parallel_groups()
-            
-        except Exception as e:
-            raise HybridParallelInitError(
-                f"Failed to create process groups: {e}"
-            )
+        self._create_tensor_parallel_groups()
+        self._create_pipeline_parallel_groups()
+        self._create_data_parallel_groups()
     
-    def _create_tensor_parallel_groups(self) -> None:
+    def _create_tensor_parallel_groups(self):
         """创建张量并行组"""
         tp_ranks = []
-        for dp in range(self.dp_size):
-            for pp in range(self.pp_size):
+        for dp in range(self.config.dp_size):
+            for pp in range(self.config.pp_size):
                 group_ranks = [
-                    dp * self.tp_size * self.pp_size + tp * self.pp_size + pp
-                    for tp in range(self.tp_size)
+                    dp * self.config.tp_size * self.config.pp_size + tp * self.config.pp_size + pp
+                    for tp in range(self.config.tp_size)
                 ]
                 tp_ranks.append(group_ranks)
         
-        self.tp_group = None
         for ranks in tp_ranks:
             group = dist.new_group(ranks)
             if self.rank in ranks:
                 self.tp_group = group
+                break
     
-    def _create_pipeline_parallel_groups(self) -> None:
+    def _create_pipeline_parallel_groups(self):
         """创建流水线并行组"""
         pp_ranks = []
-        for dp in range(self.dp_size):
-            for tp in range(self.tp_size):
+        for dp in range(self.config.dp_size):
+            for tp in range(self.config.tp_size):
                 group_ranks = [
-                    dp * self.tp_size * self.pp_size + tp * self.pp_size + pp
-                    for pp in range(self.pp_size)
+                    dp * self.config.tp_size * self.config.pp_size + tp * self.config.pp_size + pp
+                    for pp in range(self.config.pp_size)
                 ]
                 pp_ranks.append(group_ranks)
         
-        self.pp_group = None
         for ranks in pp_ranks:
             group = dist.new_group(ranks)
             if self.rank in ranks:
                 self.pp_group = group
+                break
     
-    def _create_data_parallel_groups(self) -> None:
+    def _create_data_parallel_groups(self):
         """创建数据并行组"""
         dp_ranks = []
-        for tp in range(self.tp_size):
-            for pp in range(self.pp_size):
+        for tp in range(self.config.tp_size):
+            for pp in range(self.config.pp_size):
                 group_ranks = [
-                    dp * self.tp_size * self.pp_size + tp * self.pp_size + pp
-                    for dp in range(self.dp_size)
+                    dp * self.config.tp_size * self.config.pp_size + tp * self.config.pp_size + pp
+                    for dp in range(self.config.dp_size)
                 ]
                 dp_ranks.append(group_ranks)
         
-        self.dp_group = None
         for ranks in dp_ranks:
             group = dist.new_group(ranks)
             if self.rank in ranks:
                 self.dp_group = group
+                break
     
-    def _partition_model(self) -> None:
-        """
-        分割模型到流水线阶段，并在每个阶段内应用张量并行
+    def _partition_model(self):
+        """分割模型"""
+        if self.config.pp_size == 1:
+            self.stage_module = self.model
+        else:
+            self._pipeline_partition()
         
-        1. 首先按流水线并行分割模型层
-        2. 然后在每个阶段的线性层上应用张量并行
-        """
-        # 提取所有层
+        # 在当前stage内应用张量并行
+        if self.config.tp_size > 1 and self.stage_module is not None:
+            self._apply_tensor_parallel_to_stage()
+        
+        # 将模型移动到设备
+        if self.stage_module is not None:
+            self.stage_module.to(self.device)
+    
+    def _pipeline_partition(self):
+        """按流水线并行分割模型"""
         all_layers = self._extract_layers()
         
-        if len(all_layers) < self.pp_size:
-            raise HybridParallelConfigError(
-                f"Model has {len(all_layers)} layers, but pp_size is {self.pp_size}. "
+        if len(all_layers) < self.config.pp_size:
+            raise ParallelConfigError(
+                f"Model has {len(all_layers)} layers, but pp_size is {self.config.pp_size}. "
                 f"Consider reducing pp_size or using a larger model."
             )
         
-        # 计算当前流水线阶段的层范围
-        layers_per_stage = len(all_layers) // self.pp_size
+        layers_per_stage = len(all_layers) // self.config.pp_size
         start_idx = layers_per_stage * self.pp_rank
         end_idx = layers_per_stage * (self.pp_rank + 1)
         
-        # 最后一个阶段包含剩余的层
         if self.is_last_stage:
             end_idx = len(all_layers)
         
-        # 获取当前阶段的层
-        stage_layers_list = all_layers[start_idx:end_idx]
-        
-        # 在当前阶段的层上应用张量并行
-        if self.tp_size > 1:
-            stage_layers_list = self._apply_tensor_parallel(stage_layers_list)
-        
-        # 创建当前阶段的Sequential模型
-        self.stage_layers = nn.Sequential(*stage_layers_list)
-        self.stage_layers.to(self.device)
+        stage_layers = all_layers[start_idx:end_idx]
+        self.stage_module = nn.Sequential(*stage_layers)
     
     def _extract_layers(self) -> List[nn.Module]:
-        """
-        从模型中提取所有层
-        
-        Returns:
-            层列表
-        """
+        """从模型中提取所有层"""
         layers: List[nn.Module] = []
         
         if hasattr(self.model, 'layers') and isinstance(self.model.layers, nn.ModuleList):
             layers = list(self.model.layers)
-        elif hasattr(self.model, 'features'):
-            if hasattr(self.model.features, 'children'):
-                layers = list(self.model.features.children())
-            else:
-                layers = [self.model.features]
         elif hasattr(self.model, 'encoder') and hasattr(self.model, 'decoder'):
-            enc_layers = list(self.model.encoder.children()) if hasattr(self.model.encoder, 'children') else [self.model.encoder]
-            dec_layers = list(self.model.decoder.children()) if hasattr(self.model.decoder, 'children') else [self.model.decoder]
-            layers = enc_layers + dec_layers
+            if hasattr(self.model.encoder, 'layers'):
+                layers.extend(list(self.model.encoder.layers))
+            if hasattr(self.model.decoder, 'layers'):
+                layers.extend(list(self.model.decoder.layers))
+        elif hasattr(self.model, 'transformer') and hasattr(self.model.transformer, 'h'):
+            layers = list(self.model.transformer.h)
         else:
             for name, module in self.model.named_children():
-                if isinstance(module, nn.Sequential):
+                if isinstance(module, (nn.Sequential, nn.ModuleList)):
                     layers.extend(list(module.children()))
-                else:
+                elif isinstance(module, nn.Module):
                     layers.append(module)
         
         if not layers:
-            modules = list(self.model.children())
-            if modules:
-                layers = modules
-            else:
-                layers = [self.model]
+            layers = [self.model]
         
         return layers
     
-    def _apply_tensor_parallel(self, layers: List[nn.Module]) -> List[nn.Module]:
-        """
-        在层列表上应用张量并行
-        
-        Args:
-            layers: 层列表
-        
-        Returns:
-            应用张量并行后的层列表
-        """
-        parallelized_layers = []
-        
-        for layer in layers:
-            if isinstance(layer, nn.Linear):
-                # 对线性层应用张量并行
-                parallelized_layer = self._parallelize_linear(layer)
-                parallelized_layers.append(parallelized_layer)
-            elif isinstance(layer, nn.Sequential):
-                # 递归处理Sequential
-                new_seq_layers = self._apply_tensor_parallel(list(layer.children()))
-                parallelized_layers.append(nn.Sequential(*new_seq_layers))
-            else:
-                parallelized_layers.append(layer)
-        
-        return parallelized_layers
-    
-    def _parallelize_linear(self, linear_layer: nn.Linear) -> nn.Linear:
-        """
-        对线性层应用张量并行
-        
-        Args:
-            linear_layer: 要并行化的线性层
-        
-        Returns:
-            并行化后的线性层
-        """
-        if self.tensor_parallel_mode == "row":
-            return self._parallelize_row(linear_layer)
-        else:
-            return self._parallelize_column(linear_layer)
-    
-    def _parallelize_row(self, linear_layer: nn.Linear) -> nn.Linear:
-        """
-        行并行：按输出维度分割权重
-        """
-        in_features = linear_layer.in_features
-        out_features = linear_layer.out_features
-        split_out_features = out_features // self.tp_size
-        
-        new_linear = nn.Linear(
-            in_features,
-            split_out_features,
-            bias=linear_layer.bias is not None
+    def _apply_tensor_parallel_to_stage(self):
+        """在当前stage应用张量并行"""
+        self.config.tp_config.tp_size = self.config.tp_size
+        self.stage_module = TensorParallelConverter.convert_model(
+            self.stage_module,
+            self.config.tp_config,
         )
-        
-        with torch.no_grad():
-            start_idx = split_out_features * self.tp_rank
-            end_idx = split_out_features * (self.tp_rank + 1)
-            new_linear.weight.copy_(linear_layer.weight[start_idx:end_idx, :])
-            if linear_layer.bias is not None:
-                new_linear.bias.copy_(linear_layer.bias[start_idx:end_idx])
-        
-        return new_linear
-    
-    def _parallelize_column(self, linear_layer: nn.Linear) -> nn.Linear:
-        """
-        列并行：按输入维度分割权重
-        """
-        in_features = linear_layer.in_features
-        out_features = linear_layer.out_features
-        split_in_features = in_features // self.tp_size
-        
-        new_linear = nn.Linear(
-            split_in_features,
-            out_features,
-            bias=linear_layer.bias is not None
-        )
-        
-        with torch.no_grad():
-            start_idx = split_in_features * self.tp_rank
-            end_idx = split_in_features * (self.tp_rank + 1)
-            new_linear.weight.copy_(linear_layer.weight[:, start_idx:end_idx])
-            if linear_layer.bias is not None:
-                new_linear.bias.copy_(linear_layer.bias)
-        
-        return new_linear
     
     def forward(self, inputs: torch.Tensor) -> Optional[torch.Tensor]:
         """
@@ -490,222 +573,86 @@ class HybridParallel(BaseParallel):
         Returns:
             模型输出张量（仅最后一个流水线阶段返回非None）
         """
-        if self.pipeline_chunks > 1:
-            return self._forward_micro_batches(inputs)
-        else:
-            return self._forward_single_batch(inputs)
-    
-    def _forward_single_batch(self, inputs: torch.Tensor) -> Optional[torch.Tensor]:
-        """
-        单批次前向传播
-        """
-        # 第一个流水线阶段：接收输入
-        if self.is_first_stage:
+        if self.config.pp_size == 1:
             x = self.to_device(inputs)
+            return self.stage_module(x)
         else:
-            # 其他阶段：从前一阶段接收
-            x = self._recv_tensor(self.pp_rank - 1)
-        
-        # 张量并行column模式：切分输入
-        if self.tp_size > 1 and self.tensor_parallel_mode == "column":
-            split_size = x.size(-1) // self.tp_size
-            x = x[:, split_size * self.tp_rank : split_size * (self.tp_rank + 1)]
-        
-        # 执行当前阶段的层
-        if self.stage_layers is not None:
-            x = self.stage_layers(x)
-        
-        # 张量并行row模式：all-gather输出
-        if self.tp_size > 1 and self.tensor_parallel_mode == "row":
-            x = self._tensor_all_gather(x)
-        # 张量并行column模式：all-reduce输出
-        elif self.tp_size > 1 and self.tensor_parallel_mode == "column":
-            x = self._tensor_all_reduce(x)
-        
-        # 如果不是最后一个阶段，发送给下一阶段
-        if not self.is_last_stage:
-            self._send_tensor(x, self.pp_rank + 1)
-            return None
-        
-        return x
+            return self._forward_with_pipeline(inputs)
     
-    def _forward_micro_batches(self, inputs: torch.Tensor) -> Optional[torch.Tensor]:
-        """
-        微批次前向传播
-        """
-        if not isinstance(inputs, torch.Tensor):
-            raise HybridParallelConfigError("Chunked pipeline requires tensor input")
+    def _forward_with_pipeline(self, inputs: torch.Tensor) -> Optional[torch.Tensor]:
+        """使用流水线并行前向传播"""
+        micro_batches = self._split_into_micro_batches(inputs)
+        outputs = self.scheduler.run_schedule(self.stage_module, micro_batches)
         
-        batch_size = inputs.size(0)
-        chunk_size = batch_size // self.pipeline_chunks
-        
-        outputs: List[torch.Tensor] = []
-        
-        for i in range(self.pipeline_chunks):
-            start_idx = i * chunk_size
-            end_idx = start_idx + chunk_size if i < self.pipeline_chunks - 1 else batch_size
-            chunk_input = inputs[start_idx:end_idx]
-            
-            # 第一个流水线阶段
-            if self.is_first_stage:
-                x = self.to_device(chunk_input)
-                x = x.view(x.size(0), -1)
-                
-                # 张量并行column模式：切分输入
-                if self.tp_size > 1 and self.tensor_parallel_mode == "column":
-                    split_size = x.size(-1) // self.tp_size
-                    x = x[:, split_size * self.tp_rank : split_size * (self.tp_rank + 1)]
-                
-                if self.stage_layers is not None:
-                    x = self.stage_layers(x)
-                
-                # 张量并行通信
-                if self.tp_size > 1 and self.tensor_parallel_mode == "row":
-                    x = self._tensor_all_gather(x)
-                elif self.tp_size > 1 and self.tensor_parallel_mode == "column":
-                    x = self._tensor_all_reduce(x)
-                
-                if not self.is_last_stage:
-                    self._send_tensor(x, self.pp_rank + 1)
-                else:
-                    outputs.append(x)
-            
-            # 最后一个流水线阶段
-            elif self.is_last_stage:
-                x = self._recv_tensor(self.pp_rank - 1)
-                
-                if self.stage_layers is not None:
-                    x = self.stage_layers(x)
-                
-                outputs.append(x)
-            
-            # 中间流水线阶段
-            else:
-                x = self._recv_tensor(self.pp_rank - 1)
-                
-                if self.stage_layers is not None:
-                    x = self.stage_layers(x)
-                
-                self._send_tensor(x, self.pp_rank + 1)
-        
-        # 最后一个阶段拼接所有微批次的输出
         if self.is_last_stage and outputs:
             return torch.cat(outputs, dim=0)
         return None
     
-    def _tensor_all_gather(self, tensor: torch.Tensor) -> torch.Tensor:
-        """
-        在张量并行组内执行all-gather
-        """
-        if self.tp_size == 1 or self.tp_group is None:
-            return tensor
+    def _split_into_micro_batches(self, inputs: torch.Tensor) -> List[torch.Tensor]:
+        """将输入分割为微批次"""
+        batch_size = inputs.size(0)
+        micro_batch_size = batch_size // self.config.num_micro_batches
         
-        gathered = [torch.zeros_like(tensor) for _ in range(self.tp_size)]
-        dist.all_gather(gathered, tensor, group=self.tp_group)
-        return torch.cat(gathered, dim=-1)
-    
-    def _tensor_all_reduce(self, tensor: torch.Tensor) -> torch.Tensor:
-        """
-        在张量并行组内执行all-reduce
-        """
-        if self.tp_size == 1 or self.tp_group is None:
-            return tensor
+        micro_batches = []
+        for i in range(self.config.num_micro_batches):
+            start = i * micro_batch_size
+            end = start + micro_batch_size if i < self.config.num_micro_batches - 1 else batch_size
+            micro_batches.append(inputs[start:end])
         
-        output = tensor.clone()
-        dist.all_reduce(output, op=dist.ReduceOp.SUM, group=self.tp_group)
-        return output
-    
-    def _send_tensor(self, tensor: torch.Tensor, dst_pp_rank: int) -> None:
-        """
-        发送张量到目标流水线阶段
-        """
-        if not dist.is_initialized():
-            return
-        
-        # 计算目标全局rank
-        dst_global_rank = self.dp_rank * self.tp_size * self.pp_size + self.tp_rank * self.pp_size + dst_pp_rank
-        
-        # 准备形状信息
-        shape_list = list(tensor.shape)
-        shape_tensor = torch.tensor(shape_list, device=self.device, dtype=torch.long)
-        shape_len = torch.tensor([len(shape_list)], device=self.device, dtype=torch.long)
-        
-        # 发送形状长度
-        dist.send(shape_len, dst=dst_global_rank)
-        # 发送形状张量
-        dist.send(shape_tensor, dst=dst_global_rank)
-        # 发送数据张量
-        dist.send(tensor.contiguous(), dst=dst_global_rank)
-    
-    def _recv_tensor(self, src_pp_rank: int) -> torch.Tensor:
-        """
-        从源流水线阶段接收张量
-        """
-        if not dist.is_initialized():
-            return torch.zeros(1, device=self.device)
-        
-        # 计算源全局rank
-        src_global_rank = self.dp_rank * self.tp_size * self.pp_size + self.tp_rank * self.pp_size + src_pp_rank
-        
-        # 接收形状长度
-        shape_len = torch.zeros(1, dtype=torch.long, device=self.device)
-        dist.recv(shape_len, src=src_global_rank)
-        
-        # 接收形状张量
-        shape_tensor = torch.zeros(shape_len.item(), dtype=torch.long, device=self.device)
-        dist.recv(shape_tensor, src=src_global_rank)
-        
-        # 接收数据张量
-        tensor = torch.zeros(*shape_tensor.tolist(), device=self.device)
-        dist.recv(tensor, src=src_global_rank)
-        
-        return tensor
+        return micro_batches
     
     def gather_gradients(self) -> None:
         """
-        收集梯度（用于数据并行）
+        收集梯度（数据并行）
         """
-        if self.dp_size <= 1 or self.dp_group is None:
+        if self.config.dp_size <= 1 or self.dp_group is None:
             return
         
-        for param in self.stage_layers.parameters():
+        if self.stage_module is None:
+            return
+        
+        for param in self.stage_module.parameters():
             if param.grad is not None:
                 dist.all_reduce(param.grad, op=dist.ReduceOp.SUM, group=self.dp_group)
-                param.grad /= self.dp_size
+                param.grad /= self.config.dp_size
     
     def broadcast_model(self) -> None:
         """
-        广播模型参数（用于数据并行）
+        广播模型参数（数据并行）
         """
-        if self.dp_group is None:
+        if self.dp_group is None or self.stage_module is None:
             return
         
-        for param in self.stage_layers.parameters():
-            dist.broadcast(param, src=0)
+        for param in self.stage_module.parameters():
+            dist.broadcast(param, src=0, group=self.dp_group)
     
-    def get_stage_model(self) -> nn.Module:
+    def get_stage_model(self) -> Optional[nn.Module]:
         """
         获取当前流水线阶段的模型
+        
+        Returns:
+            当前阶段的模型
         """
-        if self.stage_layers is None:
-            raise RuntimeError("Stage layers not initialized")
-        return self.stage_layers
+        return self.stage_module
     
     def get_parallel_info(self) -> Dict[str, Any]:
         """
         获取并行配置信息
+        
+        Returns:
+            包含并行配置信息的字典
         """
-        return {
-            "global_rank": self.rank,
-            "world_size": self.world_size,
-            "dp_size": self.dp_size,
-            "tp_size": self.tp_size,
-            "pp_size": self.pp_size,
+        info = super().get_parallel_info()
+        info.update({
+            "dp_size": self.config.dp_size,
+            "tp_size": self.config.tp_size,
+            "pp_size": self.config.pp_size,
             "dp_rank": self.dp_rank,
             "tp_rank": self.tp_rank,
             "pp_rank": self.pp_rank,
             "is_first_stage": self.is_first_stage,
             "is_last_stage": self.is_last_stage,
-            "tensor_parallel_mode": self.tensor_parallel_mode,
-            "pipeline_chunks": self.pipeline_chunks,
-        }
+            "schedule": self.config.schedule.value,
+            "num_micro_batches": self.config.num_micro_batches,
+        })
+        return info

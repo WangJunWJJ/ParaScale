@@ -225,6 +225,18 @@ class BaseParallel(ABC):
                 f"World size mismatch: expected {self.world_size}, got {actual_world_size}"
             )
 
+    def __call__(self, inputs: torch.Tensor) -> Optional[torch.Tensor]:
+        """
+        使实例可调用，调用 forward 方法
+
+        Args:
+            inputs: 输入数据张量
+
+        Returns:
+            模型输出张量
+        """
+        return self.forward(inputs)
+
     @abstractmethod
     def forward(self, inputs: torch.Tensor) -> Optional[torch.Tensor]:
         """
