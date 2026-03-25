@@ -113,10 +113,10 @@ class TestModelAnalyzer(unittest.TestCase):
             num_layers=10,
             model_type='transformer'
         )
-        
+
         profile_dict = profile.to_dict()
         self.assertIn('total_params', profile_dict)
-        self.assertIn('total_memory_mb', profile_dict)
+        self.assertIn('total_memory_gb', profile_dict)
         self.assertEqual(profile_dict['total_params'], 1000000)
 
 

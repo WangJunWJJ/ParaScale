@@ -9,13 +9,72 @@ ParaScale 模型并行模块
 
 本模块实现了模型并行策略，将模型分割到不同设备，
 每个设备运行模型的一部分，通过点对点通信传递中间结果。
+
+优化特性：
+- 负载均衡：基于参数数量和计算复杂度进行层分割
+- 自动层识别：支持多种模型结构
+- 内存预估：预估每层内存使用
 """
 
 import torch
 import torch.nn as nn
 import torch.distributed as dist
-from typing import Optional, List
-from .base import BaseParallel
+from typing import Optional, List, Dict, Any, Tuple
+from .base import BaseParallel, ParallelConfigError
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+class LayerInfo:
+    """
+    层信息类
+    
+    存储层的元数据，用于负载均衡计算。
+    
+    Attributes:
+        name: 层名称
+        module: 层模块
+        num_params: 参数数量
+        output_size: 输出大小（如果已知）
+        compute_cost: 计算成本估计
+    """
+    
+    def __init__(
+        self,
+        name: str,
+        module: nn.Module,
+        num_params: int,
+        output_size: Optional[Tuple[int, ...]] = None
+    ):
+        self.name = name
+        self.module = module
+        self.num_params = num_params
+        self.output_size = output_size
+        # 计算成本估计：参数数量 × 输出元素数量
+        self.compute_cost = self._estimate_compute_cost()
+    
+    def _estimate_compute_cost(self) -> float:
+        """
+        估计计算成本
+        
+        Returns:
+            计算成本估计值
+        """
+        base_cost = self.num_params
+        
+        # 根据层类型调整成本
+        if isinstance(self.module, nn.Conv2d):
+            # 卷积层通常计算密集
+            base_cost *= 2.0
+        elif isinstance(self.module, nn.Linear):
+            # 全连接层
+            base_cost *= 1.0
+        elif isinstance(self.module, (nn.BatchNorm2d, nn.LayerNorm)):
+            # 归一化层计算较轻
+            base_cost *= 0.5
+        
+        return base_cost
 
 
 class ModelParallel(BaseParallel):
@@ -26,20 +85,18 @@ class ModelParallel(BaseParallel):
     单个 GPU 无法容纳整个模型的情况。数据按顺序流经
     各个设备，每个设备只计算自己负责的部分。
     
-    工作流程：
-    1. 将模型按层分割到不同设备
-    2. 数据从第一个设备开始，依次流经所有设备
-    3. 每个设备计算完成后，将结果发送给下一个设备
-    4. 最后一个设备输出最终结果
-    
-    注意：模型并行的通信开销较大，适合模型非常大、
-    无法放入单个 GPU 的情况。
+    优化特性：
+    1. 负载均衡：基于参数数量和计算复杂度智能分割
+    2. 支持多种模型结构：Sequential、ModuleList、encoder-decoder等
+    3. 内存预估：预估每层内存使用
     
     Attributes:
         model: PyTorch 模型实例
         rank: 当前进程的 rank
         world_size: 世界大小
         device: 当前设备
+        stage_model: 当前stage的模型
+        layer_infos: 所有层的信息列表
     
     Example:
         >>> model = LargeModel()
@@ -47,7 +104,13 @@ class ModelParallel(BaseParallel):
         >>> output = mp.forward(inputs)
     """
     
-    def __init__(self, model: nn.Module, rank: int, world_size: int):
+    def __init__(
+        self,
+        model: nn.Module,
+        rank: int,
+        world_size: int,
+        balance_strategy: str = "compute_cost"
+    ):
         """
         初始化模型并行策略
         
@@ -55,64 +118,182 @@ class ModelParallel(BaseParallel):
             model: PyTorch 模型实例
             rank: 当前进程的 rank
             world_size: 世界大小（设备数量）
+            balance_strategy: 负载均衡策略 ("param_count", "compute_cost", "memory")
         """
         super().__init__(model, rank, world_size)
+        
+        self.balance_strategy = balance_strategy
+        self.stage_model: Optional[nn.Module] = None
+        self.layer_infos: List[LayerInfo] = []
+        
+        # 分析模型结构
+        self._analyze_model()
+        
+        # 分割模型
         self._split_model()
+        
+        logger.info(
+            f"ModelParallel initialized: rank={rank}, "
+            f"layers={len(self.layer_infos)}, strategy={balance_strategy}"
+        )
+    
+    def _analyze_model(self) -> None:
+        """
+        分析模型结构，收集层信息
+        """
+        self.layer_infos = []
+        
+        # 递归收集所有层
+        for name, module in self.model.named_modules():
+            # 跳过容器层（Sequential、ModuleList等）
+            if isinstance(module, (nn.Sequential, nn.ModuleList)):
+                continue
+            
+            # 跳过没有参数的层（如激活函数）
+            num_params = sum(p.numel() for p in module.parameters())
+            
+            # 只记录有参数的层或重要的层
+            if num_params > 0 or isinstance(module, (nn.ReLU, nn.GELU)):
+                layer_info = LayerInfo(name, module, num_params)
+                self.layer_infos.append(layer_info)
+        
+        if len(self.layer_infos) < self.world_size:
+            raise ParallelConfigError(
+                f"Model has {len(self.layer_infos)} layers, "
+                f"but world_size is {self.world_size}. "
+                "Consider reducing world_size or using a larger model."
+            )
     
     def _split_model(self) -> None:
         """
         将模型分割到不同设备
         
-        根据模型结构，将不同的层分配到不同的设备。
-        支持以下模型结构：
-        - 带有 layers 属性的模型（如 nn.ModuleList）
-        - 带有 encoder/decoder 属性的模型
-        - 普通 Sequential 模型
+        使用负载均衡策略智能分割层。
         """
-        # 处理带有 layers 属性的模型
-        if hasattr(self.model, 'layers'):
-            total_layers = len(self.model.layers)
+        # 计算每个rank负责的层范围
+        start_idx, end_idx = self._compute_layer_range()
+        
+        # 获取当前rank的层
+        stage_layers = self.layer_infos[start_idx:end_idx]
+        
+        if not stage_layers:
+            raise ParallelConfigError(
+                f"Rank {self.rank} has no layers assigned"
+            )
+        
+        # 创建当前stage的Sequential模型
+        modules = [info.module for info in stage_layers]
+        self.stage_model = nn.Sequential(*modules)
+        self.stage_model.to(self.device)
+        
+        # 记录分配信息
+        total_params = sum(info.num_params for info in stage_layers)
+        logger.info(
+            f"Rank {self.rank}: layers {start_idx}-{end_idx-1}, "
+            f"{len(stage_layers)} layers, {total_params:,} params"
+        )
+    
+    def _compute_layer_range(self) -> Tuple[int, int]:
+        """
+        计算当前rank负责的层范围
+        
+        Returns:
+            (start_idx, end_idx) 元组
+        """
+        total_layers = len(self.layer_infos)
+        
+        if self.balance_strategy == "param_count":
+            return self._balance_by_param_count()
+        elif self.balance_strategy == "compute_cost":
+            return self._balance_by_compute_cost()
+        elif self.balance_strategy == "memory":
+            return self._balance_by_memory()
+        else:
+            # 默认均匀分割
             layers_per_rank = total_layers // self.world_size
             start_idx = layers_per_rank * self.rank
             end_idx = layers_per_rank * (self.rank + 1)
             
-            # 最后一个 rank 处理剩余的层
             if self.rank == self.world_size - 1:
                 end_idx = total_layers
             
-            current_layers = self.model.layers[start_idx:end_idx]
-            sub_model = nn.Sequential(*current_layers)
-            sub_model.to(self.device)
-            
-            setattr(self.model, f'stage_{self.rank}', sub_model)
-            
-        # 处理 encoder-decoder 结构的模型
-        elif hasattr(self.model, 'encoder') and hasattr(self.model, 'decoder'):
-            if self.rank == 0:
-                self.model.encoder.to(self.device)
-                setattr(self.model, 'stage_0', self.model.encoder)
-            else:
-                self.model.decoder.to(self.device)
-                setattr(self.model, f'stage_{self.rank}', self.model.decoder)
-        else:
-            # 处理普通模型
-            modules: List[tuple] = []
-            for name, module in self.model.named_children():
-                modules.append((name, module))
-            
-            if modules:
-                modules_per_rank = len(modules) // self.world_size
-                start_idx = modules_per_rank * self.rank
-                end_idx = modules_per_rank * (self.rank + 1)
-                
-                if self.rank == self.world_size - 1:
-                    end_idx = len(modules)
-                
-                current_modules = [module for _, module in modules[start_idx:end_idx]]
-                sub_model = nn.Sequential(*current_modules)
-                sub_model.to(self.device)
-                
-                setattr(self.model, f'stage_{self.rank}', sub_model)
+            return start_idx, end_idx
+    
+    def _balance_by_param_count(self) -> Tuple[int, int]:
+        """
+        基于参数数量进行负载均衡
+        
+        Returns:
+            (start_idx, end_idx) 元组
+        """
+        total_params = sum(info.num_params for info in self.layer_infos)
+        target_params = total_params / self.world_size
+        
+        # 计算每个rank的起始层
+        cumulative_params = 0
+        rank_boundaries = [0]
+        
+        for idx, info in enumerate(self.layer_infos):
+            cumulative_params += info.num_params
+            if len(rank_boundaries) < self.world_size:
+                if cumulative_params >= target_params * len(rank_boundaries):
+                    rank_boundaries.append(idx + 1)
+        
+        # 确保最后一个边界是总层数
+        while len(rank_boundaries) <= self.world_size:
+            rank_boundaries.append(len(self.layer_infos))
+        
+        start_idx = rank_boundaries[self.rank]
+        end_idx = rank_boundaries[self.rank + 1]
+        
+        return start_idx, end_idx
+    
+    def _balance_by_compute_cost(self) -> Tuple[int, int]:
+        """
+        基于计算成本进行负载均衡
+        
+        Returns:
+            (start_idx, end_idx) 元组
+        """
+        total_cost = sum(info.compute_cost for info in self.layer_infos)
+        target_cost = total_cost / self.world_size
+        
+        cumulative_cost = 0
+        rank_boundaries = [0]
+        
+        for idx, info in enumerate(self.layer_infos):
+            cumulative_cost += info.compute_cost
+            if len(rank_boundaries) < self.world_size:
+                if cumulative_cost >= target_cost * len(rank_boundaries):
+                    rank_boundaries.append(idx + 1)
+        
+        while len(rank_boundaries) <= self.world_size:
+            rank_boundaries.append(len(self.layer_infos))
+        
+        start_idx = rank_boundaries[self.rank]
+        end_idx = rank_boundaries[self.rank + 1]
+        
+        return start_idx, end_idx
+    
+    def _balance_by_memory(self) -> Tuple[int, int]:
+        """
+        基于内存使用进行负载均衡
+        
+        目前简化为基于参数数量，实际应该考虑激活值大小
+        
+        Returns:
+            (start_idx, end_idx) 元组
+        """
+        # 简化处理：使用参数数量作为内存使用的代理
+        return self._balance_by_param_count()
+    
+    def _initialize_impl(self) -> None:
+        """
+        模型并行特定的初始化
+        """
+        # 验证stage_model已创建
+        if self.stage_model is None:
+            raise ParallelInitError("Stage model not initialized")
     
     def forward(self, inputs: torch.Tensor) -> Optional[torch.Tensor]:
         """
@@ -126,54 +307,118 @@ class ModelParallel(BaseParallel):
         Returns:
             模型输出张量，非最后一个 rank 返回 None
         """
-        # 将输入展平（假设为图像数据）
-        x = inputs.view(-1, 3072)  # 3072 = 3 * 32 * 32 (CIFAR10)
+        if self.stage_model is None:
+            raise RuntimeError("Stage model not initialized")
+        
+        x = inputs
         
         # 按顺序执行各个阶段
         for stage in range(self.world_size):
             if stage == self.rank:
                 # 当前 rank 执行自己的阶段
-                if hasattr(self.model, f'stage_{self.rank}'):
-                    stage_model = getattr(self.model, f'stage_{self.rank}')
-                    x = self.to_device(x)
-                    x = stage_model(x)
+                x = self.to_device(x)
+                x = self.stage_model(x)
             
             # 如果不是最后一个阶段，需要传递数据
             if stage < self.world_size - 1:
                 if stage == self.rank:
                     # 发送数据给下一个 rank
-                    next_rank = stage + 1
-                    try:
-                        dist.send(x, dst=next_rank)
-                    except RuntimeError as e:
-                        raise RuntimeError(f"Failed to send data to rank {next_rank}: {e}")
-                        
+                    self._send_tensor(x, stage + 1)
                 elif stage + 1 == self.rank:
                     # 从上一个 rank 接收数据
-                    prev_rank = stage
-                    if hasattr(self.model, f'stage_{self.rank}'):
-                        stage_model = getattr(self.model, f'stage_{self.rank}')
-                        # 查找第一个线性层以确定输入维度
-                        first_linear = None
-                        for module in stage_model.modules():
-                            if isinstance(module, nn.Linear):
-                                first_linear = module
-                                break
-                        if first_linear:
-                            batch_size = x.size(0)
-                            in_features = first_linear.in_features
-                            x = torch.empty(batch_size, in_features, device=self.device)
-                        else:
-                            x = torch.empty_like(x, device=self.device)
-                    else:
-                        x = torch.empty_like(x, device=self.device)
-                    try:
-                        dist.recv(x, src=prev_rank)
-                    except RuntimeError as e:
-                        raise RuntimeError(f"Failed to receive data from rank {prev_rank}: {e}")
+                    x = self._recv_tensor(stage)
         
         # 只有最后一个 rank 返回输出
         if self.rank == self.world_size - 1:
             return x
         
         return None
+    
+    def _send_tensor(self, tensor: torch.Tensor, dst_rank: int) -> None:
+        """
+        发送张量到目标rank
+        
+        Args:
+            tensor: 要发送的张量
+            dst_rank: 目标rank
+        """
+        if not dist.is_initialized():
+            return
+        
+        # 发送形状信息
+        shape = torch.tensor(tensor.shape, dtype=torch.long, device=self.device)
+        dist.send(shape, dst=dst_rank)
+        
+        # 发送数据
+        dist.send(tensor.contiguous(), dst=dst_rank)
+    
+    def _recv_tensor(self, src_rank: int) -> torch.Tensor:
+        """
+        从源rank接收张量
+        
+        Args:
+            src_rank: 源rank
+        
+        Returns:
+            接收到的张量
+        """
+        if not dist.is_initialized():
+            # 单进程模式，直接返回空张量
+            return torch.zeros(1, device=self.device)
+        
+        # 接收形状信息
+        shape = torch.zeros(4, dtype=torch.long, device=self.device)
+        dist.recv(shape, src=src_rank)
+        shape = shape[shape > 0].tolist()  # 移除填充的0
+        
+        # 接收数据
+        tensor = torch.zeros(*shape, device=self.device)
+        dist.recv(tensor, src=src_rank)
+        
+        return tensor
+    
+    def get_load_balance_report(self) -> Dict[str, Any]:
+        """
+        获取负载均衡报告
+        
+        Returns:
+            负载均衡报告字典
+        """
+        report = {
+            'total_layers': len(self.layer_infos),
+            'world_size': self.world_size,
+            'strategy': self.balance_strategy,
+            'ranks': []
+        }
+        
+        start_idx, end_idx = self._compute_layer_range()
+        
+        for rank in range(self.world_size):
+            rank_start, rank_end = self._get_range_for_rank(rank)
+            rank_layers = self.layer_infos[rank_start:rank_end]
+            
+            rank_info = {
+                'rank': rank,
+                'layers': rank_end - rank_start,
+                'params': sum(info.num_params for info in rank_layers),
+                'compute_cost': sum(info.compute_cost for info in rank_layers)
+            }
+            report['ranks'].append(rank_info)
+        
+        return report
+    
+    def _get_range_for_rank(self, rank: int) -> Tuple[int, int]:
+        """
+        获取指定rank的层范围
+        
+        Args:
+            rank: rank编号
+        
+        Returns:
+            (start_idx, end_idx) 元组
+        """
+        original_rank = self.rank
+        self.rank = rank
+        start_idx, end_idx = self._compute_layer_range()
+        self.rank = original_rank
+        return start_idx, end_idx

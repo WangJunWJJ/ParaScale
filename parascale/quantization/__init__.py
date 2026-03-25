@@ -28,6 +28,14 @@ from .utils import (
     get_quantizable_layers,
     print_quantization_info,
 )
+from .degradation import (
+    DegradationLevel,
+    DegradationTrigger,
+    QuantizationWithDegradation,
+    AdaptiveQuantization,
+    QuantizationDegradationError,
+    quantize_with_fallback,
+)
 
 __all__ = [
     # 配置
@@ -54,4 +62,11 @@ __all__ = [
     "fuse_modules",
     "get_quantizable_layers",
     "print_quantization_info",
+    # 降级机制
+    "DegradationLevel",
+    "DegradationTrigger",
+    "QuantizationWithDegradation",
+    "AdaptiveQuantization",
+    "QuantizationDegradationError",
+    "quantize_with_fallback",
 ]

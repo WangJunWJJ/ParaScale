@@ -44,7 +44,7 @@ from .parascale.utils import (
     setup_logging,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 __all__ = [
     # 核心组件
     "Engine",

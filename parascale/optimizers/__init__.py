@@ -18,10 +18,15 @@ Available Optimizers:
     - AdamW: Adam with Decoupled Weight Decay 优化器
 """
 
-from .optimizers import ZeroOptimizer, AdamW, FourBitAdamW, FourBitSGD, QuantizedState
+from .optimizers import ZeroOptimizer as ZeroOptimizerLegacy, AdamW, FourBitAdamW, FourBitSGD, QuantizedState
+from .zero_optimizer import ZeroOptimizer, ZeroAdamW, ZeroSGD, ZeroStage
 
 __all__ = [
     "ZeroOptimizer",
+    "ZeroOptimizerLegacy",
+    "ZeroAdamW",
+    "ZeroSGD",
+    "ZeroStage",
     "AdamW",
     "FourBitAdamW",
     "FourBitSGD",
