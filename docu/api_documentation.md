@@ -753,9 +753,225 @@ get_stage_model() -> nn.Module
 **返回值：**
 - 当前阶段的模型（nn.Sequential）
 
-### 3.6 HybridParallel
+### 3.6 SequenceParallel
 
-`HybridParallel` 实现3D混合并行策略，将数据并行、张量并行和流水线并行组合在一起。支持1F1B调度优化。
+`SequenceParallel` 实现序列并行策略，将序列维度切分到不同GPU，减少LayerNorm、Dropout等层的激活内存占用。
+
+#### 构造函数
+
+```python
+SequenceParallel(
+    model: nn.Module,
+    rank: int,
+    world_size: int,
+    sp_size: int = 1,
+    tp_size: int = 1,
+    sequence_dim: int = 1,
+    scatter_input: bool = True,
+    gather_output: bool = True,
+    config: Optional[SequenceParallelConfig] = None,
+)
+```
+
+**参数：**
+- `model`：PyTorch 模型实例
+- `rank`：当前进程的rank
+- `world_size`：世界大小
+- `sp_size`：序列并行大小，默认为 1
+- `tp_size`：张量并行大小，默认为 1
+- `sequence_dim`：序列维度，默认为 1（batch中的序列维度）
+- `scatter_input`：是否自动切分输入，默认为 True
+- `gather_output`：是否自动收集输出，默认为 True
+- `config`：SequenceParallelConfig 配置对象，如果提供则其他参数被忽略
+
+**约束条件：**
+- `sp_size × tp_size` 必须小于等于 `world_size`
+
+**成员变量：**
+- `config`：SequenceParallelConfig 配置实例
+- `sp_size`：序列并行大小
+- `tp_size`：张量并行大小
+- `sp_rank`：序列并行组内的rank
+- `sp_group`：序列并行进程组
+- `sequence_dim`：序列维度
+
+#### 配置类
+
+##### SequenceParallelConfig
+
+```python
+SequenceParallelConfig(
+    sp_size: int = 1,
+    tp_size: int = 1,
+    mode: SequenceParallelMode = SequenceParallelMode.STANDARD,
+    scatter_input: bool = True,
+    gather_output: bool = True,
+    enable_for_layernorm: bool = True,
+    enable_for_dropout: bool = True,
+    enable_for_activation: bool = True,
+)
+```
+
+**参数：**
+- `sp_size`：序列并行大小
+- `tp_size`：张量并行大小
+- `mode`：序列并行模式，SequenceParallelMode.STANDARD / ULYSSES
+- `scatter_input`：是否自动切分输入
+- `gather_output`：是否自动收集输出
+- `enable_for_layernorm`：是否为LayerNorm启用序列并行
+- `enable_for_dropout`：是否为Dropout启用序列并行
+- `enable_for_activation`：是否为激活函数启用序列并行
+
+#### 序列并行层组件
+
+##### SequenceParallelLayerNorm
+
+在序列并行区域内执行LayerNorm，每个rank只处理部分序列。
+
+```python
+SequenceParallelLayerNorm(
+    normalized_shape: Union[int, List[int], torch.Size],
+    eps: float = 1e-5,
+    elementwise_affine: bool = True,
+    device: Optional[torch.device] = None,
+    dtype: Optional[torch.dtype] = None,
+    sp_group: Optional[dist.ProcessGroup] = None,
+)
+```
+
+**适用场景：** Transformer中的LayerNorm层
+
+##### SequenceParallelDropout
+
+在序列并行区域内执行Dropout，每个rank独立处理自己的序列片段。
+
+```python
+SequenceParallelDropout(
+    p: float = 0.5,
+    inplace: bool = False,
+    sp_group: Optional[dist.ProcessGroup] = None,
+)
+```
+
+##### SequenceParallelLinear
+
+序列并行线性层，输入是序列并行的，输出可以选择是否收集。
+
+```python
+SequenceParallelLinear(
+    in_features: int,
+    out_features: int,
+    bias: bool = True,
+    gather_output: bool = False,
+    device: Optional[torch.device] = None,
+    dtype: Optional[torch.dtype] = None,
+    sp_group: Optional[dist.ProcessGroup] = None,
+)
+```
+
+##### UlyssesAttention
+
+Ulysses风格的长序列注意力，支持超长序列（1M+ tokens）训练。
+
+```python
+UlyssesAttention(
+    hidden_size: int,
+    num_attention_heads: int,
+    attention_dropout: float = 0.0,
+    sp_group: Optional[dist.ProcessGroup] = None,
+)
+```
+
+**特点：** 使用All-to-all通信切换并行维度，支持超长序列
+
+#### 方法
+
+##### forward
+
+```python
+forward(inputs: torch.Tensor) -> torch.Tensor
+```
+
+**功能：** 序列并行前向传播
+
+**执行流程：**
+1. 切分输入到序列并行区域（如果scatter_input为True）
+2. 执行模型前向传播
+3. 收集输出（如果gather_output为True）
+
+**参数：**
+- `inputs`：输入数据张量，形状通常为 [B, S, H]
+
+**返回值：**
+- 模型输出张量
+
+##### scatter_to_sp_region
+
+```python
+scatter_to_sp_region(tensor: torch.Tensor) -> torch.Tensor
+```
+
+**功能：** 将张量切分到序列并行区域
+
+**参数：**
+- `tensor`：输入张量
+
+**返回值：**
+- 切分后的张量
+
+##### gather_from_sp_region
+
+```python
+gather_from_sp_region(tensor: torch.Tensor) -> torch.Tensor
+```
+
+**功能：** 从序列并行区域收集张量
+
+**参数：**
+- `tensor`：输入张量
+
+**返回值：**
+- 收集后的张量
+
+##### get_memory_stats
+
+```python
+get_memory_stats() -> Dict[str, float]
+```
+
+**功能：** 获取内存优化统计信息
+
+**返回值：**
+- 包含activation_memory_reduction、layernorm_memory_reduction等信息的字典
+
+#### 便捷函数
+
+##### enable_sequence_parallel
+
+```python
+enable_sequence_parallel(
+    model: nn.Module,
+    sp_size: int,
+    tp_size: int = 1,
+    sequence_dim: int = 1,
+) -> SequenceParallel
+```
+
+**功能：** 便捷函数，快速启用序列并行
+
+**示例：**
+```python
+from parascale.parallel import enable_sequence_parallel
+
+sp = enable_sequence_parallel(model, sp_size=4, tp_size=2)
+output = sp(inputs)
+```
+
+***
+
+### 3.7 HybridParallel
+
+`HybridParallel` 实现4D混合并行策略，将数据并行、张量并行、序列并行和流水线并行组合在一起。支持1F1B调度优化。
 
 #### 构造函数
 

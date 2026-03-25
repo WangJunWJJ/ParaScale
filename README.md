@@ -51,7 +51,8 @@
 | **模型并行 (MP)** | 将模型不同层分配到不同设备 | 模型大，单卡放不下 |
 | **张量并行 (TP)** | 将权重矩阵分割到不同 GPU，支持行/列并行 | 线性层多，矩阵运算密集 |
 | **流水线并行 (PP)** | 将模型按层分割，支持微批次处理 | 层数多，需要高吞吐 |
-| **3D 混合并行** | DP + TP + PP 的灵活组合 | 超大规模模型训练 |
+| **序列并行 (SP)** | 将序列维度切分，减少激活内存 | 长序列训练，内存优化 |
+| **3D/4D 混合并行** | DP + TP + PP + SP 的灵活组合 | 超大规模模型训练 |
 
 ### 🎯 量化训练
 - **量化感知训练 (QAT)**：支持 INT8/INT4 量化，对称/非对称量化
@@ -162,7 +163,29 @@ tp = TensorParallel(
 output = tp(inputs)
 ```
 
-#### 3D混合并行 (v0.2.0+)
+#### 序列并行 (v0.3.0+)
+
+```python
+from parascale.parallel import SequenceParallel, SequenceParallelConfig
+
+# 方式1：使用配置对象（推荐）
+config = SequenceParallelConfig(
+    sp_size=4,              # 序列并行
+    tp_size=2,              # 张量并行
+    mode="standard",        # 标准模式（Megatron风格）
+    enable_for_layernorm=True,
+    enable_for_dropout=True
+)
+sp = SequenceParallel(model, rank=rank, world_size=8, config=config)
+output = sp(inputs)
+
+# 方式2：使用便捷函数
+from parascale.parallel import enable_sequence_parallel
+sp = enable_sequence_parallel(model, sp_size=4, tp_size=2)
+output = sp(inputs)
+```
+
+#### 3D/4D混合并行 (v0.2.0+)
 
 ```python
 from parascale.parallel import HybridParallel, HybridParallelConfig
@@ -216,6 +239,9 @@ torchrun --nproc_per_node=8 examples/para_engine_example.py
 # 数据并行（2 GPU）
 torchrun --nproc_per_node=2 examples/basic_parallel_examples.py --example 1
 
+# 序列并行（4 GPU: SP=2, TP=2）
+torchrun --nproc_per_node=4 examples/sequence_parallel_example.py
+
 # 多节点训练
 # Node 0
 torchrun --nnodes=2 --node_rank=0 --nproc_per_node=4 \
@@ -244,6 +270,7 @@ torchrun --nnodes=2 --node_rank=1 --nproc_per_node=4 \
 | [ParaEngine 示例](examples/para_engine_example.py) | 自动并行策略选择 | `python examples/para_engine_example.py` |
 | [量化训练示例](examples/quantization_examples.py) | QAT/PTQ 量化训练 | `python examples/quantization_examples.py --example 1` |
 | [4-bit 优化器示例](examples/fourbit_optimizer_example.py) | 内存优化训练 | `python examples/fourbit_optimizer_example.py` |
+| [序列并行示例](examples/sequence_parallel_example.py) | 长序列训练 | `torchrun --nproc_per_node=4 examples/sequence_parallel_example.py` |
 | [多节点示例](examples/multi_node_example.py) | 分布式训练 | `torchrun --nproc_per_node=4 examples/multi_node_example.py` |
 
 ## 🔌 API 参考
@@ -265,7 +292,8 @@ from parascale import (
     ModelParallel,     # 模型并行
     TensorParallel,    # 张量并行
     PipelineParallel,  # 流水线并行
-    HybridParallel,    # 3D 混合并行
+    SequenceParallel,  # 序列并行
+    HybridParallel,    # 3D/4D 混合并行
 )
 
 # 优化器
@@ -299,7 +327,9 @@ from parascale import (
 | `data_parallel_size` | int | 1 | 数据并行大小 |
 | `tensor_parallel_size` | int | 1 | 张量并行大小 |
 | `pipeline_parallel_size` | int | 1 | 流水线并行大小 |
+| `sequence_parallel_size` | int | 1 | 序列并行大小 |
 | `tensor_parallel_mode` | str | "row" | 张量并行模式（row/column） |
+| `sequence_parallel_mode` | str | "standard" | 序列并行模式（standard/ulysses） |
 | `zero_optimization` | bool | False | 是否启用 ZeRO |
 | `zero_stage` | int | 0 | ZeRO 阶段（0/1/2/3） |
 | `batch_size` | int | 32 | 批次大小 |
@@ -327,6 +357,7 @@ ParaScale/
 │   │   ├── data_parallel.py
 │   │   ├── tensor_parallel.py
 │   │   ├── pipeline_parallel.py
+│   │   ├── sequence_parallel.py
 │   │   └── hybrid_parallel.py
 │   ├── optimizers/          # 优化器
 │   │   ├── optimizers.py
@@ -355,9 +386,19 @@ python3 tests/test_fourbit_optimizer.py
 # 多 GPU 测试
 torchrun --nproc_per_node=2 tests/test_all_parallel.py
 torchrun --nproc_per_node=4 tests/test_hybrid_parallel.py
+torchrun --nproc_per_node=4 tests/test_sequence_parallel.py
 ```
 
 ## 📈 版本历史
+
+### v0.3.0 (2026-03-23)
+- **新增**: 序列并行（SequenceParallel）支持
+- **新增**: SequenceParallelConfig, SequenceParallelMode 配置类
+- **新增**: SequenceParallelLayerNorm, SequenceParallelDropout 层
+- **新增**: UlyssesAttention 长序列注意力（支持1M+ tokens）
+- **新增**: 序列并行与张量并行集成
+- **优化**: 减少LayerNorm、Dropout等层的激活内存占用
+- **文档**: 更新README、API文档、用户手册、架构设计文档
 
 ### v0.2.0 (2026-03-21)
 - **重大重构**: 统一 TensorParallel 和 HybridParallel 实现

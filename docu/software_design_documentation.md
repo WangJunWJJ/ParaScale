@@ -421,18 +421,113 @@ class PipelineParallel(BaseParallel):
         # 接收张量（支持动态形状）
 ```
 
-### 4.6 3D混合并行
+### 4.6 序列并行
 
-**HybridParallel**：将数据并行、张量并行和流水线并行组合在一起，实现3D并行。
+**SequenceParallel**：将序列维度切分到不同GPU，减少LayerNorm、Dropout等层的激活内存占用。
 
 **核心特性**：
 
-- 支持三种并行策略的任意组合（DP+TP、DP+PP、TP+PP、DP+TP+PP）
-- 多进程组管理（TP组、PP组、DP组）
+- 沿序列维度切分输入数据
+- 支持两种模式：标准模式（Megatron风格）和Ulysses模式（DeepSpeed风格）
+- 与张量并行结合使用，进一步优化内存效率
+- 自动替换LayerNorm、Dropout为序列并行版本
+- 支持All-gather/All-to-all通信
+
+**内存优化效果**：
+
+| SP Size | LayerNorm内存 | Dropout内存 | 节省倍数 |
+|---------|---------------|-------------|---------|
+| 1 (标准) | 32.00 MB | 8.00 MB | 1x |
+| 2 | 16.00 MB | 4.00 MB | 2x |
+| 4 | 8.00 MB | 2.00 MB | 4x |
+| 8 | 4.00 MB | 1.00 MB | 8x |
+
+**与张量并行集成**：
+
+```
+输入: [B, S, H]
+    ↓ (序列并行切分)
+[B, S/SP_SIZE, H]
+    ↓ (张量并行切分)
+[B, S/SP_SIZE, H/TP_SIZE]
+    ↓ (Attention/MLP计算)
+[B, S/SP_SIZE, H/TP_SIZE]
+    ↓ (张量并行收集)
+[B, S/SP_SIZE, H]
+    ↓ (序列并行收集)
+[B, S, H]
+```
+
+**代码结构**：
+
+```python
+class SequenceParallel(BaseParallel):
+    def __init__(self, model, rank, world_size, sp_size, tp_size, ...):
+        # 验证配置：sp_size × tp_size <= world_size
+        # 初始化序列并行进程组
+        # 转换模型（替换LayerNorm/Dropout）
+    
+    def _init_process_groups(self):
+        # 创建与张量正交互补的序列并行组
+        # SP组内的rank共享相同的TP rank
+    
+    def _parallelize_model(self):
+        # 使用SequenceParallelConverter转换模型
+        # 替换LayerNorm为SequenceParallelLayerNorm
+        # 替换Dropout为SequenceParallelDropout
+    
+    def forward(self, inputs):
+        # 切分输入到序列并行区域
+        # 执行前向传播
+        # 收集输出（可选）
+    
+    def scatter_to_sp_region(self, tensor):
+        # 将张量切分到序列并行区域
+    
+    def gather_from_sp_region(self, tensor):
+        # 从序列并行区域收集张量
+
+class SequenceParallelLayerNorm(nn.Module):
+    # 在序列并行区域内执行LayerNorm
+    # 每个rank只处理部分序列
+
+class SequenceParallelDropout(nn.Module):
+    # 在序列并行区域内执行Dropout
+    # 每个rank独立处理自己的序列片段
+
+class UlyssesAttention(nn.Module):
+    # Ulysses风格的长序列注意力
+    # 支持超长序列（1M+ tokens）训练
+    # All-to-all通信切换并行维度
+```
+
+**配置选项**：
+
+```python
+class SequenceParallelConfig:
+    sp_size: int                    # 序列并行大小
+    tp_size: int                    # 张量并行大小
+    mode: SequenceParallelMode      # standard / ulysses
+    scatter_input: bool             # 是否自动切分输入
+    gather_output: bool             # 是否自动收集输出
+    enable_for_layernorm: bool      # 是否为LayerNorm启用序列并行
+    enable_for_dropout: bool        # 是否为Dropout启用序列并行
+```
+
+***
+
+### 4.7 3D混合并行
+
+**HybridParallel**：将数据并行、张量并行、序列并行和流水线并行组合在一起，实现4D并行。
+
+**核心特性**：
+
+- 支持四种并行策略的任意组合（DP+TP+SP+PP）
+- 多进程组管理（TP组、SP组、PP组、DP组）
 - 支持行并行和列并行两种张量并行模式
 - 支持微批次流水线处理
 - 1F1B调度优化
-- 进程ID映射：global\_rank = dp\_rank × (tp\_size × pp\_size) + tp\_rank × pp\_size + pp\_rank
+- 进程ID映射：global\_rank = dp\_rank × (tp\_size × sp\_size × pp\_size) + tp\_rank × (sp\_size × pp\_size) + sp\_rank × pp\_size + pp\_rank
 
 **架构层次**：
 

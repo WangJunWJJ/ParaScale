@@ -8,6 +8,12 @@
 2. [快速开始](#2-快速开始)
 3. [配置系统](#3-配置系统)
 4. [并行策略](#4-并行策略)
+   - 4.1 [数据并行](#41-数据并行)
+   - 4.2 [模型并行](#42-模型并行)
+   - 4.3 [张量并行](#43-张量并行)
+   - 4.4 [流水线并行](#44-流水线并行)
+   - 4.5 [序列并行](#45-序列并行)
+   - 4.6 [3D混合并行](#46-3d混合并行)
 5. [优化器](#5-优化器)
 6. [量化训练](#6-量化训练)
 7. [多节点训练](#7-多节点训练)
@@ -100,6 +106,12 @@ torchrun --nproc_per_node=2 examples/basic_parallel_examples.py --example 4
 
 # 使用8个GPU进行3D混合并行训练
 torchrun --nproc_per_node=8 examples/hybrid_parallel_example.py
+
+# 使用4个GPU进行序列并行训练 (SP=2, TP=2)
+torchrun --nproc_per_node=4 examples/sequence_parallel_example.py
+
+# 使用8个GPU进行序列并行训练 (SP=4, TP=2)
+torchrun --nproc_per_node=8 examples/sequence_parallel_example.py
 ```
 
 ---
@@ -119,6 +131,8 @@ config = ParaScaleConfig(
     tensor_parallel_mode="row",     # 张量并行模式
     pipeline_parallel_size=1,       # 流水线并行大小
     pipeline_parallel_chunks=1,     # 流水线并行分块数
+    sequence_parallel_size=1,       # 序列并行大小
+    sequence_parallel_mode="standard",  # 序列并行模式
     
     # ZeRO 优化器配置
     zero_optimization=False,        # 是否启用 ZeRO
@@ -250,7 +264,237 @@ engine = Engine(model, optimizer, config)
 - 支持微批次并行处理
 - 自动层提取，支持多种模型结构
 
-### 4.5 3D混合并行
+### 4.5 序列并行
+
+序列并行（Sequence Parallelism）将序列维度切分到不同GPU，主要用于减少LayerNorm、Dropout等层的激活内存占用。通常与张量并行结合使用。
+
+#### 4.5.1 概述
+
+**序列并行原理：**
+- 沿序列维度（sequence dimension）切分输入数据
+- 每个GPU只处理部分序列
+- LayerNorm、Dropout等层的激活内存减少 `sp_size` 倍
+
+**与张量并行结合：**
+```
+输入: [B, S, H]
+    ↓ (序列并行切分)
+[B, S/SP_SIZE, H]
+    ↓ (张量并行切分)
+[B, S/SP_SIZE, H/TP_SIZE]
+    ↓ (计算)
+[B, S/SP_SIZE, H/TP_SIZE]
+    ↓ (张量并行收集)
+[B, S/SP_SIZE, H]
+    ↓ (序列并行收集)
+[B, S, H]
+```
+
+#### 4.5.2 基本使用
+
+**方法1：使用配置对象**
+```python
+from parascale.parallel import SequenceParallel, SequenceParallelConfig
+
+# 创建配置
+config = SequenceParallelConfig(
+    sp_size=4,                      # 4路序列并行
+    tp_size=2,                      # 2路张量并行
+    mode="standard",                # 标准模式（Megatron风格）
+    scatter_input=True,             # 自动切分输入
+    gather_output=True,             # 自动收集输出
+    enable_for_layernorm=True,      # 为LayerNorm启用序列并行
+    enable_for_dropout=True,        # 为Dropout启用序列并行
+)
+
+# 创建序列并行实例
+sp = SequenceParallel(
+    model=model,
+    rank=rank,
+    world_size=8,
+    config=config
+)
+
+# 训练
+output = sp(inputs)
+```
+
+**方法2：使用便捷函数**
+```python
+from parascale.parallel import enable_sequence_parallel
+
+# 快速启用序列并行
+sp = enable_sequence_parallel(
+    model=model,
+    sp_size=4,
+    tp_size=2
+)
+
+output = sp(inputs)
+```
+
+#### 4.5.3 内存优化效果
+
+| SP Size | LayerNorm内存 | Dropout内存 | 节省倍数 |
+|---------|---------------|-------------|---------|
+| 1 (标准) | 32.00 MB | 8.00 MB | 1x |
+| 2 | 16.00 MB | 4.00 MB | 2x |
+| 4 | 8.00 MB | 2.00 MB | 4x |
+| 8 | 4.00 MB | 1.00 MB | 8x |
+
+#### 4.5.4 序列并行模式
+
+**标准模式（Standard）：**
+```python
+config = SequenceParallelConfig(
+    mode="standard",  # Megatron-LM风格
+    sp_size=4,
+)
+```
+- 使用All-gather/All-reduce通信
+- 适合中等长度序列（< 100K tokens）
+
+**Ulysses模式：**
+```python
+config = SequenceParallelConfig(
+    mode="ulysses",  # DeepSpeed-Ulysses风格
+    sp_size=8,
+)
+```
+- 使用All-to-all通信切换并行维度
+- 支持超长序列（1M+ tokens）
+
+#### 4.5.5 启动序列并行训练
+
+```bash
+# 使用8个GPU进行序列并行训练 (SP=4, TP=2)
+torchrun --nproc_per_node=8 examples/sequence_parallel_example.py
+
+# 使用4个GPU进行序列并行训练 (SP=2, TP=2)
+torchrun --nproc_per_node=4 examples/sequence_parallel_example.py
+```
+
+#### 4.5.6 完整训练示例
+
+```python
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from parascale.parallel import SequenceParallel, SequenceParallelConfig
+
+# 定义Transformer模型
+class TransformerModel(nn.Module):
+    def __init__(self, hidden_size=512, num_layers=6):
+        super().__init__()
+        self.layers = nn.ModuleList([
+            TransformerLayer(hidden_size)
+            for _ in range(num_layers)
+        ])
+    
+    def forward(self, x):
+        for layer in self.layers:
+            x = layer(x)
+        return x
+
+class TransformerLayer(nn.Module):
+    def __init__(self, hidden_size):
+        super().__init__()
+        self.ln1 = nn.LayerNorm(hidden_size)
+        self.attn = nn.MultiheadAttention(hidden_size, num_heads=8)
+        self.ln2 = nn.LayerNorm(hidden_size)
+        self.mlp = nn.Sequential(
+            nn.Linear(hidden_size, 4 * hidden_size),
+            nn.GELU(),
+            nn.Dropout(0.1),
+            nn.Linear(4 * hidden_size, hidden_size),
+        )
+        self.dropout = nn.Dropout(0.1)
+    
+    def forward(self, x):
+        # Attention with residual
+        x = x + self.dropout(self.attn(self.ln1(x), x, x)[0])
+        # MLP with residual
+        x = x + self.mlp(self.ln2(x))
+        return x
+
+# 初始化分布式环境
+torch.distributed.init_process_group(backend='nccl')
+rank = torch.distributed.get_rank()
+world_size = torch.distributed.get_world_size()
+torch.cuda.set_device(rank)
+
+# 创建模型
+model = TransformerModel(hidden_size=512, num_layers=6)
+
+# 配置序列并行
+config = SequenceParallelConfig(
+    sp_size=4,          # 4路序列并行
+    tp_size=2,          # 2路张量并行
+    enable_for_layernorm=True,
+    enable_for_dropout=True,
+)
+
+sp = SequenceParallel(
+    model=model,
+    rank=rank,
+    world_size=world_size,
+    config=config
+)
+
+# 创建优化器
+optimizer = optim.AdamW(sp.model.parameters(), lr=1e-4)
+
+# 训练循环
+for epoch in range(epochs):
+    for inputs, targets in dataloader:
+        inputs = inputs.cuda()
+        targets = targets.cuda()
+        
+        # 前向传播
+        outputs = sp(inputs)
+        
+        # 计算损失
+        loss = nn.functional.cross_entropy(outputs.view(-1, vocab_size), targets.view(-1))
+        
+        # 反向传播
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        
+        if rank == 0:
+            print(f"Epoch {epoch}, Loss: {loss.item():.4f}")
+```
+
+#### 4.5.7 配置选择建议
+
+| 场景 | 推荐配置 | 说明 |
+|------|---------|------|
+| 长序列训练 | SP=4, TP=2 | 序列并行减少激活内存 |
+| 超长序列 | SP=8, mode="ulysses" | Ulysses模式支持1M+ tokens |
+| 大模型 | SP=2, TP=4, DP=2 | 4D并行组合 |
+| 内存受限 | SP=4, TP=2 | 最大化内存节省 |
+
+#### 4.5.8 注意事项
+
+1. **与张量并行结合**: 序列并行通常与张量并行一起使用，SP组与TP组互补
+2. **序列长度**: 序列长度必须能被 `sp_size` 整除
+3. **LayerNorm**: 序列并行会自动替换模型中的LayerNorm为SequenceParallelLayerNorm
+4. **Dropout**: 序列并行会自动替换模型中的Dropout为SequenceParallelDropout
+5. **梯度同步**: 序列并行不需要额外的梯度同步（与张量并行共享）
+
+#### 4.5.9 运行测试
+
+```bash
+# 运行单进程测试
+python tests/test_sequence_parallel.py
+
+# 使用多进程运行测试（需要4个GPU）
+torchrun --nproc_per_node=4 tests/test_sequence_parallel.py
+```
+
+---
+
+### 4.6 3D混合并行
 
 3D混合并行将数据并行、张量并行和流水线并行组合在一起，实现更高效的分布式训练。
 

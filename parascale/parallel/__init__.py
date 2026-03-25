@@ -22,6 +22,7 @@ ParaScale 并行策略模块
     - TensorParallel: 张量并行（按张量分割）
     - PipelineParallel: 流水线并行
     - HybridParallel: 3D混合并行（DP+TP+PP）
+    - SequenceParallel: 序列并行（减少激活内存）
 
 使用示例:
     >>> from parascale.parallel import TensorParallel, HybridParallel
@@ -31,6 +32,10 @@ ParaScale 并行策略模块
     >>> 
     >>> # 3D混合并行
     >>> hp = HybridParallel(model, rank=0, world_size=8, dp_size=2, tp_size=2, pp_size=2)
+    >>> 
+    >>> # 序列并行
+    >>> from parascale.parallel import SequenceParallel
+    >>> sp = SequenceParallel(model, rank=0, world_size=8, sp_size=4, tp_size=2)
 """
 
 # 基础类
@@ -63,6 +68,19 @@ from .hybrid_parallel import (
     PipelineCommunicator,
 )
 
+# 序列并行
+from .sequence_parallel import (
+    SequenceParallel,
+    SequenceParallelConfig,
+    SequenceParallelMode,
+    SequenceParallelLayerNorm,
+    SequenceParallelDropout,
+    SequenceParallelLinear,
+    SequenceParallelConverter,
+    UlyssesAttention,
+    enable_sequence_parallel,
+)
+
 # 通信优化模块
 from .communication import (
     GradientCompressor,
@@ -85,12 +103,15 @@ __all__ = [
     "TensorParallel",
     "PipelineParallel",
     "HybridParallel",
+    "SequenceParallel",
     
     # 配置类
     "TensorParallelConfig",
     "HybridParallelConfig",
+    "SequenceParallelConfig",
     "ParallelStrategy",
     "PipelineSchedule",
+    "SequenceParallelMode",
     
     # 并行层组件
     "ColumnParallelLinear",
@@ -98,11 +119,17 @@ __all__ = [
     "VocabParallelEmbedding",
     "ParallelSelfAttention",
     "ParallelMLP",
+    "SequenceParallelLayerNorm",
+    "SequenceParallelDropout",
+    "SequenceParallelLinear",
+    "UlyssesAttention",
     
     # 工具类
     "TensorParallelConverter",
+    "SequenceParallelConverter",
     "PipelineScheduler",
     "PipelineCommunicator",
+    "enable_sequence_parallel",
     
     # 通信优化
     "GradientCompressor",
