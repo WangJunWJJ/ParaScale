@@ -14,6 +14,8 @@ from typing import Any, Callable, Dict, Iterable, List
 from parascale.runtime.backends.devices import move_batch_to_device
 from parascale.runtime.training.memory import RuntimeMemoryTracker
 
+from .tasks import InferenceTaskAdapter, default_inference_task_registry
+
 
 @dataclass
 class InferenceRunner:
@@ -21,6 +23,11 @@ class InferenceRunner:
     task: str
     device: str = "cpu"
     memory_getter: Callable[[], Any] | None = None
+    task_adapter: InferenceTaskAdapter | None = None
+
+    def __post_init__(self) -> None:
+        if self.task_adapter is None:
+            self.task_adapter = default_inference_task_registry().resolve(self.task)
 
     def run(
         self,
@@ -36,6 +43,7 @@ class InferenceRunner:
         requests = 0
         images = 0
         image_text_pairs = 0
+        tokens = 0
         batch_list = list(batches)
         for batch in batch_list[: max(0, int(warmup_steps))]:
             self._predict(self._prepare_batch(batch))
@@ -48,13 +56,16 @@ class InferenceRunner:
             outputs.append(output)
             latencies.append(elapsed * 1000.0)
             requests += 1
-            images += self._count(prepared, "num_images")
-            image_text_pairs += self._count(prepared, "num_pairs")
+            counts = self.task_adapter.metric_counts(prepared)
+            images += int(counts.get("images", 0))
+            image_text_pairs += int(counts.get("image_text_pairs", 0))
+            tokens += int(counts.get("tokens", 0))
         metrics: Dict[str, Any] = self._metrics(
             latencies,
             requests=requests,
             images=images,
             image_text_pairs=image_text_pairs,
+            tokens=tokens,
         )
         memory.add_peak_memory_metrics(metrics)
         return {
@@ -73,28 +84,14 @@ class InferenceRunner:
             eval_fn()
 
     def _prepare_batch(self, batch: Any) -> Any:
+        batch = self.task_adapter.prepare_batch(batch)
         if self.device == "cpu":
             return batch
         return move_batch_to_device(batch, self.device)
 
     def _predict(self, batch: Any) -> Any:
-        for method_name in ("predict", "detect", "embed", "generate"):
-            method = getattr(self.model, method_name, None)
-            if callable(method):
-                return method(batch)
-        if callable(self.model):
-            return self.model(batch)
-        raise RuntimeError(
-            "Inference model must implement predict, detect, embed, generate, or __call__."
-        )
-
-    @staticmethod
-    def _count(batch: Any, key: str) -> int:
-        if isinstance(batch, dict) and key in batch:
-            return int(batch.get(key) or 0)
-        if isinstance(batch, list):
-            return sum(InferenceRunner._count(item, key) for item in batch)
-        return 0
+        output = self.task_adapter.predict(self.model, batch)
+        return self.task_adapter.postprocess(output)
 
     @staticmethod
     def _metrics(
@@ -103,6 +100,7 @@ class InferenceRunner:
         requests: int,
         images: int,
         image_text_pairs: int,
+        tokens: int,
     ) -> Dict[str, Any]:
         elapsed_ms = sum(latencies)
         elapsed_s = max(elapsed_ms / 1000.0, 1e-9)
@@ -111,11 +109,13 @@ class InferenceRunner:
             "requests": int(requests),
             "images": int(images),
             "image_text_pairs": int(image_text_pairs),
+            "tokens": int(tokens),
             "latency_ms_avg": float(avg),
             "latency_ms_total": float(elapsed_ms),
             "requests_per_second": float(requests / elapsed_s),
             "images_per_second": float(images / elapsed_s),
             "image_text_pairs_per_second": float(image_text_pairs / elapsed_s),
+            "tokens_per_second": float(tokens / elapsed_s),
         }
 
 

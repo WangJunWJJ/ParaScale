@@ -6,13 +6,14 @@
 """Inference runtime namespace."""
 
 from .batcher import InferenceBatcher
-from .engine import InferenceEngine
+from .engine import InferenceEngine, InferenceState
 from .runner import InferenceRunner
 from .scheduler import InferenceScheduler
 
 __all__ = [
     "InferenceBatcher",
     "InferenceEngine",
+    "InferenceState",
     "InferenceRunner",
     "InferenceScheduler",
 ]

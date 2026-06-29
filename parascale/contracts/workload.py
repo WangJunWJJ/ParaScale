@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Iterable, Protocol
+from typing import Any, Callable, Dict, Iterable, Mapping, Protocol
 
 LossFn = Callable[[Any, Dict[str, Any]], Any]
 
@@ -22,7 +22,7 @@ class WorkloadComponents:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
-class WorkloadContract(Protocol):
+class WorkloadAdapter(Protocol):
     name: str
 
-    def build(self, config_data: Dict[str, Any]) -> WorkloadComponents: ...
+    def build(self, config_data: Mapping[str, Any]) -> Any: ...

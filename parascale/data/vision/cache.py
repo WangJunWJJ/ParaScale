@@ -71,7 +71,7 @@ class DiskTensorCache:
         try:
             if not path.exists():
                 return None
-            return torch.load(path, map_location="cpu")
+            return torch.load(path, map_location="cpu", weights_only=True)
         except Exception:
             return None
 

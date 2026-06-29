@@ -49,7 +49,7 @@ def _vision_config():
     }
 
 
-def test_v1_config_accepts_task_and_patch_budget_fields():
+def test_config_accepts_task_and_patch_budget_fields():
     config = ParaScaleConfig(
         task_type="vision",
         model_family="vit",

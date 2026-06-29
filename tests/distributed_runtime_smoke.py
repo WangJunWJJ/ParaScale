@@ -45,7 +45,7 @@ def main() -> int:
 
     try:
         from parascale.config import ParaScaleConfig
-        from parascale.runtime.backend import create_runtime_training_backend
+        from parascale.runtime.backends import create_runtime_training_backend
 
         model = nn.Linear(4, 2).to(local_rank)
         optimizer = optim.AdamW(model.parameters(), lr=1e-3)

@@ -80,8 +80,8 @@ def test_synthetic_clip_and_yolo_inference_adapters_are_generic_without_torch():
     assert yolo_task == "vision_detection"
     assert len(clip_batches) == 1
     assert len(yolo_batches) == 1
-    assert clip_model.to("npu:0") is clip_model
-    assert yolo_model.to("npu:0") is yolo_model
+    assert clip_model.to("cpu") is clip_model
+    assert yolo_model.to("cpu") is yolo_model
     assert "image_embeddings" in clip_model.embed(clip_batches[0])
     assert "boxes" in yolo_model.detect(yolo_batches[0])
 

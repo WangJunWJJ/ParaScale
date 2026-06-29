@@ -192,7 +192,7 @@ tests/
 - `BenchmarkPlan`
 - `BenchmarkResult`
 - `TrainEngine`
-- `ServeEngine`
+- `InferenceEngine`
 - `TrainingBackend`
 - `CheckpointManifest`
 - `ParallelPlan`
@@ -222,7 +222,7 @@ RuntimeContext
         v
 Runtime Execution
   - TrainEngine
-  - ServeEngine
+  - InferenceEngine
   - TrainingBackend
   - CheckpointManager
         |
@@ -479,7 +479,7 @@ Manifest 应包含：
 
 当前已有：
 
-- `ServeEngine` real/mock mode 边界。
+- `InferenceEngine` real/mock mode 边界。
 - `ServingEngine` batched request execution。
 - request-level error isolation。
 - `ContinuousBatchScheduler` 队列与指标。
@@ -616,7 +616,7 @@ Ascend 实机验证本阶段暂缓，但架构抽象必须保留。
 - `parascale plan` 输出 runtime、launch、benchmark、strategy、dataloader。
 - `TrainEngine` 本地训练、checkpoint 保存、恢复。
 - `FSDPTrainingBackend` 和 `DeepSpeedTrainingBackend` smoke。
-- `ServeEngine` mock/real mode 边界。
+- `InferenceEngine` mock/real mode 边界。
 - `ServingEngine` 连续微批处理、错误隔离、KV cache、metrics。
 - `vision_synthetic` 工作负载与 patch-token 指标。
 - 真实 ImageFolder profile smoke。

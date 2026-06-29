@@ -14,7 +14,6 @@ from parascale.reporting.benchmark import (
     build_benchmark_plan,
     compare_benchmark_results,
 )
-from parascale.workloads.tiny import build_tiny_torch_components
 
 from .backends import (
     AscendNativeTrainingBackend,
@@ -27,18 +26,7 @@ from .backends import (
     default_training_backend_registry,
 )
 from .context import RuntimeContext, WorkloadDescriptor, build_runtime_context
-from .factory import (
-    ServingModelRegistry,
-    TinyTorchServingAdapter,
-    build_optimizer_for_model,
-    build_serving_model_from_checkpoint,
-    build_training_components,
-    default_serving_model_registry,
-    default_workload_registry,
-    load_tiny_torch_serving_model,
-)
-from .inference import InferenceEngine
-from .inference.engine import ServeEngine, ServeState
+from .inference import InferenceEngine, InferenceState
 from .launcher import LaunchPlan, build_launch_plan
 from .profiles import BenchmarkProfileStore
 from .specs import (
@@ -66,25 +54,15 @@ __all__ = [
     "build_benchmark_plan",
     "benchmark_result_from_train_payload",
     "compare_benchmark_results",
-    "ServeEngine",
     "InferenceEngine",
-    "ServeState",
+    "InferenceState",
     "BenchmarkProfileStore",
     "TinyTorchWorkloadSpec",
     "VisionSyntheticSpec",
     "ClipContrastiveSpec",
     "VlmLoraSpec",
     "YoloWorldSpec",
-    "TinyTorchServingAdapter",
-    "ServingModelRegistry",
     "WorkloadRegistry",
-    "build_serving_model_from_checkpoint",
-    "build_optimizer_for_model",
-    "build_training_components",
-    "build_tiny_torch_components",
-    "default_serving_model_registry",
-    "default_workload_registry",
-    "load_tiny_torch_serving_model",
     "TrainingBackend",
     "AscendNativeTrainingBackend",
     "NativeTrainingBackend",

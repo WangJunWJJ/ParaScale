@@ -12,9 +12,9 @@ from parascale import (
     CheckpointManifest,
     ClusterTopology,
     CpuDeviceBackend,
+    InferenceEngine,
     MockCollectiveBackend,
     ParaScaleConfig,
-    ServeEngine,
     ServeRequest,
     ServingEngine,
     TorchDistributedCollectiveBackend,
@@ -23,7 +23,7 @@ from parascale import (
     create_runtime_training_backend,
     default_training_backend_registry,
 )
-from parascale.runtime import default_serving_model_registry
+from parascale.workloads.serving import default_serving_model_registry
 
 GB = 1024**3
 
@@ -136,7 +136,7 @@ def test_train_and_serve_runtime_entrypoints_share_collective_contract():
             "gpus_per_node": 1,
         },
     )
-    serve = ServeEngine()
+    serve = InferenceEngine()
 
     train.initialize()
     serve.initialize(world_size=1)
@@ -206,7 +206,7 @@ class _CheckpointScheduler:
 
 
 def test_serve_engine_requires_model_unless_explicit_mock():
-    serve = ServeEngine()
+    serve = InferenceEngine()
 
     try:
         serve.generate(["hello"])
@@ -220,7 +220,9 @@ def test_serve_engine_requires_model_unless_explicit_mock():
 
 
 def test_serve_engine_runs_loaded_model_generate_and_embed():
-    serve = ServeEngine().initialize(world_size=1).load_model(model=_ToyServingModel())
+    serve = InferenceEngine().initialize(world_size=1).load_model(
+        model=_ToyServingModel()
+    )
 
     generated = serve.generate(["hello"])
     embedded = serve.embed(["abc"])
@@ -232,7 +234,7 @@ def test_serve_engine_runs_loaded_model_generate_and_embed():
 
 
 def test_serving_engine_step_returns_runtime_outputs():
-    runtime = ServeEngine().load_model(model=_ToyServingModel())
+    runtime = InferenceEngine().load_model(model=_ToyServingModel())
     serving = ServingEngine(runtime=runtime)
 
     serving.submit(ServeRequest(request_id="r1", payload="hello"))
@@ -244,7 +246,7 @@ def test_serving_engine_step_returns_runtime_outputs():
 
 
 def test_serving_engine_batches_requests_and_reports_metrics():
-    runtime = ServeEngine().load_model(model=_ToyServingModel())
+    runtime = InferenceEngine().load_model(model=_ToyServingModel())
     serving = ServingEngine(runtime=runtime)
 
     serving.submit(ServeRequest(request_id="r1", payload="hello"))
@@ -263,7 +265,7 @@ def test_serving_engine_batches_requests_and_reports_metrics():
 
 
 def test_mock_serve_engine_returns_one_output_per_request():
-    runtime = ServeEngine().load_model(model="mock", mock=True)
+    runtime = InferenceEngine().load_model(model="mock", mock=True)
 
     generated = runtime.generate(["a", "b", "c"])
     embedded = runtime.embed(["x", "y"])
@@ -274,7 +276,9 @@ def test_mock_serve_engine_returns_one_output_per_request():
 
 
 def test_mock_serving_engine_rejects_length_mismatch():
-    serving = ServingEngine(runtime=ServeEngine().load_model(model="mock", mock=True))
+    serving = ServingEngine(
+        runtime=InferenceEngine().load_model(model="mock", mock=True)
+    )
     serving.submit(ServeRequest(request_id="r1", payload="hello"))
     serving.submit(ServeRequest(request_id="r2", payload="world"))
 
@@ -289,7 +293,7 @@ def test_serving_engine_returns_request_errors_without_sticking_cache():
         def generate(self, requests):
             raise RuntimeError("boom")
 
-    serving = ServingEngine(runtime=ServeEngine().load_model(model=BrokenModel()))
+    serving = ServingEngine(runtime=InferenceEngine().load_model(model=BrokenModel()))
     serving.submit(ServeRequest(request_id="bad", payload="hello"))
 
     responses = serving.step()
@@ -777,7 +781,7 @@ def test_training_backend_registry_and_serving_components_are_available():
     )
     converter = CheckpointConverter()
     plan = converter.build_plan("fsdp")
-    serving = ServingEngine(runtime=ServeEngine().load_model(model="mock"))
+    serving = ServingEngine(runtime=InferenceEngine().load_model(model="mock"))
 
     serving.submit(ServeRequest(request_id="r1", payload="hello"))
     responses = serving.step()

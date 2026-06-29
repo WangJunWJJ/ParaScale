@@ -5,6 +5,14 @@
 
 """Model-specific workload adapters."""
 
+from parascale.contracts import WorkloadAdapter
+
+from .registry import WorkloadAdapterRegistry
 from .yolo import YoloDetectionTargetAdapter, YoloOfficialBatchAdapter
 
-__all__ = ["YoloDetectionTargetAdapter", "YoloOfficialBatchAdapter"]
+__all__ = [
+    "WorkloadAdapter",
+    "WorkloadAdapterRegistry",
+    "YoloDetectionTargetAdapter",
+    "YoloOfficialBatchAdapter",
+]

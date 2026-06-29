@@ -40,14 +40,26 @@ class BackendPlan:
 
 @dataclass(frozen=True)
 class CommunicationPlan:
-    backend: str = "gloo"
+    backend: str = "native"
     ddp_hook: str = "none"
-    no_sync: bool = False
+    bucket_cap_mb: int | None = None
+    use_no_sync: bool = False
+    adapter_only_sync: bool = False
     overlap_h2d: bool = False
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    reasons: tuple[str, ...] = ()
+    evidence: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+        return {
+            "backend": self.backend,
+            "ddp_hook": self.ddp_hook,
+            "bucket_cap_mb": self.bucket_cap_mb,
+            "use_no_sync": self.use_no_sync,
+            "adapter_only_sync": self.adapter_only_sync,
+            "overlap_h2d": self.overlap_h2d,
+            "reasons": list(self.reasons),
+            "evidence": dict(self.evidence),
+        }
 
 
 @dataclass(frozen=True)
@@ -95,7 +107,16 @@ class RuntimePlan:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+        return {
+            "mode": self.mode,
+            "device": self.device.to_dict(),
+            "backend": self.backend.to_dict(),
+            "communication": self.communication.to_dict(),
+            "data": self.data.to_dict(),
+            "checkpoint": self.checkpoint.to_dict(),
+            "inference": self.inference.to_dict(),
+            "metadata": dict(self.metadata),
+        }
 
 
 __all__ = [

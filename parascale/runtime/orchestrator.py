@@ -24,14 +24,14 @@ from parascale.runtime.backends.devices import (
     npu_is_available,
     set_current_device,
 )
-from parascale.runtime.factory import (
+from parascale.runtime.inference.engine import InferenceEngine
+from parascale.runtime.training import TrainEngine
+from parascale.strategy import build_strategy_plan
+from parascale.workloads import (
     build_optimizer_for_model,
     build_serving_model_from_checkpoint,
     build_training_components,
 )
-from parascale.runtime.inference.engine import ServeEngine
-from parascale.runtime.training import TrainEngine
-from parascale.strategy import build_strategy_plan
 from parascale.workloads.capability import capability_level_for_scope, describe_workload
 
 
@@ -139,10 +139,10 @@ def run_train_from_config(
             "reason": "skip_final_checkpoint enabled for benchmark run",
         }
     else:
-        final_manifest_path = engine.save_checkpoint(manager)
-        checkpoint_validation = manager.validate_manifest(
-            manager.read_manifest_path(final_manifest_path)
-        ).to_dict()
+        final_manifest_path, checkpoint_validation = _validate_final_checkpoint_result(
+            manager,
+            engine.save_checkpoint(manager),
+        )
     return {
         "mode": "train",
         "dry_run": False,
@@ -165,6 +165,27 @@ def run_train_from_config(
         "strategy_plan": engine.plan().to_dict(),
         "config_artifacts": config_artifacts,
     }
+
+
+def _validate_final_checkpoint_result(
+    manager: CheckpointManager,
+    checkpoint_result: Any,
+) -> tuple[Path | str | None, Dict[str, Any]]:
+    if isinstance(checkpoint_result, (str, Path)):
+        validation = manager.validate_manifest(
+            manager.read_manifest_path(checkpoint_result)
+        ).to_dict()
+        return checkpoint_result, validation
+    if isinstance(checkpoint_result, dict) and checkpoint_result.get("skipped"):
+        return None, {
+            "ok": True,
+            "skipped": True,
+            "rank": int(checkpoint_result.get("rank", 0) or 0),
+            "reason": str(checkpoint_result.get("reason", "checkpoint save skipped")),
+        }
+    raise TypeError(
+        "checkpoint save must return a manifest path or a rank-skipped result"
+    )
 
 
 def _write_runtime_config_artifacts(
@@ -295,7 +316,7 @@ def run_serve_from_config(
     mock = bool(serving.get("mock", False))
     if mock:
         engine = (
-            ServeEngine(config=config_data)
+            InferenceEngine(config=config_data)
             .initialize(world_size=1)
             .load_model(checkpoint=manifest, mock=True)
         )
@@ -304,7 +325,7 @@ def run_serve_from_config(
     else:
         model = build_serving_model_from_checkpoint(config_data, manifest, manager)
         engine = (
-            ServeEngine(config=config_data)
+            InferenceEngine(config=config_data)
             .initialize(world_size=1)
             .load_model(model=model)
         )

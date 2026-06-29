@@ -3,6 +3,8 @@
 # @Author : Wang Jun
 # @Email: wj_xd@foxmail.com
 
+import warnings
+
 import pytest
 
 torch = pytest.importorskip("torch")
@@ -55,7 +57,9 @@ def test_yolo_official_batch_tensor_cache_records_hit_ratio(tmp_path):
     )
 
     first = collator([vision_sample])
-    second = collator([vision_sample])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", FutureWarning)
+        second = collator([vision_sample])
 
     assert first["img"].shape == (1, 3, 32, 32)
     assert first["cls"].shape == (1, 1)

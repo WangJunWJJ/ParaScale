@@ -16,11 +16,6 @@ from parascale.commands.plan import build_plan_payload, section
 from parascale.configuration import resolve_config, write_config_artifacts
 from parascale.runtime import build_benchmark_plan, build_runtime_context
 from parascale.runtime.backends.devices import set_current_device
-from parascale.runtime.factory import (
-    build_optimizer_for_model,
-    build_serving_model_from_checkpoint,
-    build_training_components,
-)
 from parascale.runtime.inference import InferenceRunner
 from parascale.runtime.orchestrator import (
     _destroy_distributed_for_cli,
@@ -37,21 +32,10 @@ from parascale.runtime.orchestrator import (
 from parascale.workloads.inference import build_inference_components
 
 
-def sync_orchestrator_factories() -> None:
-    import parascale.runtime.orchestrator as orchestrator
-
-    orchestrator.build_training_components = build_training_components
-    orchestrator.build_optimizer_for_model = build_optimizer_for_model
-    orchestrator.build_serving_model_from_checkpoint = (
-        build_serving_model_from_checkpoint
-    )
-
-
 def run_train_from_config(
     config_data: Dict[str, Any],
     resume_step: int | None = None,
 ) -> Dict[str, Any]:
-    sync_orchestrator_factories()
     return _run_train_from_config(config_data, resume_step=resume_step)
 
 
@@ -59,12 +43,10 @@ def run_serve_from_config(
     config_data: Dict[str, Any],
     checkpoint: str | None = None,
 ) -> Dict[str, Any]:
-    sync_orchestrator_factories()
     return _run_serve_from_config(config_data, checkpoint=checkpoint)
 
 
 def run_benchmark_from_config(config_data: Dict[str, Any]) -> Dict[str, Any]:
-    sync_orchestrator_factories()
     return _run_benchmark_from_config(config_data)
 
 

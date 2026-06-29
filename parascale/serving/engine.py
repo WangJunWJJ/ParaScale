@@ -3,7 +3,7 @@
 # @Author : Wang Jun
 # @Email: wj_xd@foxmail.com
 
-"""Serving engine built on top of ServeEngine primitives."""
+"""Serving orchestration built on top of the inference runtime."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
-from parascale.runtime import ServeEngine
+from parascale.runtime.inference import InferenceEngine
 
 from .api import ServeRequest, ServeResponse
 from .kv_cache import KVCacheManager
@@ -21,7 +21,7 @@ from .scheduler import ContinuousBatchScheduler
 
 @dataclass
 class ServingEngine:
-    runtime: ServeEngine = field(default_factory=ServeEngine)
+    runtime: InferenceEngine = field(default_factory=InferenceEngine)
     scheduler: ContinuousBatchScheduler = field(
         default_factory=ContinuousBatchScheduler
     )
@@ -43,7 +43,12 @@ class ServingEngine:
         for request in batch:
             self.kv_cache.put(request.request_id, {"status": "prefill"})
         try:
-            result = self.runtime.generate([request.payload for request in batch])
+            execute = (
+                self.runtime.infer
+                if self.runtime.task_adapter is not None
+                else self.runtime.generate
+            )
+            result = execute([request.payload for request in batch])
             outputs = self._normalize_outputs(result.get("outputs"), len(batch))
             mode = result.get("mode", "unknown")
             elapsed_ms = (time.perf_counter() - start) * 1000.0

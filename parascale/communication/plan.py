@@ -7,34 +7,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any, Dict
+from parascale.contracts import CommunicationPlan
 
 from .hooks import DdpHookPlan, recommend_ddp_hook
-
-
-@dataclass(frozen=True)
-class CommunicationPlan:
-    backend: str = "native"
-    ddp_hook: str = "none"
-    bucket_cap_mb: int | None = None
-    use_no_sync: bool = False
-    adapter_only_sync: bool = False
-    overlap_h2d: bool = False
-    reasons: tuple[str, ...] = ()
-    evidence: Dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "backend": self.backend,
-            "ddp_hook": self.ddp_hook,
-            "bucket_cap_mb": self.bucket_cap_mb,
-            "use_no_sync": self.use_no_sync,
-            "adapter_only_sync": self.adapter_only_sync,
-            "overlap_h2d": self.overlap_h2d,
-            "reasons": list(self.reasons),
-            "evidence": dict(self.evidence),
-        }
 
 
 def build_communication_plan(

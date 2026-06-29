@@ -49,7 +49,7 @@ ParaScale 当前版本应支持：
 | RuntimePlan | 由配置、硬件、数据、策略、后端、推理和 checkpoint 子计划组成的运行计划 |
 | Workload Adapter | 将 CLIP/DataComp/VLM LoRA/YOLO 等场景映射到统一 runtime contract 的薄适配层 |
 | TrainEngine | 训练 runtime 编排入口，负责 fit loop、step、metrics、checkpoint 和 backend 协作 |
-| Inference/ServeEngine | 推理 runtime 编排入口，负责批处理、调度、KV cache、模型加载和 serving contract |
+| InferenceEngine / ServingEngine | 通用推理 runtime 与上层服务编排入口，负责批处理、调度、KV cache、模型加载和 serving contract |
 | TrainingBackend | native、FSDP、DeepSpeed、Ascend native 等训练执行后端契约 |
 | Patch Token | 视觉模型中由图像分辨率和 patch size 推导出的计算 token |
 | Token Budget | 按真实 token/patch-token 成本而非样本数组织 batch |
@@ -357,13 +357,13 @@ parascale/
 | 需求域 | 对应设计文档章节 | 主要代码路径 | 主要测试/验证入口 |
 |---|---|---|---|
 | 产品定位 | 1、2、20、附录 A | README、config、cli | 文档审查 |
-| 硬件抽象 | 6、15、附录 A.3 | `core/device/`、`core/cluster.py`、`strategy/device_plan.py` | `tests/test_core_architecture_no_torch.py`、`tests/test_architecture_reset_no_torch.py` |
-| 通信抽象 | 6.2、12、附录 A.2 | `core/distributed/`、`communication/`、`parallel/` | `tests/test_contracts_communication_no_torch.py`、`tests/test_parallel_plan_no_torch.py` |
+| 硬件抽象 | 6、15、附录 A.3 | `core/device/`、`core/cluster.py`、`contracts/plan.py` | `tests/test_core_architecture_no_torch.py`、`tests/test_architecture_boundaries_no_torch.py` |
+| 通信抽象 | 6.2、12、附录 A.2 | `core/distributed/`、`communication/`、`parallel/` | `tests/test_contracts_communication_no_torch.py`、`tests/test_strategy_no_torch.py` |
 | 训练 runtime | 9、16、17 | `runtime/training/`、`runtime/backends/`、`commands/run.py` | `tests/test_train_no_torch.py`、`tests/test_backend_smoke.py` |
-| 推理 runtime | 11、17 P4 | `runtime/inference/`、`serving/` | `tests/server_smoke_report.py`、serving smoke |
+| 推理 runtime | 11、17 P4 | `runtime/inference/`、`serving/` | `parascale smoke`、`tests/test_inference_runtime_no_torch.py` |
 | 视觉数据 | 8.2、17 P2 | `data/vision/`、`workloads/vision.py`、`workloads/yolo.py` | `tests/test_vision_*`、`tests/test_yolo_*` |
 | 图文多模态 | 8.3、17 P3 | `data/multimodal/`、`workloads/clip.py`、`workloads/datacomp.py`、`workloads/vlm_lora.py` | `tests/test_clip_contrastive_workload.py`、`tests/test_vlm_lora_workload.py` |
-| 策略/tuner | 7、13 | `strategy/`、`reporting/tuner.py` | `tests/test_strategy_*`、P2 tuner validation |
+| 策略/tuner | 7、13 | `strategy/`、`reporting/matrix.py` | `tests/test_strategy_*`、P2 tuner validation |
 | Checkpoint | 10 | `checkpoint/`、`runtime/training/checkpointing.py` | checkpoint validate、resume suites |
 | CLI | 14 | `cli.py`、`commands/` | `tests/test_cli_no_torch.py`、`tests/test_benchmark_matrix_cli_no_torch.py` |
 | Benchmark/reporting | 13 | `reporting/`、`commands/benchmark*.py`、`tests/benchmarks/` | benchmark matrix scripts/reports |

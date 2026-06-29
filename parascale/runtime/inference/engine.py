@@ -17,31 +17,34 @@ from parascale.core import (
     MockCollectiveBackend,
 )
 
+from .tasks import InferenceTaskAdapter
+
 
 @dataclass
-class ServeState:
+class InferenceState:
     initialized: bool = False
     requests: int = 0
     last_latency_ms: float = 0.0
 
 
 @dataclass
-class ServeEngine:
+class InferenceEngine:
     config: Any = field(default_factory=dict)
     device_backend: DeviceBackend = field(default_factory=CpuDeviceBackend)
     collective: CollectiveBackend = field(default_factory=MockCollectiveBackend)
-    state: ServeState = field(default_factory=ServeState)
+    state: InferenceState = field(default_factory=InferenceState)
     model: Any = None
     mock_mode: bool = False
+    task_adapter: InferenceTaskAdapter | None = None
 
-    def initialize(self, world_size: int = 1) -> "ServeEngine":
+    def initialize(self, world_size: int = 1) -> "InferenceEngine":
         self.collective.init_process_group(world_size=max(1, int(world_size)), rank=0)
         self.state.initialized = True
         return self
 
     def load_model(
         self, model: Any = None, checkpoint: Any = None, *, mock: bool = False
-    ) -> "ServeEngine":
+    ) -> "InferenceEngine":
         self.model = model if model is not None else checkpoint
         self.mock_mode = bool(mock or self.model == "mock")
         return self
@@ -71,6 +74,26 @@ class ServeEngine:
         raise RuntimeError(
             "Loaded model does not provide generate(requests) or __call__(requests)."
         )
+
+    def infer(self, batch: Any) -> Dict[str, Any]:
+        """Execute a task adapter already resolved during runtime setup."""
+        if self.task_adapter is None:
+            return self.generate(batch)
+        self.record_request()
+        if self.mock_mode:
+            return {
+                "outputs": self._mock_outputs(batch, "inferred"),
+                "mode": "mock",
+                "task": self.task_adapter.name,
+            }
+        self._require_model("infer")
+        prepared = self.task_adapter.prepare_batch(batch)
+        output = self.task_adapter.predict(self.model, prepared)
+        return {
+            "outputs": self.task_adapter.postprocess(output),
+            "mode": "task",
+            "task": self.task_adapter.name,
+        }
 
     def embed(self, requests: Any) -> Dict[str, Any]:
         self.record_request()
@@ -106,7 +129,7 @@ class ServeEngine:
             return {"batch": batch, "state": decode(batch), "mode": "model"}
         return {"batch": batch, "state": "decoded", "mode": "fallback"}
 
-    def record_request(self, latency_ms: float = 0.0) -> ServeState:
+    def record_request(self, latency_ms: float = 0.0) -> InferenceState:
         self.state.requests += 1
         self.state.last_latency_ms = max(0.0, float(latency_ms))
         return self.state
@@ -118,7 +141,8 @@ class ServeEngine:
     def _require_model(self, operation: str) -> None:
         if self.model is None:
             raise RuntimeError(
-                f"ServeEngine.{operation} requires load_model(...), or load_model(..., mock=True)."
+                f"InferenceEngine.{operation} requires load_model(...), or "
+                "load_model(..., mock=True)."
             )
 
     @staticmethod
@@ -128,8 +152,4 @@ class ServeEngine:
         return [value]
 
 
-class InferenceEngine(ServeEngine):
-    """Production-facing inference runtime entrypoint."""
-
-
-__all__ = ["InferenceEngine", "ServeEngine", "ServeState"]
+__all__ = ["InferenceEngine", "InferenceState"]

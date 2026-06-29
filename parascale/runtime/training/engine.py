@@ -284,6 +284,36 @@ class TrainEngine:
             scheduler=scheduler,
         )
 
+    def _distributed_rank(self) -> int:
+        dist = self._initialized_torch_distributed()
+        if dist is not None:
+            return int(dist.get_rank())
+        return int(getattr(self.collective, "rank", 0) or 0)
+
+    def _distributed_world_size(self) -> int:
+        dist = self._initialized_torch_distributed()
+        if dist is not None:
+            return max(1, int(dist.get_world_size()))
+        return max(1, int(getattr(self.collective, "world_size", 1) or 1))
+
+    def _distributed_barrier(self) -> None:
+        dist = self._initialized_torch_distributed()
+        if dist is not None:
+            dist.barrier()
+            return
+        if self._distributed_world_size() > 1:
+            self.collective.barrier()
+
+    @staticmethod
+    def _initialized_torch_distributed() -> Any | None:
+        try:
+            import torch.distributed as dist
+        except Exception:
+            return None
+        if not dist.is_available() or not dist.is_initialized():
+            return None
+        return dist
+
     def load_checkpoint(
         self,
         checkpoint_manager: Any,

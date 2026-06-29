@@ -225,10 +225,6 @@ parascale smoke --config configs/server_tiny_torch.json --output runs/server_smo
 
 The legacy script entrypoint remains available for test-runner use:
 
-```bash
-python tests/server_smoke_report.py --config configs/server_tiny_torch.json --output runs/server_smoke_report.json --skip-real
-```
-
 ## 13. Troubleshooting
 
 If `parascale train` says torch is required:

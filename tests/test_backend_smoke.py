@@ -19,7 +19,7 @@ from parascale.cli import (
     run_train_from_config,
 )
 from parascale.config import ParaScaleConfig
-from parascale.runtime.backend import create_runtime_training_backend
+from parascale.runtime.backends import create_runtime_training_backend
 from parascale.runtime.training import TrainEngine
 
 

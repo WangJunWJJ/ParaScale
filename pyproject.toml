@@ -70,7 +70,6 @@ convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
 "tests/benchmarks/scripts/validate_p2_profile_tuner.py" = ["E402"]
-"tests/server_smoke_report.py" = ["E402"]
 "tests/test_backend_smoke.py" = ["E402"]
 "tests/test_clip_contrastive_workload.py" = ["E402"]
 "tests/test_experimental_parallel_assets.py" = ["E402"]

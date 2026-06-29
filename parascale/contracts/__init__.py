@@ -18,7 +18,7 @@ from .plan import (
     InferencePlan,
     RuntimePlan,
 )
-from .workload import WorkloadComponents, WorkloadContract
+from .workload import WorkloadAdapter, WorkloadComponents
 
 __all__ = [
     "BackendPlan",
@@ -36,6 +36,6 @@ __all__ = [
     "MetricContract",
     "ProfileMetric",
     "RuntimePlan",
-    "WorkloadContract",
+    "WorkloadAdapter",
     "WorkloadComponents",
 ]

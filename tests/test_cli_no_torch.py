@@ -21,11 +21,23 @@ from parascale.cli import (
     main,
     run_train_from_config,
 )
+from parascale.commands.common import emit_json
 from parascale.commands.plan import build_plan_payload as command_build_plan_payload
 from parascale.commands.run import (
     build_serve_dry_run_payload as command_build_serve_dry_run_payload,
 )
 from parascale.workloads.yolo import _resolve_model_path
+
+
+def test_emit_json_skips_nonzero_distributed_rank(monkeypatch):
+    output = _workspace_tmp("cli_rank_output") / "payload.json"
+    output.unlink(missing_ok=True)
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    monkeypatch.setenv("RANK", "1")
+
+    emit_json({"rank": 1}, str(output))
+
+    assert not output.exists()
 
 
 def _sample_config():
@@ -240,7 +252,7 @@ def test_cli_auto_backend_uses_native_for_local_smoke(monkeypatch):
     def fail(_config):
         raise ImportError("Torch runtime factory workloads require PyTorch.")
 
-    monkeypatch.setattr("parascale.commands.run.build_training_components", fail)
+    monkeypatch.setattr("parascale.runtime.orchestrator.build_training_components", fail)
     with pytest.raises(ImportError, match="Torch runtime factory"):
         run_train_from_config(config)
 
@@ -271,7 +283,7 @@ def test_cli_real_train_requires_torch_for_synthetic_workload(monkeypatch):
         raise ImportError("Torch runtime factory workloads require PyTorch.")
 
     monkeypatch.setattr(
-        "parascale.commands.run.build_training_components",
+        "parascale.runtime.orchestrator.build_training_components",
         fail,
     )
     with pytest.raises(ImportError, match="require PyTorch"):

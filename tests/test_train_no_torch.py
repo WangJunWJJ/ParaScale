@@ -754,3 +754,41 @@ def test_accumulation_controller_rejects_step_fn_without_accumulation_protocol()
         assert "step_fn" in str(exc)
     else:
         raise AssertionError("step_fn with accumulation must fail fast")
+
+
+def test_train_engine_exposes_checkpoint_collective_rank_and_barrier():
+    from parascale.core import MockCollectiveBackend
+    from parascale.runtime.training import TrainEngine
+
+    collective = MockCollectiveBackend(initialized=True, world_size=2, rank=1)
+    engine = TrainEngine(config=object(), collective=collective)
+
+    assert engine._distributed_rank() == 1
+    assert engine._distributed_world_size() == 2
+
+    engine._distributed_barrier()
+
+    assert collective.history[-1]["op"] == "barrier"
+
+
+def test_nonzero_rank_checkpoint_result_skips_manifest_validation():
+    from parascale.runtime.orchestrator import _validate_final_checkpoint_result
+
+    class Manager:
+        def read_manifest_path(self, _path):
+            raise AssertionError("nonzero rank must not read the manifest")
+
+    path, validation = _validate_final_checkpoint_result(
+        Manager(),
+        {
+            "step": 2,
+            "rank": 1,
+            "skipped": True,
+            "reason": "checkpoint manifest is written by rank 0 only",
+        },
+    )
+
+    assert path is None
+    assert validation["ok"] is True
+    assert validation["skipped"] is True
+    assert validation["rank"] == 1
