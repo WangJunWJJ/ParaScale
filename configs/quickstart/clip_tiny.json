@@ -1,0 +1,55 @@
+{
+  "parascale": {
+    "task_type": "multimodal",
+    "model_family": "clip",
+    "target_scale": "local",
+    "optimize_for": "throughput",
+    "training_backend": "native",
+    "precision": "fp32",
+    "batch_size": 4,
+    "checkpoint_save_path": "./runs/quickstart/clip_tiny",
+    "checkpoint_save_interval": 1
+  },
+  "task": {
+    "type": "multimodal",
+    "model_family": "clip",
+    "modalities": ["image", "text"]
+  },
+  "model": {
+    "type": "tiny_clip",
+    "image_size": 32,
+    "vocab_size": 128,
+    "hidden_dim": 32,
+    "embed_dim": 16
+  },
+  "data": {
+    "type": "clip_synthetic",
+    "num_samples": 16,
+    "batch_size": 4,
+    "image_size": 32,
+    "sequence_length": 8,
+    "vocab_size": 128
+  },
+  "optimizer": {
+    "type": "adamw",
+    "lr": 0.001
+  },
+  "model_profile": {
+    "total_params": 120000,
+    "total_memory": 480000,
+    "num_layers": 4,
+    "model_type": "clip"
+  },
+  "hardware_profile": {
+    "num_gpus": 1,
+    "gpus_per_node": 1,
+    "gpu_memory": 1000000000,
+    "available_memory": 900000000
+  },
+  "training": {
+    "workload": "clip_contrastive",
+    "max_steps": 2,
+    "checkpoint_dir": "./runs/quickstart/clip_tiny",
+    "checkpoint_interval": 1
+  }
+}

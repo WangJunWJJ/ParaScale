@@ -1,0 +1,74 @@
+{
+  "parascale": {
+    "task_type": "vision",
+    "model_family": "yolo_world",
+    "target_scale": "single_node",
+    "optimize_for": "throughput",
+    "training_backend": "native_ddp",
+    "precision": "bf16",
+    "data_parallel_size": 2,
+    "ddp_find_unused_parameters": true,
+    "batch_size": 2,
+    "dataloader_num_workers": 4,
+    "dataloader_pin_memory": true,
+    "dataloader_prefetch_factor": 2,
+    "dataloader_persistent_workers": true,
+    "tensor_cache": true,
+    "tensor_cache_dir": "runs/cache/yolo_world_objects365_tensor",
+    "checkpoint_save_path": "runs/benchmarks/yolo_world_objects365_official/native_ddp_ckpt",
+    "checkpoint_save_interval": 999999
+  },
+  "task": {
+    "type": "vision",
+    "workload": "yolo_world_detection",
+    "model_family": "yolo_world",
+    "modalities": ["image"],
+    "objective": "detection_training"
+  },
+  "model": {
+    "type": "yolo_world",
+    "path": "/models/yolov8s-worldv2.pt",
+    "image_size": 640,
+    "variant": "yolov8s-worldv2",
+    "loss_type": "official"
+  },
+  "data": {
+    "type": "objects365_yolo_cache",
+    "data_dir": "/dataset/cache/objects365_tiny_yolo",
+    "image_dir": "/dataset/cache/objects365_tiny_yolo/images",
+    "label_dir": "/dataset/cache/objects365_tiny_yolo/labels",
+    "num_samples": 256,
+    "batch_size": 2,
+    "num_workers": 4,
+    "pin_memory": true,
+    "prefetch_factor": 2,
+    "persistent_workers": true,
+    "tensor_cache": true,
+    "tensor_cache_dir": "runs/cache/yolo_world_objects365_tensor",
+    "image_size": 640,
+    "loss_type": "official"
+  },
+  "optimizer": {"type": "adamw", "lr": 0.000001},
+  "model_profile": {
+    "total_params": 13000000,
+    "total_memory": 260000000,
+    "num_layers": 225,
+    "model_type": "yolo_world_s"
+  },
+  "hardware_profile": {
+    "num_gpus": 2,
+    "gpus_per_node": 2,
+    "gpu_memory": 24000000000,
+    "available_memory": 20000000000
+  },
+  "training": {
+    "workload": "yolo_world_detection",
+    "loss_type": "official",
+    "max_steps": 80,
+    "benchmark_steps": 80,
+    "warmup_steps": 10,
+    "checkpoint_dir": "runs/benchmarks/yolo_world_objects365_official/native_ddp_ckpt",
+    "checkpoint_interval": 999999,
+    "skip_final_checkpoint": true
+  }
+}

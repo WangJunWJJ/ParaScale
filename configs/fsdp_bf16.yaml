@@ -1,0 +1,21 @@
+parascale:
+  training_backend: auto
+  precision: bf16
+  fsdp_state_dict_type: sharded
+  fsdp_auto_wrap: true
+  fsdp_min_num_params: 100000000
+  batching_strategy: token_budget
+  max_tokens_per_batch: 16384
+  dataloader_num_workers: 8
+  dataloader_pin_memory: true
+  dataloader_prefetch_factor: 4
+model_profile:
+  total_params: 2000000000
+  total_memory: 8000000000
+  num_layers: 32
+  model_type: transformer
+hardware_profile:
+  num_gpus: 8
+  gpus_per_node: 8
+  gpu_memory: 85899345920
+  available_memory: 75161927680

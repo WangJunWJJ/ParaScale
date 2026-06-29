@@ -1,0 +1,80 @@
+{
+  "parascale": {
+    "task_type": "multimodal",
+    "model_family": "vlm_lora",
+    "target_scale": "single_node",
+    "optimize_for": "throughput",
+    "training_backend": "native_ddp",
+    "precision": "bf16",
+    "data_parallel_size": 2,
+    "ddp_comm_hook": "fp16_compress",
+    "ddp_gradient_as_bucket_view": true,
+    "ddp_static_graph": false,
+    "batch_size": 2,
+    "checkpoint_save_path": "runs/benchmarks/vlm_lora_hf_clip_backend_matrix/native_ddp_ckpt",
+    "checkpoint_save_interval": 999999
+  },
+  "task": {
+    "type": "multimodal",
+    "workload": "vlm_lora",
+    "model_family": "vlm_lora",
+    "modalities": ["image", "text"],
+    "objective": "real_clip_image_text_lora_adapter",
+    "lora_rank": 8,
+    "lora_alpha": 16.0,
+    "lora_dropout": 0.05
+  },
+  "model": {
+    "type": "hf_clip_lora",
+    "pretrained_model_name_or_path": "/models/openai_clip-vit-base-patch32",
+    "image_size": 224,
+    "channels": 3,
+    "patch_size": 32,
+    "vocab_size": 49408,
+    "text_length": 64,
+    "embed_dim": 512,
+    "activation_checkpointing": false
+  },
+  "data": {
+    "type": "datacomp_wds",
+    "data_dir": "/dataset/datacomp_subsets/final/datacomp_10k_wds",
+    "streaming": true,
+    "num_workers": 2,
+    "prefetch_factor": 2,
+    "persistent_workers": false,
+    "num_samples": 160,
+    "batch_size": 2,
+    "image_size": 224,
+    "text_length": 64
+  },
+  "lora": {
+    "rank": 8,
+    "alpha": 16.0,
+    "dropout": 0.05,
+    "train_lm_head": true
+  },
+  "optimizer": {"type": "adamw", "lr": 0.0001},
+  "model_profile": {
+    "total_params": 152000000,
+    "trainable_params": 25500000,
+    "total_memory": 1300000000,
+    "num_layers": 24,
+    "model_type": "hf_clip_lora"
+  },
+  "hardware_profile": {
+    "num_gpus": 2,
+    "gpus_per_node": 2,
+    "gpu_memory": 24000000000,
+    "available_memory": 20000000000
+  },
+  "training": {
+    "workload": "vlm_lora",
+    "max_steps": 30,
+    "benchmark_steps": 30,
+    "warmup_steps": 5,
+    "gradient_accumulation_steps": 1,
+    "checkpoint_dir": "runs/benchmarks/vlm_lora_hf_clip_backend_matrix/native_ddp_ckpt",
+    "checkpoint_interval": 999999,
+    "skip_final_checkpoint": true
+  }
+}

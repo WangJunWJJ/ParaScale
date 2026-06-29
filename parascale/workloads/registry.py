@@ -1,0 +1,103 @@
+# -*- coding: utf-8 -*-
+# @Time : 2026/6/18 下午4:48
+# @Author : Wang Jun
+# @Email: wj_xd@foxmail.com
+
+"""Built-in workload registry and training component entrypoints."""
+
+from __future__ import annotations
+
+from typing import Any, Dict
+
+from parascale.runtime.specs import (
+    ClipContrastiveSpec,
+    TinyTorchWorkloadSpec,
+    VisionSyntheticSpec,
+    VlmLoraSpec,
+    YoloWorldSpec,
+)
+from parascale.runtime.workloads import WorkloadRegistry
+
+from .clip import build_clip_contrastive_components
+from .common import _require_torch, _section
+from .optimizer import (
+    build_adamw_optimizer_for_model,
+)
+from .optimizer import (
+    trainable_parameter_stats as trainable_parameter_stats,
+)
+from .tiny import build_tiny_torch_components
+from .vision import build_vision_synthetic_components
+from .vlm_lora import build_vlm_lora_components
+from .yolo import build_yolo_world_components
+
+
+def build_training_components(config_data: Dict[str, Any]):
+    """Build model, optimizer, dataloader and loss for a configured workload."""
+    training = _section(config_data, "training")
+    workload = str(training.get("workload", "synthetic_regression"))
+    return default_workload_registry().create(workload, config_data)
+
+
+def default_workload_registry() -> WorkloadRegistry:
+    registry = WorkloadRegistry()
+    registry.register(
+        "vision_synthetic",
+        _build_vision_synthetic_from_config,
+        aliases=("synthetic_vision", "tiny_vit"),
+    )
+    registry.register(
+        "clip_contrastive",
+        _build_clip_contrastive_from_config,
+        aliases=("clip_style_contrastive", "tiny_clip"),
+    )
+    registry.register(
+        "vlm_lora",
+        _build_vlm_lora_from_config,
+        aliases=("vlm_lora_finetune", "tiny_vlm_lora"),
+    )
+    registry.register(
+        "yolo_world",
+        _build_yolo_world_from_config,
+        aliases=("yolo_world_detection", "yoloworld"),
+    )
+    registry.register(
+        "torch_tiny",
+        _build_tiny_torch_from_config,
+        aliases=("synthetic_regression", "torch_tiny_mlp", "tiny_torch"),
+    )
+    return registry
+
+
+def _build_tiny_torch_from_config(config_data: Dict[str, Any]):
+    return build_tiny_torch_components(TinyTorchWorkloadSpec.from_config(config_data))
+
+
+def _build_vision_synthetic_from_config(config_data: Dict[str, Any]):
+    return build_vision_synthetic_components(
+        VisionSyntheticSpec.from_config(config_data)
+    )
+
+
+def _build_clip_contrastive_from_config(config_data: Dict[str, Any]):
+    return build_clip_contrastive_components(
+        ClipContrastiveSpec.from_config(config_data)
+    )
+
+
+def _build_vlm_lora_from_config(config_data: Dict[str, Any]):
+    return build_vlm_lora_components(VlmLoraSpec.from_config(config_data))
+
+
+def _build_yolo_world_from_config(config_data: Dict[str, Any]):
+    return build_yolo_world_components(YoloWorldSpec.from_config(config_data))
+
+
+def build_optimizer_for_model(model: Any, config_data: Dict[str, Any]):
+    _require_torch()
+    import torch.optim as optim
+
+    optimizer = _section(config_data, "optimizer")
+    training = _section(config_data, "training")
+    lr = float(optimizer.get("lr", training.get("lr", 0.001)))
+    return build_adamw_optimizer_for_model(optim, model, lr=lr)

@@ -1,0 +1,48 @@
+parascale:
+  training_backend: native
+  precision: fp32
+  checkpoint_save_path: ./runs/server_tiny_torch
+  checkpoint_save_interval: 1
+
+runtime:
+  device: auto
+
+model:
+  type: tiny_mlp
+  input_dim: 4
+  hidden_dim: 8
+  output_dim: 2
+
+data:
+  type: tensor_random
+  batch_size: 2
+  input_dim: 4
+  output_dim: 2
+
+optimizer:
+  type: adamw
+  lr: 0.001
+
+model_profile:
+  total_params: 10000
+  total_memory: 40000
+  num_layers: 2
+  model_type: mlp
+
+hardware_profile:
+  num_gpus: 1
+  gpus_per_node: 1
+  gpu_memory: 1000000000
+  available_memory: 900000000
+
+training:
+  workload: torch_tiny_mlp
+  max_steps: 2
+  checkpoint_dir: ./runs/server_tiny_torch
+  checkpoint_interval: 1
+
+serving:
+  mock: false
+  workload: torch_tiny_mlp
+  requests:
+    - [1.0, 0.0, 0.0, 1.0]

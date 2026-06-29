@@ -1,0 +1,59 @@
+{
+  "parascale": {
+    "task_type": "vision",
+    "model_family": "vit",
+    "target_scale": "local",
+    "optimize_for": "throughput",
+    "training_backend": "native",
+    "batch_size": 4,
+    "max_patch_tokens_per_batch": 64,
+    "device_prefetch": false,
+    "checkpoint_save_path": "./runs/examples/gpu/example_002_vision_synthetic_native",
+    "checkpoint_save_interval": 1
+  },
+  "runtime": {
+    "accelerator": "cuda",
+    "communication_backend": "nccl"
+  },
+  "task": {
+    "type": "vision",
+    "model_family": "vit",
+    "modalities": ["image"]
+  },
+  "model": {
+    "type": "tiny_patch_classifier",
+    "image_size": 32,
+    "channels": 3,
+    "patch_size": 16,
+    "hidden_dim": 32,
+    "num_classes": 10
+  },
+  "data": {
+    "type": "vision_synthetic",
+    "num_samples": 16,
+    "batch_size": 4,
+    "image_size": 32
+  },
+  "optimizer": {
+    "type": "adamw",
+    "lr": 0.01
+  },
+  "model_profile": {
+    "total_params": 50000,
+    "total_memory": 200000,
+    "num_layers": 3,
+    "model_type": "vision_transformer"
+  },
+  "hardware_profile": {
+    "num_gpus": 1,
+    "gpus_per_node": 1,
+    "gpu_memory": 1000000000,
+    "available_memory": 900000000
+  },
+  "training": {
+    "workload": "vision_synthetic",
+    "max_steps": 2,
+    "checkpoint_dir": "./runs/examples/gpu/example_002_vision_synthetic_native",
+    "checkpoint_interval": 1
+  }
+}

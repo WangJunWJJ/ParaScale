@@ -1,0 +1,15 @@
+{
+  "runtime": {
+    "accelerator": "npu",
+    "communication_backend": "hccl"
+  },
+  "model": {
+    "path": "/models/clip/openai-mirror/clip-vit-base-patch32"
+  },
+  "inference": {
+    "workload": "clip_real",
+    "batch_size": 2,
+    "num_batches": 2,
+    "warmup_steps": 1
+  }
+}

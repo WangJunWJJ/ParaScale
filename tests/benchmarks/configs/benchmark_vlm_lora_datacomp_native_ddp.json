@@ -1,0 +1,77 @@
+{
+  "parascale": {
+    "task_type": "multimodal",
+    "model_family": "vlm_lora",
+    "target_scale": "single_node",
+    "optimize_for": "throughput",
+    "training_backend": "native_ddp",
+    "precision": "bf16",
+    "data_parallel_size": 2,
+    "ddp_comm_hook": "fp16_compress",
+    "ddp_gradient_as_bucket_view": true,
+    "ddp_static_graph": false,
+    "batch_size": 4,
+    "checkpoint_save_path": "runs/benchmarks/vlm_lora_datacomp/native_ddp_ckpt",
+    "checkpoint_save_interval": 999999
+  },
+  "task": {
+    "type": "multimodal",
+    "workload": "vlm_lora",
+    "model_family": "vlm_lora",
+    "modalities": ["image", "text"],
+    "objective": "image_conditioned_text_adapter",
+    "lora_rank": 8,
+    "lora_alpha": 16.0,
+    "lora_dropout": 0.05
+  },
+  "model": {
+    "type": "tiny_vlm_lora",
+    "image_size": 224,
+    "patch_size": 16,
+    "vocab_size": 8192,
+    "text_length": 32,
+    "embed_dim": 256
+  },
+  "data": {
+    "type": "datacomp_wds",
+    "data_dir": "/dataset/datacomp_subsets/datacomp_small_100k_wds",
+    "streaming": true,
+    "num_workers": 2,
+    "prefetch_factor": 2,
+    "persistent_workers": true,
+    "num_samples": 256,
+    "batch_size": 4,
+    "image_size": 224,
+    "text_length": 32
+  },
+  "lora": {
+    "rank": 8,
+    "alpha": 16.0,
+    "dropout": 0.05,
+    "train_lm_head": true
+  },
+  "optimizer": {"type": "adamw", "lr": 0.0003},
+  "model_profile": {
+    "total_params": 3000000,
+    "trainable_params": 2300000,
+    "total_memory": 12000000,
+    "num_layers": 4,
+    "model_type": "tiny_vlm_lora"
+  },
+  "hardware_profile": {
+    "num_gpus": 2,
+    "gpus_per_node": 2,
+    "gpu_memory": 24000000000,
+    "available_memory": 20000000000
+  },
+  "training": {
+    "workload": "vlm_lora",
+    "max_steps": 40,
+    "benchmark_steps": 40,
+    "warmup_steps": 5,
+    "gradient_accumulation_steps": 1,
+    "checkpoint_dir": "runs/benchmarks/vlm_lora_datacomp/native_ddp_ckpt",
+    "checkpoint_interval": 999999,
+    "skip_final_checkpoint": true
+  }
+}

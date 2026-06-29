@@ -1,0 +1,19 @@
+{
+  "runtime": {
+    "accelerator": "npu",
+    "communication_backend": "hccl"
+  },
+  "model": {
+    "path": "/models/yolo/yolov8s-worldv2.pt"
+  },
+  "inference": {
+    "workload": "yolo_world_real",
+    "batch_size": 2,
+    "num_batches": 2,
+    "warmup_steps": 1,
+    "postprocess_mode": "device",
+    "confidence_threshold": 0.25,
+    "iou_threshold": 0.45,
+    "max_detections": 300
+  }
+}

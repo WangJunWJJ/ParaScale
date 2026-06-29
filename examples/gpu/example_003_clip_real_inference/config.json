@@ -1,0 +1,15 @@
+{
+  "runtime": {
+    "accelerator": "cuda",
+    "communication_backend": "nccl"
+  },
+  "model": {
+    "path": "/models/clip/openai_clip-vit-base-patch32"
+  },
+  "inference": {
+    "workload": "clip_real",
+    "batch_size": 4,
+    "num_batches": 3,
+    "warmup_steps": 1
+  }
+}

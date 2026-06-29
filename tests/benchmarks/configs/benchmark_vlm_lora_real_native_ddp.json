@@ -1,0 +1,89 @@
+{
+  "parascale": {
+    "task_type": "multimodal",
+    "model_family": "vlm_lora",
+    "target_scale": "single_node",
+    "optimize_for": "balanced",
+    "training_backend": "native_ddp",
+    "precision": "bf16",
+    "data_parallel_size": 2,
+    "ddp_comm_hook": "none",
+    "ddp_gradient_as_bucket_view": true,
+    "ddp_static_graph": false,
+    "batch_size": 1,
+    "gradient_accumulation_steps": 4,
+    "enable_activation_checkpointing": true,
+    "adapter_only_checkpoint": true,
+    "checkpoint_save_path": "runs/benchmarks/vlm_lora_real_backend_matrix/native_ddp_ckpt",
+    "checkpoint_save_interval": 999999
+  },
+  "task": {
+    "type": "multimodal",
+    "workload": "vlm_lora",
+    "model_family": "llava_onevision",
+    "modalities": ["image", "text"],
+    "objective": "supervised_vlm_lora_finetune",
+    "conversation_template": "llava_onevision",
+    "response_template": "A concise visual description.",
+    "lora_rank": 8,
+    "lora_alpha": 16.0,
+    "lora_dropout": 0.05
+  },
+  "model": {
+    "type": "llava_onevision_lora",
+    "family": "llava_onevision",
+    "pretrained_model_name_or_path": "/models/llava-onevision-qwen2-0.5b-ov-hf",
+    "image_size": 224,
+    "channels": 3,
+    "patch_size": 14,
+    "vocab_size": 151936,
+    "text_length": 2048,
+    "embed_dim": 896,
+    "activation_checkpointing": true
+  },
+  "data": {
+    "type": "datacomp_wds",
+    "data_dir": "/dataset/datacomp_subsets/final/datacomp_10k_wds",
+    "streaming": true,
+    "num_workers": 2,
+    "prefetch_factor": 2,
+    "persistent_workers": false,
+    "num_samples": 80,
+    "batch_size": 1,
+    "image_size": 224,
+    "text_length": 2048
+  },
+  "lora": {
+    "rank": 8,
+    "alpha": 16.0,
+    "dropout": 0.05,
+    "target_modules": ["q_proj", "k_proj", "v_proj", "o_proj"],
+    "use_peft": true,
+    "train_lm_head": false
+  },
+  "optimizer": {"type": "adamw", "lr": 0.0001},
+  "model_profile": {
+    "total_params": 500000000,
+    "trainable_params": 5000000,
+    "total_memory": 3000000000,
+    "num_layers": 24,
+    "model_type": "llava_onevision_lora"
+  },
+  "hardware_profile": {
+    "num_gpus": 2,
+    "gpus_per_node": 2,
+    "gpu_memory": 24000000000,
+    "available_memory": 20000000000
+  },
+  "training": {
+    "workload": "vlm_lora",
+    "max_steps": 20,
+    "benchmark_steps": 20,
+    "warmup_steps": 4,
+    "gradient_accumulation_steps": 4,
+    "checkpoint_dir": "runs/benchmarks/vlm_lora_real_backend_matrix/native_ddp_ckpt",
+    "checkpoint_interval": 999999,
+    "skip_final_checkpoint": true,
+    "validate_resume": false
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "parascale": {
+    "task_type": "generic",
+    "model_family": "tiny_regression",
+    "target_scale": "single_node",
+    "optimize_for": "throughput",
+    "training_backend": "native_ddp",
+    "precision": "fp32",
+    "batch_size": 8,
+    "data_parallel_size": 2,
+    "device_prefetch": false,
+    "checkpoint_save_path": "./runs/examples/ascend/example_002_tiny_native_ddp_hccl",
+    "checkpoint_save_interval": 999999
+  },
+  "runtime": {
+    "accelerator": "npu",
+    "communication_backend": "hccl"
+  },
+  "model_profile": {
+    "total_params": 68,
+    "total_memory": 4096,
+    "num_layers": 1,
+    "model_type": "synthetic"
+  },
+  "hardware_profile": {
+    "device_type": "npu",
+    "num_devices": 2,
+    "world_size": 2,
+    "num_gpus": 0,
+    "gpus_per_node": 2,
+    "gpu_memory": 64000000000,
+    "available_memory": 60000000000
+  },
+  "training": {
+    "workload": "synthetic_regression",
+    "max_steps": 5,
+    "batch_size": 8,
+    "input_dim": 16,
+    "output_dim": 4,
+    "checkpoint_dir": "./runs/examples/ascend/example_002_tiny_native_ddp_hccl",
+    "checkpoint_interval": 999999,
+    "skip_final_checkpoint": true,
+    "seed": 321
+  }
+}

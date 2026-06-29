@@ -1,0 +1,65 @@
+{
+  "parascale": {
+    "task_type": "multimodal",
+    "model_family": "clip",
+    "target_scale": "local",
+    "optimize_for": "throughput",
+    "training_backend": "native",
+    "precision": "fp32",
+    "batching_strategy": "token_budget",
+    "max_tokens_per_batch": 4096,
+    "max_patch_tokens_per_batch": 8192,
+    "batch_size": 8,
+    "checkpoint_save_path": "runs/benchmarks/datacomp/native_ckpt",
+    "checkpoint_save_interval": 999999
+  },
+  "task": {
+    "type": "multimodal",
+    "workload": "clip_contrastive",
+    "model_family": "clip",
+    "modalities": ["text", "image"],
+    "objective": "image_text_contrastive",
+    "temperature": 0.07,
+    "symmetric_loss": true
+  },
+  "model": {
+    "type": "tiny_clip",
+    "image_size": 224,
+    "channels": 3,
+    "patch_size": 16,
+    "vocab_size": 4096,
+    "text_length": 32,
+    "embed_dim": 64
+  },
+  "data": {
+    "type": "datacomp_wds",
+    "data_dir": "/dataset/datacomp_subsets/final/datacomp_10k_wds",
+    "num_samples": 64,
+    "batch_size": 8,
+    "image_size": 224,
+    "text_length": 32
+  },
+  "optimizer": {
+    "type": "adamw",
+    "lr": 0.001
+  },
+  "model_profile": {
+    "total_params": 500000,
+    "total_memory": 2000000,
+    "num_layers": 4,
+    "model_type": "clip"
+  },
+  "hardware_profile": {
+    "num_gpus": 1,
+    "gpus_per_node": 1,
+    "gpu_memory": 24000000000,
+    "available_memory": 20000000000
+  },
+  "training": {
+    "workload": "clip_contrastive",
+    "max_steps": 3,
+    "benchmark_steps": 3,
+    "checkpoint_dir": "runs/benchmarks/datacomp/native_ckpt",
+    "checkpoint_interval": 999999
+  }
+}

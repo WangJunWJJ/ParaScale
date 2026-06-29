@@ -1,0 +1,58 @@
+{
+  "parascale": {
+    "task_type": "vision",
+    "model_family": "yolo_world",
+    "target_scale": "single_node",
+    "optimize_for": "throughput",
+    "training_backend": "deepspeed",
+    "precision": "bf16",
+    "data_parallel_size": 2,
+    "zero_optimization": true,
+    "zero_stage": 2,
+    "batch_size": 2,
+    "checkpoint_save_path": "runs/benchmarks/yolo_world_coco/deepspeed_ckpt",
+    "checkpoint_save_interval": 999999
+  },
+  "task": {
+    "type": "vision",
+    "workload": "yolo_world_detection",
+    "model_family": "yolo_world",
+    "modalities": ["image"],
+    "objective": "detection_proxy_training"
+  },
+  "model": {
+    "type": "yolo_world",
+    "path": "/models/yolov8s-worldv2.pt",
+    "image_size": 640,
+    "variant": "yolov8s-worldv2"
+  },
+  "data": {
+    "type": "coco_zip",
+    "zip_path": "/dataset/102-训练数据集/2-CoCo017/train2017.zip",
+    "num_samples": 260,
+    "batch_size": 2,
+    "image_size": 640
+  },
+  "optimizer": {"type": "adamw", "lr": 0.000001},
+  "model_profile": {
+    "total_params": 13000000,
+    "total_memory": 260000000,
+    "num_layers": 225,
+    "model_type": "yolo_world_s"
+  },
+  "hardware_profile": {
+    "num_gpus": 2,
+    "gpus_per_node": 2,
+    "gpu_memory": 24000000000,
+    "available_memory": 20000000000
+  },
+  "training": {
+    "workload": "yolo_world_detection",
+    "max_steps": 100,
+    "benchmark_steps": 100,
+    "warmup_steps": 10,
+    "checkpoint_dir": "runs/benchmarks/yolo_world_coco/deepspeed_ckpt",
+    "checkpoint_interval": 999999,
+    "skip_final_checkpoint": true
+  }
+}

@@ -1,0 +1,23 @@
+parascale:
+  training_backend: auto
+  precision: bf16
+  batching_strategy: token_budget
+  max_tokens_per_batch: 12288
+  gradient_accumulation_steps: 4
+  label_keys:
+    - labels
+    - label
+    - targets
+  dataloader_num_workers: 8
+  dataloader_pin_memory: true
+  dataloader_prefetch_factor: 4
+model_profile:
+  total_params: 8000000000
+  total_memory: 32000000000
+  num_layers: 40
+  model_type: transformer
+hardware_profile:
+  num_gpus: 8
+  gpus_per_node: 8
+  gpu_memory: 85899345920
+  available_memory: 73014444032

@@ -1,0 +1,81 @@
+{
+  "parascale": {
+    "task_type": "multimodal",
+    "model_family": "clip",
+    "target_scale": "single_node",
+    "optimize_for": "throughput",
+    "training_backend": "fsdp",
+    "precision": "bf16",
+    "data_parallel_size": 2,
+    "fsdp_sharding_strategy": "full_shard",
+    "fsdp_state_dict_type": "full",
+    "batching_strategy": "token_budget",
+    "max_tokens_per_batch": 8192,
+    "max_patch_tokens_per_batch": 8192,
+    "batch_size": 2,
+    "dataloader_num_workers": 2,
+    "dataloader_prefetch_factor": 2,
+    "dataloader_persistent_workers": false,
+    "checkpoint_save_path": "runs/benchmarks/datacomp_medium/fsdp_ckpt",
+    "checkpoint_save_interval": 999999
+  },
+  "task": {
+    "type": "multimodal",
+    "workload": "clip_contrastive",
+    "model_family": "clip",
+    "modalities": ["text", "image"],
+    "objective": "image_text_contrastive",
+    "temperature": 0.07,
+    "symmetric_loss": true
+  },
+  "model": {
+    "type": "clip_medium",
+    "image_size": 224,
+    "channels": 3,
+    "patch_size": 16,
+    "vocab_size": 49408,
+    "text_length": 64,
+    "embed_dim": 768,
+    "vision_layers": 12,
+    "text_layers": 6,
+    "num_heads": 12,
+    "mlp_ratio": 4.0
+  },
+  "data": {
+    "type": "datacomp_wds",
+    "streaming": true,
+    "data_dir": "/dataset/datacomp_subsets/final/datacomp_10k_wds",
+    "num_samples": 512,
+    "batch_size": 2,
+    "num_workers": 2,
+    "prefetch_factor": 2,
+    "persistent_workers": false,
+    "image_size": 224,
+    "text_length": 64
+  },
+  "optimizer": {
+    "type": "adamw",
+    "lr": 0.0001
+  },
+  "model_profile": {
+    "total_params": 150000000,
+    "total_memory": 1200000000,
+    "num_layers": 18,
+    "model_type": "clip_medium"
+  },
+  "hardware_profile": {
+    "num_gpus": 2,
+    "gpus_per_node": 2,
+    "gpu_memory": 24000000000,
+    "available_memory": 20000000000
+  },
+  "training": {
+    "workload": "clip_contrastive",
+    "max_steps": 80,
+    "benchmark_steps": 80,
+    "warmup_steps": 10,
+    "checkpoint_dir": "runs/benchmarks/datacomp_medium/fsdp_ckpt",
+    "checkpoint_interval": 999999,
+    "skip_final_checkpoint": true
+  }
+}

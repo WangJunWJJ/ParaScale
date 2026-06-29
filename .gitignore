@@ -1,0 +1,72 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# PyTorch
+*.pth
+*.pt
+
+# Data
+/data/
+hf_models/
+wheelhouse_transformers_*/
+wheelhouse_yolo_ultralytics_*/
+.wheelhouse_*/
+*.tar.gz
+
+# Checkpoints
+checkpoints/
+
+# IDE
+.vscode/
+.idea/
+.agents/
+.superpowers/
+.ruff_cache/
+docs/superpowers/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+outputs/
+
+# Local validation and transfer artifacts
+runs/
+parascale-remote*.zip
+parascale-upload*.zip
+*.zip.b64
+.codex_*
+.codex_parascale_remote_ed25519
+.codex_parascale_remote_ed25519.pub
+openai_clip-vit-base-patch32-pytorch.tar.gz
+wheelhouse_transformers_4442_linux.tar.gz
+
+# Test output
+.pytest_cache/
+.pytest-parascale/
+pytest-cache-files-*/
+tests/.test_runs/

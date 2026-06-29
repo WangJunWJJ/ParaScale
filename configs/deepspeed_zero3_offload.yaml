@@ -1,0 +1,27 @@
+parascale:
+  training_backend: deepspeed
+  precision: bf16
+  zero_optimization: true
+  zero_stage: 3
+  zero_offload: true
+  batching_strategy: token_budget
+  max_tokens_per_batch: 8192
+  gradient_accumulation_steps: 8
+  dataloader_num_workers: 8
+  dataloader_pin_memory: true
+  dataloader_prefetch_factor: 4
+model_profile:
+  total_params: 70000000000
+  total_memory: 280000000000
+  num_layers: 80
+  model_type: transformer
+hardware_profile:
+  num_gpus: 8
+  gpus_per_node: 8
+  gpu_memory: 42949672960
+  available_memory: 36507222016
+runtime_profile:
+  peak_memory_per_gpu: 38654705664
+  padding_ratio: 0.32
+  oom_count: 0
+  batch_tokens: 8192

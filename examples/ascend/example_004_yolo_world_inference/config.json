@@ -1,0 +1,12 @@
+{
+  "runtime": {
+    "accelerator": "npu",
+    "communication_backend": "hccl"
+  },
+  "inference": {
+    "workload": "yolo_world_synthetic",
+    "batch_size": 4,
+    "num_batches": 3,
+    "warmup_steps": 1
+  }
+}

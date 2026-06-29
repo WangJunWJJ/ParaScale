@@ -1,0 +1,40 @@
+{
+  "parascale": {
+    "task_type": "multimodal",
+    "model_family": "vlm",
+    "target_scale": "small_cluster",
+    "optimize_for": "memory",
+    "training_backend": "auto",
+    "precision": "bf16",
+    "batching_strategy": "token_budget",
+    "max_tokens_per_batch": 12288,
+    "max_patch_tokens_per_batch": 65536,
+    "gradient_accumulation_steps": 4,
+    "dataloader_num_workers": 8
+  },
+  "task": {
+    "type": "multimodal",
+    "workload": "vlm_lora",
+    "model_family": "vlm",
+    "modalities": ["text", "image"],
+    "adapter_policy": "lora",
+    "lora_rank": 16,
+    "lora_alpha": 32
+  },
+  "model_profile": {
+    "total_params": 8000000000,
+    "total_memory": 32000000000,
+    "num_layers": 40,
+    "model_type": "vlm"
+  },
+  "hardware_profile": {
+    "num_gpus": 8,
+    "gpus_per_node": 8,
+    "gpu_memory": 85899345920,
+    "available_memory": 73014444032
+  },
+  "training": {
+    "workload": "vlm_lora",
+    "max_steps": 10
+  }
+}

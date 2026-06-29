@@ -1,0 +1,63 @@
+{
+  "parascale": {
+    "task_type": "multimodal",
+    "model_family": "clip",
+    "target_scale": "single_node",
+    "optimize_for": "balanced",
+    "training_backend": "native",
+    "precision": "bf16",
+    "data_parallel_size": 1,
+    "enable_activation_checkpointing": true,
+    "batch_size": 1,
+    "dataloader_num_workers": 0,
+    "checkpoint_save_path": "runs/p3/hf_clip_pretrained_ckpt",
+    "checkpoint_save_interval": 999999
+  },
+  "task": {
+    "type": "multimodal",
+    "workload": "clip_contrastive",
+    "objective": "image_text_contrastive",
+    "temperature": 0.07
+  },
+  "model": {
+    "type": "hf_clip",
+    "pretrained_model_name_or_path": "openai/clip-vit-base-patch32",
+    "image_size": 224,
+    "channels": 3,
+    "patch_size": 32,
+    "vocab_size": 49408,
+    "text_length": 64,
+    "embed_dim": 512,
+    "activation_checkpointing": true
+  },
+  "data": {
+    "type": "datacomp_wds",
+    "streaming": true,
+    "data_dir": "/dataset/datacomp_subsets/final/datacomp_10k_wds",
+    "num_samples": 2,
+    "batch_size": 1,
+    "num_workers": 0,
+    "image_size": 224,
+    "text_length": 64
+  },
+  "optimizer": {"type": "adamw", "lr": 0.000001},
+  "model_profile": {
+    "total_params": 151000000,
+    "total_memory": 1208000000,
+    "num_layers": 24,
+    "model_type": "hf_clip"
+  },
+  "hardware_profile": {
+    "num_gpus": 1,
+    "gpus_per_node": 1,
+    "gpu_memory": 24000000000,
+    "available_memory": 20000000000
+  },
+  "training": {
+    "workload": "clip_contrastive",
+    "max_steps": 1,
+    "checkpoint_dir": "runs/p3/hf_clip_pretrained_ckpt",
+    "checkpoint_interval": 999999,
+    "skip_final_checkpoint": true
+  }
+}
