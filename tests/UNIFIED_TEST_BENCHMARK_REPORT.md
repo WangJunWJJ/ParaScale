@@ -406,5 +406,5 @@ FSDP 300-step：
 2. 新 benchmark 配置放入 `tests/benchmarks/configs/`。
 3. 新 benchmark 输出报告放入 `tests/benchmarks/reports/`。
 4. 一次性复现实验脚本放入 `tests/benchmarks/scripts/`，成熟后合并进 CLI。
-5. 产品设计文档 `doc/` 不再堆叠阶段性测试记录。
+5. 产品设计文档 `docs/` 不再堆叠阶段性测试记录。
 6. 数据集、模型权重、wheelhouse 依赖缓存不得作为中间产物清理。

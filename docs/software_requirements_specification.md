@@ -2,11 +2,11 @@
 
 版本：v1.1-rebuild-sync
 日期：2026-06-25
-状态：与 `doc/software_design_documentation.md` v1.1-rebuild 同步后的当前版本需求基线
+状态：与 `docs/software_design_documentation.md` v1.1-rebuild 同步后的当前版本需求基线
 
 ## 1. 文档目标
 
-本文定义 ParaScale 当前代码版本的软件需求边界、验收范围和能力分级。本文与 `doc/software_design_documentation.md` 的最新 rebuild 版本保持一致，用于指导后续开发、代码审查、测试验收和文档清理。
+本文定义 ParaScale 当前代码版本的软件需求边界、验收范围和能力分级。本文与 `docs/software_design_documentation.md` 的最新 rebuild 版本保持一致，用于指导后续开发、代码审查、测试验收和文档清理。
 
 ParaScale 当前定位不再是泛化覆盖所有 AI 训练/推理形态，而是聚焦为：
 
@@ -85,7 +85,7 @@ parascale/
   quantization/
 ```
 
-设计文档继续沿用 `doc/software_design_documentation.md` 的 v1.1-rebuild 版本作为主设计依据。若代码结构、CLI 输出、能力边界或验收目标变化，本文和设计文档必须同步更新。
+设计文档继续沿用 `docs/software_design_documentation.md` 的 v1.1-rebuild 版本作为主设计依据。若代码结构、CLI 输出、能力边界或验收目标变化，本文和设计文档必须同步更新。
 
 ## 6. 能力分级
 
@@ -371,7 +371,7 @@ parascale/
 
 ## 12. 文档清理要求
 
-`doc/` 目录应保留少量长期有效文档：
+`docs/` 目录应保留少量长期有效文档：
 
 - `software_requirements_specification.md`：当前 SRS。
 - `software_design_documentation.md`：最新 rebuild 主设计文档。

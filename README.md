@@ -87,7 +87,7 @@ parascale/
   checkpoint/     # manifest、保存、校验、恢复
   serving/        # batched serving 与本地 checkpoint 加载
   parallel/       # 声明式 TP/PP/SP 规划原语
-doc/
+docs/
   software_design_documentation.md       # 主设计文档
   software_requirements_specification.md # 需求说明
   remote_server_test_guide.md           # 远程验证指南

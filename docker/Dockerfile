@@ -22,7 +22,7 @@ COPY LICENSE .
 COPY parascale/ ./parascale/
 COPY tests/ ./tests/
 COPY configs/ ./configs/
-COPY doc/ ./doc/
+COPY docs/ ./docs/
 
 RUN pip install --no-cache-dir -r requirements.txt
 RUN pip install -e .
