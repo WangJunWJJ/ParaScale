@@ -57,7 +57,7 @@ def run_train_from_config(
         "deepspeed",
         "ascend_native",
     }:
-        raise SystemExit(f"unsupported CLI training backend: {requested_backend}")
+        raise ValueError(f"unsupported CLI training backend: {requested_backend}")
     if requested_backend == "auto":
         if _is_distributed_launch():
             strategy_plan = build_strategy_plan(
@@ -74,7 +74,7 @@ def run_train_from_config(
         "deepspeed",
     }
     if distributed_requested and not _is_distributed_launch():
-        raise SystemExit(
+        raise ValueError(
             f"CLI backend '{parascale_config.training_backend}' requires a "
             "distributed launcher. Use torchrun/deepspeed launcher, or set "
             "parascale.training_backend=native for local smoke."
@@ -303,7 +303,7 @@ def run_serve_from_config(
     serving = _section(config_data, "serving")
     checkpoint = checkpoint or serving.get("checkpoint")
     if not checkpoint:
-        raise SystemExit(
+        raise ValueError(
             "parascale serve requires --checkpoint or serving.checkpoint for real execution."
         )
     manager = _checkpoint_manager_for_path(checkpoint)

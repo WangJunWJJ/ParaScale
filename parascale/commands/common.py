@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any, Dict
 
@@ -78,6 +79,14 @@ def emit_json(payload: Dict[str, Any], output_path: str | None = None) -> None:
         Path(output_path).write_text(text + "\n", encoding="utf-8")
     else:
         print(text)
+
+
+def emit_error_json(payload: Dict[str, Any]) -> None:
+    """Write one machine-readable command error to stderr on rank zero."""
+
+    if _is_nonzero_distributed_rank():
+        return
+    sys.stderr.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
 
 def _is_nonzero_distributed_rank() -> bool:

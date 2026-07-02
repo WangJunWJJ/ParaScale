@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 
 from parascale.commands.benchmark import (
     add_pipeline_cache_arguments as add_pipeline_cache_arguments,
@@ -24,8 +25,10 @@ from parascale.commands.checkpoint import (
 from parascale.commands.checkpoint import (
     cmd_checkpoint_validate as cmd_checkpoint_validate,
 )
+from parascale.commands.common import emit_error_json
 from parascale.commands.common import load_config_file as load_config_file
 from parascale.commands.doctor import cmd_doctor as cmd_doctor
+from parascale.commands.errors import classify_exception
 from parascale.commands.plan import (
     build_plan_payload as build_plan_payload,
 )
@@ -495,7 +498,15 @@ def main(argv: list[str] | None = None) -> int:
     validate_parser.set_defaults(func=cmd_checkpoint_validate)
 
     args = parser.parse_args(argv)
-    return args.func(args)
+    command = getattr(args, "command", None)
+    try:
+        return int(args.func(args))
+    except Exception as exc:
+        if os.environ.get("PARASCALE_DEBUG") == "1":
+            raise
+        failure = classify_exception(exc)
+        emit_error_json(failure.to_dict(command))
+        return failure.exit_code
 
 
 if __name__ == "__main__":

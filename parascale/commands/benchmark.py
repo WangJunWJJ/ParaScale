@@ -11,6 +11,7 @@ import argparse
 
 from parascale.commands.benchmark_matrix import run_benchmark_matrix_from_args
 from parascale.commands.common import emit_json
+from parascale.commands.errors import EXIT_BENCHMARK
 from parascale.commands.scenario import (
     apply_pipeline_cache_args,
     benchmark_matrix_scenario_config,
@@ -31,13 +32,27 @@ __all__ = [
 def cmd_benchmark_matrix(args: argparse.Namespace) -> int:
     payload = run_benchmark_matrix_from_args(args)
     emit_json(payload, args.output)
-    return 0
+    return EXIT_BENCHMARK if benchmark_payload_failed(payload) else 0
 
 
 def cmd_benchmark_stability(args: argparse.Namespace) -> int:
     payload = run_benchmark_stability_from_args(args)
     emit_json(payload, args.output)
-    return 0
+    return EXIT_BENCHMARK if benchmark_payload_failed(payload) else 0
+
+
+def benchmark_payload_failed(payload: dict) -> bool:
+    """Return whether a benchmark command contains a failed launcher result."""
+
+    for key in ("run_results", "retry_results", "results"):
+        for result in payload.get(key, []):
+            status = str(result.get("status", "")).lower()
+            if status in {"error", "failed"}:
+                return True
+            returncode = result.get("returncode")
+            if returncode is not None and int(returncode) != 0:
+                return True
+    return False
 
 
 def add_pipeline_cache_arguments(parser: argparse.ArgumentParser) -> None:
