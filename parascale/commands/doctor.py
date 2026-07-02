@@ -15,6 +15,7 @@ import sys
 from typing import Any, Dict
 
 from parascale.commands.common import emit_json
+from parascale.commands.diagnostics import evaluate_diagnostics
 from parascale.core import AscendDeviceBackend, CpuDeviceBackend, NvidiaDeviceBackend
 
 
@@ -64,8 +65,14 @@ def build_doctor_payload() -> Dict[str, Any]:
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
-    emit_json(build_doctor_payload(), args.output)
-    return 0
+    payload = build_doctor_payload()
+    requirements = list(args.require)
+    if args.strict:
+        requirements = ["core", "torch", *requirements]
+    report = evaluate_diagnostics(payload, requirements)
+    payload.update(report.to_dict())
+    emit_json(payload, args.output)
+    return 0 if report.ok else 2
 
 
 def inspect_torch_runtime() -> Dict[str, Any]:

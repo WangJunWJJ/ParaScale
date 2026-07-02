@@ -173,6 +173,18 @@ def main(argv: list[str] | None = None) -> int:
     doctor_parser.add_argument(
         "--output", help="Optional path to write the doctor JSON."
     )
+    doctor_parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Exit non-zero when required runtime capabilities are unavailable.",
+    )
+    doctor_parser.add_argument(
+        "--require",
+        action="append",
+        choices=["core", "torch", "distributed", "cuda", "deepspeed", "npu"],
+        default=[],
+        help="Capability required by this environment. Repeat for multiple checks.",
+    )
     doctor_parser.set_defaults(func=cmd_doctor)
 
     smoke_parser = subparsers.add_parser(
