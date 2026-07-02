@@ -43,5 +43,21 @@ def test_pyproject_defines_build_and_console_entrypoint():
     data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
     assert data["build-system"]["build-backend"] == "setuptools.build_meta"
+    assert data["build-system"]["requires"][0] == "setuptools>=77"
     assert data["project"]["scripts"]["parascale"] == "parascale.cli:main"
     assert data["project"]["requires-python"] == ">=3.10"
+    assert data["project"]["license"] == "MIT"
+    assert data["project"]["license-files"] == ["LICENSE"]
+
+
+def test_clean_install_verifier_uses_only_public_entrypoints():
+    source = (
+        ROOT / "tests" / "packaging" / "verify_clean_install.py"
+    ).read_text(encoding="utf-8")
+
+    assert "from parascale" not in source
+    assert "python -m parascale.cli" not in source
+    assert '"parascale"' in source
+    assert "checkpoint" in source
+    assert "validate" in source
+    assert "PYTHONPATH" not in source
