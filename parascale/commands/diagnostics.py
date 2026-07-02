@@ -71,8 +71,11 @@ def _core(payload: Dict[str, Any]) -> bool:
 
 
 def _torch(payload: Dict[str, Any]) -> bool:
-    return bool(payload.get("dependencies", {}).get("torch")) and bool(
-        payload.get("torch_runtime", {}).get("available")
+    runtime = payload.get("torch_runtime", {})
+    return (
+        bool(payload.get("dependencies", {}).get("torch"))
+        and bool(runtime.get("available"))
+        and not runtime.get("error")
     )
 
 
@@ -88,7 +91,12 @@ def _cuda(payload: Dict[str, Any]) -> bool:
 
 
 def _deepspeed(payload: Dict[str, Any]) -> bool:
-    return bool(payload.get("dependencies", {}).get("deepspeed"))
+    runtime = payload.get("deepspeed_runtime", {})
+    return (
+        bool(payload.get("dependencies", {}).get("deepspeed"))
+        and bool(runtime.get("available"))
+        and not runtime.get("error")
+    )
 
 
 def _npu(payload: Dict[str, Any]) -> bool:
@@ -122,9 +130,7 @@ def _evidence(name: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     if name == "distributed":
         return dict(payload.get("distributed_runtime", {}))
     if name == "deepspeed":
-        return {
-            "installed": payload.get("dependencies", {}).get("deepspeed", False)
-        }
+        return dict(payload.get("deepspeed_runtime", {}))
     return dict(payload.get("ascend_runtime", {}))
 
 

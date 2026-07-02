@@ -77,6 +77,30 @@ def test_requirements_preserve_order_and_remove_duplicates():
     assert tuple(report.to_dict()["checks"]) == ("torch", "core")
 
 
+def test_torch_requirement_rejects_runtime_import_error():
+    report = _evaluate(
+        _payload(
+            dependencies={"torch": True, "yaml": True},
+            torch_runtime={"available": True, "error": "missing shared library"},
+        ),
+        ["torch"],
+    )
+
+    assert report.ok is False
+
+
+def test_deepspeed_requirement_needs_successful_import():
+    report = _evaluate(
+        _payload(
+            dependencies={"deepspeed": True, "yaml": True},
+            deepspeed_runtime={"available": False, "error": "version mismatch"},
+        ),
+        ["deepspeed"],
+    )
+
+    assert report.ok is False
+
+
 def test_cli_strict_doctor_writes_report_and_returns_two(monkeypatch, tmp_path):
     output = tmp_path / "doctor.json"
     monkeypatch.setattr(
