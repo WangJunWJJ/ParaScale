@@ -1,11 +1,10 @@
-# AIRCtRL开发规范
+# ParaScale开发规范
 ## 代码规范
-1. python版本：3.6、3.7、3.8
+1. python版本：3.10
 
 2. 缩进采用4个空格，而不是TAB
 
 3. 命名规范：
-
    1. 文件名、变量名、方法名：小写+下划线，如data_manager.py
    2. 类名：帕斯卡命名法，如DataManager
    3. 对方法的命名遵循以下原则：
@@ -18,7 +17,6 @@
 4. 顶级定义之间空两行, 方法定义之间空一行
 
 5. 空格：
-
    1. 括号内不要有空格，如generate_batch(data, device, indices=[1,2,3])，不要写成generate_batch(data, device, indices=[1, 2, 3])
    2. 二元符号前后加空格，如x == y，而不是x==y
    3. 冒号、逗号后面加空格，如x, y = func()，而不是x,y = func()

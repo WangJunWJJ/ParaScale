@@ -15,6 +15,7 @@ import sys
 from typing import Any, Dict
 
 from parascale.commands.common import emit_json
+from parascale.commands.diagnostics import evaluate_diagnostics
 from parascale.core import AscendDeviceBackend, CpuDeviceBackend, NvidiaDeviceBackend
 
 
@@ -64,8 +65,16 @@ def build_doctor_payload() -> Dict[str, Any]:
 
 
 def cmd_doctor(args: argparse.Namespace) -> int:
-    emit_json(build_doctor_payload(), args.output)
-    return 0
+    requirements = list(args.require)
+    if args.strict:
+        requirements = ["core", "torch", *requirements]
+    payload = build_doctor_payload()
+    if "deepspeed" in requirements:
+        payload["deepspeed_runtime"] = inspect_deepspeed_runtime()
+    report = evaluate_diagnostics(payload, requirements)
+    payload.update(report.to_dict())
+    emit_json(payload, args.output)
+    return 0 if report.ok else 2
 
 
 def inspect_torch_runtime() -> Dict[str, Any]:
@@ -99,7 +108,23 @@ def inspect_torch_runtime() -> Dict[str, Any]:
             ),
         }
     except Exception as exc:
-        return {"available": True, "error": str(exc)}
+        return {"available": False, "error": str(exc)}
+
+
+def inspect_deepspeed_runtime() -> Dict[str, Any]:
+    """Import DeepSpeed only when the command explicitly requires it."""
+
+    if importlib.util.find_spec("deepspeed") is None:
+        return {"available": False, "reason": "deepspeed is not installed"}
+    try:
+        import deepspeed
+
+        return {
+            "available": True,
+            "version": str(getattr(deepspeed, "__version__", "unknown")),
+        }
+    except Exception as exc:
+        return {"available": False, "error": str(exc)}
 
 
 def inspect_distributed_runtime() -> Dict[str, Any]:

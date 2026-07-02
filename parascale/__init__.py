@@ -11,6 +11,7 @@ release, so new development should use config, planning, runtime, checkpoint,
 data, and serving contracts.
 """
 
+from ._version import __version__
 from .checkpoint import (
     CheckpointConversionPlan,
     CheckpointConverter,
@@ -138,9 +139,8 @@ from .strategy import (
     tune_strategy_from_runtime,
 )
 
-__version__ = "1.0.0"
-
 __all__ = [
+    "__version__",
     "ParaScaleConfig",
     "LayeredParaScaleConfig",
     "WorkloadConfig",

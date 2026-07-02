@@ -13,6 +13,7 @@ from typing import Any, Dict
 
 from parascale.checkpoint import CheckpointManager
 from parascale.commands.common import emit_json
+from parascale.commands.errors import EXIT_CHECKPOINT, checkpoint_failure
 
 
 def checkpoint_manager_for_path(checkpoint: str | Path) -> CheckpointManager:
@@ -38,6 +39,11 @@ def build_checkpoint_validation_payload(checkpoint: str) -> Dict[str, Any]:
 
 
 def cmd_checkpoint_validate(args: argparse.Namespace) -> int:
-    payload = build_checkpoint_validation_payload(args.checkpoint)
+    try:
+        payload = build_checkpoint_validation_payload(args.checkpoint)
+    except Exception as exc:
+        raise checkpoint_failure(
+            str(exc), checkpoint=str(args.checkpoint), exception=type(exc).__name__
+        ) from exc
     emit_json(payload, args.output)
-    return 0
+    return 0 if payload["validation"]["ok"] else EXIT_CHECKPOINT

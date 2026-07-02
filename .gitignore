@@ -40,6 +40,7 @@ checkpoints/
 .idea/
 .agents/
 .superpowers/
+.venv-clean/
 .ruff_cache/
 docs/superpowers/
 *.swp

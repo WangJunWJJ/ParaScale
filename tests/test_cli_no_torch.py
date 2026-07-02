@@ -234,15 +234,17 @@ def test_cli_train_dry_run_writes_json():
     assert (artifact_dir / "config.resolved.json").exists()
 
 
-def test_cli_real_train_rejects_non_native_backend_without_launcher():
+def test_cli_real_train_rejects_non_native_backend_without_launcher(capsys):
     tmp_path = _workspace_tmp("cli_real_train_failure")
     config_path = tmp_path / "config.json"
     config = _sample_config()
     config["parascale"]["training_backend"] = "deepspeed"
     config_path.write_text(json.dumps(config), encoding="utf-8")
 
-    with pytest.raises(SystemExit, match="requires a distributed launcher"):
-        main(["train", "--config", str(config_path)])
+    assert main(["train", "--config", str(config_path)]) == 2
+    error = json.loads(capsys.readouterr().err)
+    assert error["error_type"] == "config_error"
+    assert "requires a distributed launcher" in error["message"]
 
 
 def test_cli_auto_backend_uses_native_for_local_smoke(monkeypatch):
