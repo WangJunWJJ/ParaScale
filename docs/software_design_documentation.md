@@ -711,6 +711,15 @@ Ascend 实机验证本阶段暂缓，但架构抽象必须保留。
 ParaScale v1 的核心不是堆叠所有分布式训练功能，而是建立一个可审查、可测试、可演进的 runtime 主干。短期用 FSDP/DeepSpeed/native 建立可靠 baseline；中期用视觉 patch-token、多模态 token-aware 数据 runtime 和训练到推理闭环形成差异化；长期再通过 native sharding、通信重叠、异构规划和独立推理 runtime 建立系统级优势。
 
 本文档是后续代码开发的主设计依据。若代码结构、CLI 输出、能力边界或验收目标发生变化，应同步更新本文档。
+
+### 20.1 试用版发布门禁
+
+ParaScale 的发布控制面由单一版本源、PEP 517/621 wheel、strict doctor、稳定 CLI 退出码和 CI 组成。源码测试覆盖 Python 3.10-3.12，clean-install 在独立 Python 3.11 环境通过安装后的 `parascale` console entrypoint 完成 tiny 训练与 checkpoint 校验。
+
+doctor 的事实采集与要求判断保持分离：普通模式只报告环境，strict 模式默认要求 core 与 Torch，`--require` 可声明 distributed、CUDA、DeepSpeed 或 NPU。失败结果必须包含 JSON evidence，不能通过日志文本猜测原因。
+
+CLI 只在命令分发边界分类预期异常，退出码为 2 配置/环境要求、3 依赖、4 runtime、5 checkpoint、6 benchmark 和 70 internal error。该错误协议属于低频控制面，不进入训练 step 热路径。CI extras resolution 不能替代远程 CUDA、NPU 或 DeepSpeed 实机发布验收。
+
 ## 附录 A：2026-06-23 架构重整基线
 
 本附录与 `docs/architecture_closure_design.md` 保持一致，作为后续代码重构、人工审查和功能验收的当前基线。ParaScale 尚未上线运行，因此本轮重整不要求兼容早期 `Engine`、旧并行 wrapper 或历史 CLI 形态，只保留已经验证有价值的能力，并以当前最优工程结构重新组织。

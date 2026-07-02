@@ -8,7 +8,10 @@
 import re
 from pathlib import Path
 
-import tomllib
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - exercised by Python 3.10 CI
+    import tomli as tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -48,6 +51,9 @@ def test_pyproject_defines_build_and_console_entrypoint():
     assert data["project"]["requires-python"] == ">=3.10"
     assert data["project"]["license"] == "MIT"
     assert data["project"]["license-files"] == ["LICENSE"]
+    assert 'tomli>=2.0; python_version < "3.11"' in data["project"][
+        "optional-dependencies"
+    ]["dev"]
 
 
 def test_clean_install_verifier_uses_only_public_entrypoints():
@@ -61,3 +67,16 @@ def test_clean_install_verifier_uses_only_public_entrypoints():
     assert "checkpoint" in source
     assert "validate" in source
     assert "PYTHONPATH" not in source
+
+
+def test_ci_covers_supported_python_and_clean_install():
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+
+    for version in ("3.10", "3.11", "3.12"):
+        assert version in workflow
+    assert "python -m build" in workflow
+    assert "verify_clean_install.py" in workflow
+    assert "python tests/run_tests.py" in workflow
+    assert "python -m ruff check" in workflow

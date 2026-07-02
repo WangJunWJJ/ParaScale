@@ -70,6 +70,17 @@ pip install -e ".[dev]"        # tests / lint
 python -m parascale.cli doctor
 ```
 
+发布或正式训练前使用严格诊断，并按任务声明必需能力：
+
+```bash
+parascale doctor --strict
+parascale doctor --require cuda --require distributed
+parascale doctor --require deepspeed
+parascale doctor --require npu
+```
+
+普通 `doctor` 只报告事实并返回 0；`--strict` 默认要求 core 与 Torch，`--require` 指定的能力不可用时返回 2，并在 JSON 中给出证据。
+
 ### 2. 查看运行计划
 
 ```bash
@@ -173,6 +184,8 @@ python -m parascale.cli --help
 python -m parascale.cli <command> --help
 ```
 
+CLI 使用稳定退出码：`2` 表示配置或环境要求失败，`3` 表示依赖缺失，`4` 表示运行失败，`5` 表示 checkpoint 失败，`6` 表示 benchmark 子任务失败，`70` 表示未预期的内部错误。预期失败会向 stderr 输出一条 JSON；设置 `PARASCALE_DEBUG=1` 可在开发环境重新抛出原始异常。
+
 ### Python API
 
 ```python
@@ -233,7 +246,10 @@ parascale/
 pip install -e ".[dev]"
 python tests/run_tests.py
 python -m ruff check parascale tests setup.py
+python -m build
 ```
+
+CI 在 Python 3.10、3.11 和 3.12 上运行源码测试，并在独立 Python 3.11 环境安装 wheel，执行 `doctor -> plan -> train -> checkpoint validate`。GPU/NPU 和 DeepSpeed 的真实执行仍属于远程硬件发布门禁，不能由依赖解析结果代替。
 
 GPU/NPU、真实数据和真实权重验证应在隔离容器或测试节点执行，并记录 commit、镜像、模型、数据、精度、全局 batch、吞吐、显存、dataloader wait 和 checkpoint/resume 结果。
 

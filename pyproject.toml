@@ -54,6 +54,7 @@ dev = [
     "ruff>=0.5.0",
     "black>=24.0.0",
     "build>=1.2.1",
+    'tomli>=2.0; python_version < "3.11"',
 ]
 
 [project.scripts]

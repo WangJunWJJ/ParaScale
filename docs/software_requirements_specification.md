@@ -386,6 +386,14 @@ parascale/
 - 所有 benchmark 和 serving 结论必须明确能力等级、硬件、数据、配置、batch budget、measurement window。
 - 文档必须避免引用已删除或已迁移的旧路径。
 
+### 13.1 试用版发布门禁
+
+- 包版本必须由单一源码定义，wheel metadata、`parascale.__version__` 和发布文档保持一致。
+- Python 3.10、3.11、3.12 必须执行源码测试；Python 3.11 必须执行 wheel clean-install 闭环。
+- `doctor --strict` 必须根据 core、Torch 和显式 `--require` 能力返回可靠退出码与 JSON 证据。
+- CLI 退出码固定为：2 配置/环境要求、3 依赖、4 runtime、5 checkpoint、6 benchmark、70 internal error。
+- CI 的 extras resolution 只证明依赖声明可解析，CUDA/NPU/DeepSpeed 生产能力必须由远程实机门禁确认。
+
 ## 14. 总结
 
 ParaScale 当前版本的需求核心是：以最新 rebuild 架构为基线，建立视觉与图文多模态分布式训练/推理控制层，短期通过 native-DDP/FSDP/DeepSpeed、DataComp/CLIP/VLM LoRA/YOLO、profile/tuner、checkpoint/resume 和 benchmark/reporting 形成可审查闭环；中长期再推进 serving 生产化、native 高性能后端和异构资源协同。
