@@ -30,9 +30,10 @@
 ### Validation
 
 - 本地源码测试覆盖配置、CLI、contracts、runtime、checkpoint、reporting、workload 和 packaging。
-- clean-install 使用独立虚拟环境安装 wheel，并通过 public CLI 执行 doctor、plan、tiny train 和 checkpoint validate。
-- CUDA 发布门禁使用双 RTX 4090 D、真实 DataComp WDS 与预训练 CLIP-B/32 验证 native-DDP、FSDP 和 DeepSpeed。
-- Ascend 发布门禁状态以本次发布最终验收结果为准，禁止用 dry-run 或 mock 替代实机结果。
+- wheel 已在不挂载源码的一次性容器中完成 clean-install，并通过 public CLI 执行 `parascale --version`、strict doctor、plan、tiny train 和 checkpoint validate。
+- CUDA 发布门禁使用双 RTX 4090 D、PyTorch 2.4.0+cu121、真实 DataComp WDS 与预训练 CLIP-B/32，完成 20-step native-DDP、FSDP 和 DeepSpeed 矩阵；三后端均成功，报告以高置信度推荐 FSDP。
+- CUDA checkpoint smoke 从 step 2 恢复到 step 4，最终 manifest 校验通过。
+- Ascend 服务器可连接且 8 张 910B4 健康，但验收时全部 AICore 100% 并被现有任务占用；为避免干扰，实机 smoke 标记为 pending，正式 tag 尚未创建。
 
 ### Known Limitations
 

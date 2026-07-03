@@ -394,6 +394,8 @@ parascale/
 - CLI 退出码固定为：2 配置/环境要求、3 依赖、4 runtime、5 checkpoint、6 benchmark、70 internal error。
 - CI 的 extras resolution 只证明依赖声明可解析，CUDA/NPU/DeepSpeed 生产能力必须由远程实机门禁确认。
 
+`0.1.0` 试用版采用候选发布门禁：wheel clean-install、本地源码测试、CUDA 双卡真实矩阵和独立 checkpoint/resume 均为正式 tag 的前置条件。Ascend 910B4 实机 smoke 同样属于 tag 前置条件；若设备被其他任务占满，应记录为 `pending` 并停止 tag 创建，不得降低为 dry-run 或 mock 后宣称通过。
+
 ## 14. 总结
 
 ParaScale 当前版本的需求核心是：以最新 rebuild 架构为基线，建立视觉与图文多模态分布式训练/推理控制层，短期通过 native-DDP/FSDP/DeepSpeed、DataComp/CLIP/VLM LoRA/YOLO、profile/tuner、checkpoint/resume 和 benchmark/reporting 形成可审查闭环；中长期再推进 serving 生产化、native 高性能后端和异构资源协同。

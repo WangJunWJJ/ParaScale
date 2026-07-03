@@ -720,6 +720,8 @@ doctor 的事实采集与要求判断保持分离：普通模式只报告环境�
 
 CLI 只在命令分发边界分类预期异常，退出码为 2 配置/环境要求、3 依赖、4 runtime、5 checkpoint、6 benchmark 和 70 internal error。该错误协议属于低频控制面，不进入训练 step 热路径。CI extras resolution 不能替代远程 CUDA、NPU 或 DeepSpeed 实机发布验收。
 
+`0.1.0` 发布候选继续执行“先验收、后打 tag”的门禁顺序。候选 wheel 必须在不挂载源码的隔离环境中通过 `parascale --version`、strict doctor、plan、tiny train 和 checkpoint validate。CUDA 门禁使用双 RTX 4090 D、真实 DataComp WDS 和预训练 CLIP-B/32 对 native-DDP、FSDP、DeepSpeed 做同口径矩阵，并独立验证 checkpoint/resume。Ascend 门禁必须等待目标 910B4 资源空闲后执行；设备被现有任务占用时只能标记 pending，不能以 dry-run、mock 或接口测试替代实机结论，也不能创建正式发布 tag。
+
 ## 附录 A：2026-06-23 架构重整基线
 
 本附录与 `docs/architecture_closure_design.md` 保持一致，作为后续代码重构、人工审查和功能验收的当前基线。ParaScale 尚未上线运行，因此本轮重整不要求兼容早期 `Engine`、旧并行 wrapper 或历史 CLI 形态，只保留已经验证有价值的能力，并以当前最优工程结构重新组织。
