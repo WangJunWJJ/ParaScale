@@ -57,6 +57,19 @@ def test_pyproject_defines_build_and_console_entrypoint():
     assert "pillow>=10.0.0" in data["project"]["optional-dependencies"]["dev"]
 
 
+def test_ascend_extra_is_vendor_managed_outside_public_pypi_matrix():
+    data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert data["project"]["optional-dependencies"]["ascend"] == [
+        "torch-npu>=2.4.0"
+    ]
+    assert "extra: [gpu, deepspeed, vlm]" in workflow
+    assert "torch-npu wheels are vendor-managed" in workflow
+
+
 def test_release_package_boundary_excludes_non_product_assets():
     data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     package_find = data["tool"]["setuptools"]["packages"]["find"]

@@ -48,7 +48,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        extra: [gpu, deepspeed, vlm, ascend]
+        # torch-npu wheels are vendor-managed through Ascend/CANN channels,
+        # so public PyPI resolution cannot validate the Ascend environment.
+        extra: [gpu, deepspeed, vlm]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
