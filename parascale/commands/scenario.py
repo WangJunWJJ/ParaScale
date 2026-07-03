@@ -26,6 +26,25 @@ def benchmark_matrix_scenario_config(
     scenario: str,
     args: argparse.Namespace,
 ) -> Dict[str, Any]:
+    if scenario == "clip-datacomp-golden":
+        return {
+            "base_config": args.base_config
+            or "configs/golden/clip_datacomp_vit_b.json",
+            "output_dir": "runs/golden/clip_datacomp_vit_b",
+            "markdown": "runs/golden/clip_datacomp_vit_b/report.md",
+            "title": "DataComp CLIP ViT-B Golden Path",
+            "workload_label": "DataComp WDS + pretrained CLIP ViT-B/32",
+            "runs": [{"run_id": args.run_id or "clip_datacomp_vit_b"}],
+        }
+    if scenario == "vlm-lora-golden":
+        return {
+            "base_config": args.base_config or "configs/golden/vlm_lora_small.json",
+            "output_dir": "runs/golden/vlm_lora_small",
+            "markdown": "runs/golden/vlm_lora_small/report.md",
+            "title": "Small VLM LoRA Golden Path",
+            "workload_label": "DataComp WDS + LLaVA-OneVision 0.5B LoRA",
+            "runs": [{"run_id": args.run_id or "vlm_lora_small"}],
+        }
     if scenario == "vlm-lora-hf-clip":
         return {
             "base_config": args.base_config
@@ -133,7 +152,7 @@ def build_matrix_config(
         parascale["fsdp_sharding_strategy"] = "full_shard"
         parascale["fsdp_state_dict_type"] = "full"
         parascale["fsdp_use_orig_params"] = True
-    elif scenario == "vlm-lora-real" and backend == "native_ddp":
+    elif scenario in {"vlm-lora-real", "vlm-lora-golden"} and backend == "native_ddp":
         parascale["ddp_find_unused_parameters"] = True
         parascale["ddp_static_graph"] = False
         parascale["enable_activation_checkpointing"] = False

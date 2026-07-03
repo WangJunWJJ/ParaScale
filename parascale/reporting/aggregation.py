@@ -23,6 +23,7 @@ def aggregate_stable_metrics(
     if not window:
         return {"measured_steps": 0}
     metric_names = [
+        "loss",
         "step_time_seconds",
         "images_per_second",
         "end_to_end_images_per_second",

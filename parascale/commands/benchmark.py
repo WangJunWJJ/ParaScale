@@ -47,6 +47,13 @@ def benchmark_payload_failed(payload: dict) -> bool:
     for key in ("run_results", "retry_results", "results"):
         for result in payload.get(key, []):
             status = str(result.get("status", "")).lower()
+            intentional_interrupt = (
+                status == "interrupted"
+                and bool(result.get("intentional_kill"))
+                and bool(result.get("checkpoint_ok"))
+            )
+            if intentional_interrupt:
+                continue
             if status in {"error", "failed"}:
                 return True
             returncode = result.get("returncode")

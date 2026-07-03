@@ -146,6 +146,7 @@ class CheckpointController:
         from parascale.runtime.backends import create_runtime_training_backend
 
         manifest = checkpoint_manager.read_manifest(step)
+        self._validate_before_resume(checkpoint_manager, manifest)
         backend_state_loaded = False
         if model is not None or optimizer is not None:
             self.engine.training_backend = create_runtime_training_backend(
@@ -192,6 +193,47 @@ class CheckpointController:
                     getattr(self.engine.training_backend, "optimizer_state_error")
                 )
         return manifest
+
+    def _validate_before_resume(
+        self,
+        checkpoint_manager: Any,
+        manifest: Any,
+    ) -> None:
+        validate = getattr(checkpoint_manager, "validate_manifest", None)
+        if callable(validate):
+            report = validate(manifest)
+            if not bool(getattr(report, "ok", False)):
+                details = (
+                    report.to_dict()
+                    if hasattr(report, "to_dict")
+                    else {"ok": False}
+                )
+                raise RuntimeError(
+                    "Checkpoint validation failed before resume: " f"{details}"
+                )
+
+        checkpoint_world_size = int(
+            manifest.metadata.get(
+                "rank_count",
+                manifest.metadata.get("world_size", 1),
+            )
+            or 1
+        )
+        runtime_world_size = self._world_size()
+        allow_change = bool(
+            getattr(
+                self.engine.config,
+                "allow_world_size_change_on_resume",
+                False,
+            )
+        )
+        if checkpoint_world_size != runtime_world_size and not allow_change:
+            raise ValueError(
+                "Checkpoint world_size mismatch: "
+                f"checkpoint={checkpoint_world_size}, runtime={runtime_world_size}. "
+                "Set allow_world_size_change_on_resume=true only when the backend "
+                "and checkpoint format explicitly support resharding."
+            )
 
     def _save_backend_specific_checkpoint(
         self,

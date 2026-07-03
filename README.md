@@ -127,6 +127,34 @@ python -m parascale.cli benchmark-matrix \
 
 `--dry-run` 只生成配置和启动命令。正式性能结论必须使用相同模型、数据、全局 batch、精度、硬件、warmup 和 measurement window。
 
+### 6. 运行真实训练黄金路径
+
+P1 提供两份可移植配置：DataComp WDS + CLIP ViT-B/32，以及 LLaVA-OneVision 0.5B LoRA。先声明本机或容器内的资产根目录：
+
+```bash
+export PARASCALE_MODEL_ROOT=/models
+export PARASCALE_DATA_ROOT=/dataset
+export PARASCALE_RUN_ROOT=/workspace/runs
+```
+
+配置仅支持显式的 `${VAR}` 环境变量引用；变量未定义时会在启动前返回配置错误，不会使用隐式路径或静默降级。
+
+```bash
+# 双卡 CLIP：250 step 后保存，再由新进程恢复至总计 500 step
+python -m parascale.cli benchmark-stability \
+  --scenario clip-datacomp-golden \
+  --max-steps 500 --kill-step 250 --resume-steps 250 \
+  --checkpoint-interval 250 --resume-stress
+
+# 双卡真实 VLM LoRA：adapter-only checkpoint/resume
+python -m parascale.cli benchmark-stability \
+  --scenario vlm-lora-golden \
+  --max-steps 500 --kill-step 250 --resume-steps 250 \
+  --checkpoint-interval 250 --resume-stress
+```
+
+报告统一给出稳定窗口 loss、images/s 或 tokens/s、峰值显存、dataloader wait、checkpoint 状态，以及恢复前后的 loss/吞吐比。正式长训容器建议增加 `--shm-size=8g`。
+
 ## 文档
 
 - [软件设计文档](docs/software_design_documentation.md)：产品目标、总体架构、模块边界和路线图。

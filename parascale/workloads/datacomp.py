@@ -46,7 +46,6 @@ class _DataCompWdsIterableDataset:
         shard_index = rank * num_workers + worker_id
         shard_count = max(1, world_size * num_workers)
         produced = 0
-        ordinal = 0
         if len(self.tar_paths) >= shard_count:
             tar_paths = [
                 tar_path
@@ -59,23 +58,35 @@ class _DataCompWdsIterableDataset:
             tar_paths = self.tar_paths
             sample_shard_count = shard_count
             sample_shard_index = shard_index
-        for tar_path in tar_paths:
-            for stem, entry in _iter_datacomp_tar_entries(tar_path):
-                if ordinal % sample_shard_count != sample_shard_index:
+        while produced < self.spec.num_samples:
+            cycle_produced = 0
+            ordinal = 0
+            for tar_path in tar_paths:
+                for stem, entry in _iter_datacomp_tar_entries(tar_path):
+                    if ordinal % sample_shard_count != sample_shard_index:
+                        ordinal += 1
+                        continue
                     ordinal += 1
-                    continue
-                ordinal += 1
-                if "image_bytes" not in entry or "text" not in entry:
-                    continue
-                if not _looks_like_supported_image(entry["image_bytes"]):
-                    continue
-                try:
-                    yield _datacomp_entry_to_sample(self.torch, stem, entry, self.spec)
-                except Exception:
-                    continue
-                produced += 1
-                if produced >= self.spec.num_samples:
-                    return
+                    if "image_bytes" not in entry or "text" not in entry:
+                        continue
+                    if not _looks_like_supported_image(entry["image_bytes"]):
+                        continue
+                    try:
+                        sample = _datacomp_entry_to_sample(
+                            self.torch, stem, entry, self.spec
+                        )
+                    except Exception:
+                        continue
+                    yield sample
+                    produced += 1
+                    cycle_produced += 1
+                    if produced >= self.spec.num_samples:
+                        return
+            if cycle_produced == 0:
+                raise RuntimeError(
+                    "DataComp worker shard contains no usable image-text samples: "
+                    f"shard_index={shard_index}, shard_count={shard_count}."
+                )
 
 
 def _stream_datacomp_wds_batches(
