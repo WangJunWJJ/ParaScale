@@ -54,6 +54,7 @@ def test_pyproject_defines_build_and_console_entrypoint():
     assert 'tomli>=2.0; python_version < "3.11"' in data["project"][
         "optional-dependencies"
     ]["dev"]
+    assert "pillow>=10.0.0" in data["project"]["optional-dependencies"]["dev"]
 
 
 def test_release_package_boundary_excludes_non_product_assets():
@@ -113,3 +114,4 @@ def test_ci_covers_supported_python_and_clean_install():
     assert "verify_clean_install.py --repo-root" not in workflow
     assert "python tests/run_tests.py" in workflow
     assert "python -m ruff check" in workflow
+    assert "pillow>=10.0.0" in workflow
