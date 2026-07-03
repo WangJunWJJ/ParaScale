@@ -41,7 +41,7 @@ jobs:
       - run: .venv-clean/bin/python -m pip install --upgrade pip
       - run: .venv-clean/bin/python -m pip install dist/parascale-*.whl
       - run: PATH="$PWD/.venv-clean/bin:$PATH" parascale doctor --strict --require torch
-      - run: PATH="$PWD/.venv-clean/bin:$PATH" .venv-clean/bin/python tests/packaging/verify_clean_install.py --repo-root .
+      - run: PATH="$PWD/.venv-clean/bin:$PATH" .venv-clean/bin/python tests/packaging/verify_clean_install.py
 
   extras-resolution:
     runs-on: ubuntu-latest

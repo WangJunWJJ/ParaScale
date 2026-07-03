@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import os
 
+from parascale._version import __version__
 from parascale.commands.benchmark import (
     add_pipeline_cache_arguments as add_pipeline_cache_arguments,
 )
@@ -140,6 +141,11 @@ def main(argv: list[str] | None = None) -> int:
         description="ParaScale training utilities.",
         epilog=ROOT_EXAMPLES,
         formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
     )
     parser.add_argument(
         "--local_rank",

@@ -29,6 +29,14 @@ from parascale.commands.run import (
 from parascale.workloads.yolo import _resolve_model_path
 
 
+def test_cli_prints_package_version(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--version"])
+
+    assert exc_info.value.code == 0
+    assert capsys.readouterr().out.strip() == "parascale 0.1.0"
+
+
 def test_emit_json_skips_nonzero_distributed_rank(monkeypatch):
     output = _workspace_tmp("cli_rank_output") / "payload.json"
     output.unlink(missing_ok=True)
