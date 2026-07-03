@@ -558,14 +558,43 @@ def run_oom_retry_sequence(
         }
         result["attempt"] = retry_index
         result["retry_trigger"] = "oom"
+        result["config_artifacts"] = artifacts
         retry_results.append(result)
         if result.get("status") == "ok":
+            _persist_retry_metadata(result_path, result)
             break
         if not matrix_result_is_oom(result):
             result["retry_terminated"] = True
             result["retry_termination_reason"] = "non_oom_failure"
+            _persist_retry_metadata(error_path, result)
             break
+        _persist_retry_metadata(error_path, result)
     return retry_results
+
+
+def _persist_retry_metadata(path: Path, result: Dict[str, Any]) -> None:
+    payload: Dict[str, Any] = {}
+    if path.exists():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                payload = loaded
+        except (json.JSONDecodeError, OSError):
+            payload = {}
+    for key in (
+        "attempt",
+        "retry_trigger",
+        "retry_terminated",
+        "retry_termination_reason",
+        "retry_of",
+        "config_artifacts",
+    ):
+        if key in result:
+            payload[key] = result[key]
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
 
 def oom_retry_backends(failed_backend: str) -> list[str]:

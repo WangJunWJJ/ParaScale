@@ -83,6 +83,28 @@ def test_clip_datacomp_golden_stability_scenario_uses_product_config():
     assert scenario["runs"] == [{"run_id": "clip_datacomp_vit_b"}]
 
 
+def test_benchmark_matrix_disables_final_checkpoint_io():
+    base_config = json.loads(
+        Path("configs/golden/clip_datacomp_vit_b.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    config = scenario_command.build_matrix_config(
+        scenario="clip-datacomp-golden",
+        base_config=base_config,
+        run_spec={"run_id": "clip"},
+        backend="native_ddp",
+        output_dir=Path("runs"),
+        max_steps=2,
+        warmup_steps=0,
+        batch_size=1,
+        num_samples=8,
+    )
+
+    assert config["training"]["skip_final_checkpoint"] is True
+
+
 def test_clip_golden_stability_defaults_to_validated_worker_count(monkeypatch):
     case_dir = _tmp_case("clip_golden_stability")
     monkeypatch.setenv("PARASCALE_MODEL_ROOT", "/models")
@@ -619,6 +641,14 @@ def test_oom_retry_stops_after_non_oom_retry_failure(monkeypatch):
     assert results[0]["status"] == "error"
     assert results[0]["retry_terminated"] is True
     assert results[0]["retry_termination_reason"] == "non_oom_failure"
+    retry_error = json.loads(
+        (
+            output_dir / "real_vlm_lora_b4_oom_retry1_fsdp.error.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert retry_error["attempt"] == 1
+    assert retry_error["retry_trigger"] == "oom"
+    assert retry_error["retry_termination_reason"] == "non_oom_failure"
     retry_dir = output_dir / "real_vlm_lora_b4_oom_retry1_fsdp"
     resolved = json.loads(
         (retry_dir / "config.resolved.json").read_text(encoding="utf-8")
