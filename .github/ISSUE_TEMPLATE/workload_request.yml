@@ -1,0 +1,33 @@
+name: Model or workload request
+description: Propose a thin model/workload adapter backed by a real use case.
+title: "[Workload] "
+labels: ["enhancement", "workload"]
+body:
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      description: Name and link the exact model implementation and weight format.
+    validations:
+      required: true
+  - type: input
+    id: dataset
+    attributes:
+      label: Dataset
+      description: Describe the real dataset format and expected scale.
+    validations:
+      required: true
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Training or inference use case
+      description: Explain why existing generic adapters cannot represent this workload.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Define correctness, backend, throughput, memory and recovery expectations.
+    validations:
+      required: true

@@ -76,7 +76,27 @@ def main() -> int:
             ["parascale", "doctor", "--strict", "--require", "torch"],
             workdir,
         )
-        run(["parascale", "plan", "--config", str(config), "--json"], workdir)
+        run(
+            ["parascale", "config", "validate", "--config", str(config)],
+            workdir,
+        )
+        migrated_config = workdir / "tiny_torch.v1.json"
+        run(
+            [
+                "parascale",
+                "config",
+                "migrate",
+                "--config",
+                str(config),
+                "--output",
+                str(migrated_config),
+            ],
+            workdir,
+        )
+        run(
+            ["parascale", "plan", "--config", str(migrated_config), "--json"],
+            workdir,
+        )
         run(["parascale", "train", "--config", str(config)], workdir)
         validation = run(
             [

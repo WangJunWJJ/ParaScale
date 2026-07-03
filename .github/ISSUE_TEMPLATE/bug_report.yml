@@ -1,0 +1,40 @@
+name: Bug report
+description: Report a reproducible ParaScale defect.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: ParaScale version
+      placeholder: "0.1.0 or commit SHA"
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include OS, Python, Torch, backend, accelerator, driver and world size.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Provide the smallest command and ordered steps that reproduce the issue.
+    validations:
+      required: true
+  - type: textarea
+    id: resolved_config
+    attributes:
+      label: ResolvedConfig
+      description: Attach or redact and paste config.resolved.json.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error and logs
+      description: Include the structured error payload and relevant rank logs.
+    validations:
+      required: true

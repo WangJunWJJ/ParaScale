@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: ParaScale documentation
+    url: https://github.com/WangJunWJJ/ParaScale#readme
+    about: Review installation, examples and capability boundaries before filing an issue.

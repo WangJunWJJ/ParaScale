@@ -1,4 +1,5 @@
 {
+  "schema_version": 1,
   "parascale": {
     "task_type": "vision",
     "model_family": "vit",

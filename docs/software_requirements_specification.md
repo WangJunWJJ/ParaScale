@@ -393,6 +393,11 @@ parascale/
 - `doctor --strict` 必须根据 core、Torch 和显式 `--require` 能力返回可靠退出码与 JSON 证据。
 - CLI 退出码固定为：2 配置/环境要求、3 依赖、4 runtime、5 checkpoint、6 benchmark、70 internal error。
 - CI 的 extras resolution 只证明依赖声明可解析，CUDA/NPU/DeepSpeed 生产能力必须由远程实机门禁确认。
+- FR-CFG-001：仓库配置必须显式声明当前 schema v1；缺失版本按 legacy v0 读取并支持非破坏性迁移。
+- FR-CFG-002：高于 runtime 支持范围的配置必须在执行前失败，不得静默忽略未知 schema。
+- FR-CFG-003：CLI 必须提供 `config validate` 与 `config migrate`，迁移不得修改原文件。
+- NFR-API-001：根包公共 API 必须声明独立版本并由快照测试约束；破坏性变化必须升级公共 API 版本。
+- NFR-REL-001：已发布 tag 不得移动或重建；发布后修复必须使用新的 patch 版本并重新执行发布门禁。
 
 `0.1.0` 试用版采用候选发布门禁：wheel clean-install、本地源码测试、CUDA 双卡真实矩阵和独立 checkpoint/resume 均为正式 tag 的前置条件。Ascend 910B4 实机 smoke 默认同样属于 tag 前置条件；若设备被其他任务占满，应记录为 `pending`，不得降低为 dry-run 或 mock 后宣称通过。发布负责人可以显式接受风险并豁免该门禁，但发布等级必须写为 `GPU-verified / Ascend-unverified`，Ascend 能力仍保持未验证状态。
 

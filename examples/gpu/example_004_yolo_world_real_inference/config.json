@@ -1,4 +1,5 @@
 {
+  "schema_version": 1,
   "runtime": {
     "accelerator": "cuda",
     "communication_backend": "nccl"

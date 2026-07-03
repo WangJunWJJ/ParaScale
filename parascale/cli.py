@@ -28,6 +28,12 @@ from parascale.commands.checkpoint import (
 )
 from parascale.commands.common import emit_error_json
 from parascale.commands.common import load_config_file as load_config_file
+from parascale.commands.configuration import (
+    cmd_config_migrate as cmd_config_migrate,
+)
+from parascale.commands.configuration import (
+    cmd_config_validate as cmd_config_validate,
+)
 from parascale.commands.doctor import cmd_doctor as cmd_doctor
 from parascale.commands.errors import classify_exception
 from parascale.commands.plan import (
@@ -156,6 +162,25 @@ def main(argv: list[str] | None = None) -> int:
         help="Local rank injected by distributed launchers.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    config_parser = subparsers.add_parser(
+        "config", help="Validate or migrate a ParaScale configuration."
+    )
+    config_subparsers = config_parser.add_subparsers(
+        dest="config_command", required=True
+    )
+    config_validate_parser = config_subparsers.add_parser(
+        "validate", help="Validate a configuration schema version."
+    )
+    config_validate_parser.add_argument("--config", required=True)
+    config_validate_parser.add_argument("--output")
+    config_validate_parser.set_defaults(func=cmd_config_validate)
+    config_migrate_parser = config_subparsers.add_parser(
+        "migrate", help="Write a schema-v1 JSON copy of a configuration."
+    )
+    config_migrate_parser.add_argument("--config", required=True)
+    config_migrate_parser.add_argument("--output", required=True)
+    config_migrate_parser.set_defaults(func=cmd_config_migrate)
 
     plan_parser = subparsers.add_parser(
         "plan",

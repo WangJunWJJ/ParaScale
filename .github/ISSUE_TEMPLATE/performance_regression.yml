@@ -1,0 +1,40 @@
+name: Performance regression
+description: Report a measured throughput, memory or data-pipeline regression.
+title: "[Performance] "
+labels: ["performance"]
+body:
+  - type: textarea
+    id: baseline
+    attributes:
+      label: Baseline
+      description: Identify the prior version/commit and measured result.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Hardware and software
+      description: Include accelerator, count, topology, Torch, backend and container image.
+    validations:
+      required: true
+  - type: textarea
+    id: measurement
+    attributes:
+      label: Measurement window
+      description: Include warmup, measured steps, batch, precision and repeated-run statistics.
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: ResolvedConfig
+      description: Attach both baseline and candidate config.resolved.json files.
+    validations:
+      required: true
+  - type: textarea
+    id: profile
+    attributes:
+      label: Profile evidence
+      description: Include throughput, peak memory, dataloader wait and dominant pipeline stages.
+    validations:
+      required: true

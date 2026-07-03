@@ -2,6 +2,20 @@
 
 本文记录 ParaScale 对外发布版本的用户可见变化。ParaScale `0.1.x` 为试用版本，适用于架构评估、功能验证和受控训练实验。
 
+## Unreleased
+
+### Added
+
+- 引入配置 schema v1、`config validate` 与 `config migrate`，旧 v0 配置可显式迁移，未来版本配置会被拒绝。
+- 冻结 `PUBLIC_API_VERSION = "0.1"` 的根包公共 API，并通过快照测试防止无意破坏。
+- 增加 bug、性能回归和 workload 请求 Issue 表单。
+
+### Changed
+
+- 仓库内配置统一声明 `schema_version: 1`，wheel clean-install 增加配置校验和迁移验证。
+- CI action 升级到 Node 24 运行时版本，并收紧为只读仓库权限。
+- 已发布 tag 采用不可变策略；发布后的修复必须使用新的 patch 版本，不再移动历史 tag。
+
 ## 0.1.0 - 2026-07-03
 
 ### Added

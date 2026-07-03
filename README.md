@@ -98,7 +98,20 @@ parascale doctor --require npu
 
 普通 `doctor` 只报告事实并返回 0；`--strict` 默认要求 core 与 Torch，`--require` 指定的能力不可用时返回 2，并在 JSON 中给出证据。
 
-### 2. 查看运行计划
+### 2. 校验配置
+
+ParaScale 当前配置 schema 为 v1。未声明 `schema_version` 的旧配置按 v0 读取，可显式迁移；高于当前版本的配置会被拒绝，避免新配置被旧 runtime 静默误读。
+
+```bash
+parascale config validate --config configs/quickstart/tiny_torch.yaml
+parascale config migrate \
+  --config legacy.json \
+  --output migrated.v1.json
+```
+
+仓库内配置均显式声明 `schema_version: 1`。Python 公共入口版本可通过 `parascale.PUBLIC_API_VERSION` 查询，当前冻结为 `0.1`。
+
+### 3. 查看运行计划
 
 ```bash
 python -m parascale.cli plan \
@@ -107,7 +120,7 @@ python -m parascale.cli plan \
 
 使用 `--json` 查看完整 RuntimePlan，或使用 `--output runs/plan.json` 保存结果。
 
-### 3. 预览并执行训练
+### 4. 预览并执行训练
 
 ```bash
 # 只解析配置和执行计划
@@ -120,7 +133,7 @@ python -m parascale.cli train \
   --config configs/quickstart/tiny_torch.yaml
 ```
 
-### 4. 校验 checkpoint
+### 5. 校验 checkpoint
 
 ```bash
 python -m parascale.cli checkpoint validate \
@@ -130,10 +143,10 @@ python -m parascale.cli checkpoint validate \
 至此完成最小闭环：
 
 ```text
-doctor -> plan -> train -> checkpoint validate
+doctor -> config validate -> plan -> train -> checkpoint validate
 ```
 
-### 5. 预览后端对比矩阵
+### 6. 预览后端对比矩阵
 
 ```bash
 python -m parascale.cli benchmark-matrix \
@@ -144,7 +157,7 @@ python -m parascale.cli benchmark-matrix \
 
 `--dry-run` 只生成配置和启动命令。正式性能结论必须使用相同模型、数据、全局 batch、精度、硬件、warmup 和 measurement window。
 
-### 6. 运行真实训练黄金路径
+### 7. 运行真实训练黄金路径
 
 P1 提供两份可移植配置：DataComp WDS + CLIP ViT-B/32，以及 LLaVA-OneVision 0.5B LoRA。先声明本机或容器内的资产根目录：
 

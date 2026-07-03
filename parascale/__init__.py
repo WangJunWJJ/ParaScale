@@ -11,7 +11,7 @@ release, so new development should use config, planning, runtime, checkpoint,
 data, and serving contracts.
 """
 
-from ._version import __version__
+from ._version import PUBLIC_API_VERSION, __version__
 from .checkpoint import (
     CheckpointConversionPlan,
     CheckpointConverter,
@@ -29,6 +29,11 @@ from .config import (
     QuantizationConfig,
     TrainingRunConfig,
     WorkloadConfig,
+)
+from .configuration import (
+    CURRENT_CONFIG_SCHEMA_VERSION,
+    migrate_config_schema,
+    validate_config_schema,
 )
 from .contracts import (
     BackendPlan,
@@ -141,6 +146,10 @@ from .strategy import (
 
 __all__ = [
     "__version__",
+    "PUBLIC_API_VERSION",
+    "CURRENT_CONFIG_SCHEMA_VERSION",
+    "migrate_config_schema",
+    "validate_config_schema",
     "ParaScaleConfig",
     "LayeredParaScaleConfig",
     "WorkloadConfig",
