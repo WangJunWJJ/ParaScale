@@ -302,7 +302,7 @@ benchmark 资产统一位于 [`tests/benchmarks/`](tests/benchmarks/)，稳定�
 
 ## 版本历史
 
-### 0.1.0 - 试用版候选（2026-07-03）
+### 0.1.0 - GPU-verified 试用版（2026-07-03）
 
 - 建立 runtime-first 架构和统一 CLI；
 - 提供 ResolvedConfig、RuntimePlan 和 backend registry；
@@ -312,7 +312,7 @@ benchmark 资产统一位于 [`tests/benchmarks/`](tests/benchmarks/)，稳定�
 - 将可运行示例按 GPU 与 Ascend 环境组织。
 - wheel clean-install 已通过公共 CLI 完成 strict doctor、plan、tiny train 与 checkpoint validate。
 - 双 RTX 4090 D 已完成真实 DataComp CLIP-B/32 的 native-DDP、FSDP、DeepSpeed 矩阵及 checkpoint/resume smoke。
-- Ascend 架构入口已保留；本候选的 910B4 实机发布门禁因设备被现有任务占满而待补充，当前不声明 Ascend production verified。
+- Ascend 架构入口已保留；910B4 验收时设备被现有任务占满，本版本经发布负责人明确豁免该门禁，发布等级为 `GPU-verified / Ascend-unverified`，不声明 Ascend production verified。
 
 详细版本变化见 [CHANGELOG](CHANGELOG.md)，历史测试记录见 [统一测试与 benchmark 报告](tests/UNIFIED_TEST_BENCHMARK_REPORT.md)。
 

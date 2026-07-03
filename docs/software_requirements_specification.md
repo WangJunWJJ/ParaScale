@@ -394,7 +394,7 @@ parascale/
 - CLI 退出码固定为：2 配置/环境要求、3 依赖、4 runtime、5 checkpoint、6 benchmark、70 internal error。
 - CI 的 extras resolution 只证明依赖声明可解析，CUDA/NPU/DeepSpeed 生产能力必须由远程实机门禁确认。
 
-`0.1.0` 试用版采用候选发布门禁：wheel clean-install、本地源码测试、CUDA 双卡真实矩阵和独立 checkpoint/resume 均为正式 tag 的前置条件。Ascend 910B4 实机 smoke 同样属于 tag 前置条件；若设备被其他任务占满，应记录为 `pending` 并停止 tag 创建，不得降低为 dry-run 或 mock 后宣称通过。
+`0.1.0` 试用版采用候选发布门禁：wheel clean-install、本地源码测试、CUDA 双卡真实矩阵和独立 checkpoint/resume 均为正式 tag 的前置条件。Ascend 910B4 实机 smoke 默认同样属于 tag 前置条件；若设备被其他任务占满，应记录为 `pending`，不得降低为 dry-run 或 mock 后宣称通过。发布负责人可以显式接受风险并豁免该门禁，但发布等级必须写为 `GPU-verified / Ascend-unverified`，Ascend 能力仍保持未验证状态。
 
 ## 14. 总结
 

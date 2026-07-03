@@ -33,7 +33,7 @@
 - wheel 已在不挂载源码的一次性容器中完成 clean-install，并通过 public CLI 执行 `parascale --version`、strict doctor、plan、tiny train 和 checkpoint validate。
 - CUDA 发布门禁使用双 RTX 4090 D、PyTorch 2.4.0+cu121、真实 DataComp WDS 与预训练 CLIP-B/32，完成 20-step native-DDP、FSDP 和 DeepSpeed 矩阵；三后端均成功，报告以高置信度推荐 FSDP。
 - CUDA checkpoint smoke 从 step 2 恢复到 step 4，最终 manifest 校验通过。
-- Ascend 服务器可连接且 8 张 910B4 健康，但验收时全部 AICore 100% 并被现有任务占用；为避免干扰，实机 smoke 标记为 pending，正式 tag 尚未创建。
+- Ascend 服务器可连接且 8 张 910B4 健康，但验收时全部 AICore 100% 并被现有任务占用；为避免干扰，未执行实机 smoke。发布负责人已明确豁免该门禁，因此 `0.1.0` 的发布等级为 `GPU-verified / Ascend-unverified`。
 
 ### Known Limitations
 
