@@ -3,6 +3,9 @@
 # @Author : Wang Jun
 # @Email: wj_xd@foxmail.com
 
+import pytest
+
+
 def test_cuda_stream_prefetcher_moves_nested_batches_without_torch():
     from parascale.runtime.training.prefetch import (
         CudaStreamPrefetchIterator,
@@ -535,6 +538,20 @@ def test_fit_loop_runner_records_wait_memory_and_checkpoint_without_torch():
     assert state.last_metrics["dataloader_wait_ms"] >= 0.0
 
 
+def test_fit_loop_rejects_finite_dataloader_shorter_than_training_window():
+    from parascale.runtime.training import FitLoopRunner
+
+    class FakeEngine:
+        def _gradient_accumulation_steps(self):
+            return 2
+
+        def _backend_name(self):
+            return "native_ddp"
+
+    with pytest.raises(ValueError, match="requires 6 micro-batches.*provides 2"):
+        FitLoopRunner(FakeEngine()).run([{"x": 1}, {"x": 2}], max_steps=3)
+
+
 def test_accumulation_controller_merges_micro_batches_without_torch():
     from parascale.runtime.training.accumulation import AccumulationController
     from parascale.runtime.training.metrics import RuntimeMetrics
@@ -632,6 +649,25 @@ def test_accumulation_controller_merges_micro_batches_without_torch():
     assert metrics["images"] == 5
     assert metrics["images_per_second"] == 10.0
     assert metrics["dataloader_wait_ms"] >= 10.0
+
+
+def test_accumulation_controller_rejects_incomplete_micro_batch_window():
+    from parascale.runtime.training.accumulation import AccumulationController
+
+    class FakeEngine:
+        memory = type("Memory", (), {"synchronize_device": lambda _self: None})()
+
+        def _gradient_accumulation_steps(self):
+            return 2
+
+    with pytest.raises(RuntimeError, match="requires 2 micro-batches.*received 1"):
+        AccumulationController(FakeEngine()).run(
+            {"x": 1},
+            iter([]),
+            model=lambda **batch: batch["x"],
+            optimizer=object(),
+            loss_fn=lambda output, _batch: output,
+        )
 
 
 def test_accumulation_controller_prepares_each_micro_batch_without_torch():

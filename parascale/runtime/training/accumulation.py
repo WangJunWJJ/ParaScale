@@ -52,6 +52,13 @@ class AccumulationController:
                 break
             wait_total += time.perf_counter() - wait_start
 
+        if len(batches) != accumulation_steps:
+            raise RuntimeError(
+                "Gradient accumulation requires "
+                f"{accumulation_steps} micro-batches, but the dataloader "
+                f"received {len(batches)} before exhaustion. Partial optimizer "
+                "steps are forbidden because distributed ranks may diverge."
+            )
         actual_steps = max(1, len(batches))
         losses = []
         for micro_index, batch in enumerate(batches):

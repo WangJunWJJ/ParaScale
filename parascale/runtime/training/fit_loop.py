@@ -31,6 +31,7 @@ class FitLoopRunner:
         checkpoint_interval: Optional[int] = None,
     ) -> Any:
         max_steps = None if max_steps is None else max(0, int(max_steps))
+        self._validate_dataloader_window(dataloader, max_steps=max_steps)
         self.engine.precision.setup_scaler()
         self.engine.memory.reset_peak_memory_stats()
         iterator = self.engine._maybe_cuda_prefetch_iterator(iter(dataloader))
@@ -82,6 +83,30 @@ class FitLoopRunner:
                         barrier()
             index += 1
         return self.engine.state
+
+    def _validate_dataloader_window(
+        self,
+        dataloader: Any,
+        *,
+        max_steps: Optional[int],
+    ) -> None:
+        if max_steps is None or max_steps == 0:
+            return
+        try:
+            available = len(dataloader)
+        except (TypeError, AttributeError):
+            return
+        accumulation_steps = max(1, int(self.engine._gradient_accumulation_steps()))
+        if self.engine._backend_name() == "deepspeed":
+            accumulation_steps = 1
+        required = int(max_steps) * accumulation_steps
+        if int(available) < required:
+            raise ValueError(
+                "Training window requires "
+                f"{required} micro-batches, but the finite dataloader provides "
+                f"{available}. Increase the dataset size, enable a repeatable "
+                "streaming source, or reduce max_steps."
+            )
 
 
 __all__ = ["FitLoopRunner"]

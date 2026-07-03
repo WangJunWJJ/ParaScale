@@ -6,6 +6,7 @@
 """Auditable configuration resolution layer."""
 
 from .artifacts import config_artifact_overrides, write_config_artifacts
+from .environment import expand_environment_references
 from .resolved import ConfigIssue, ResolvedConfig, ResolvedField
 from .resolver import build_deepspeed_final_config, resolve_config
 
@@ -15,6 +16,7 @@ __all__ = [
     "ResolvedField",
     "build_deepspeed_final_config",
     "config_artifact_overrides",
+    "expand_environment_references",
     "resolve_config",
     "write_config_artifacts",
 ]

@@ -13,6 +13,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict
 
+from parascale.configuration.environment import expand_environment_references
+
 
 def parse_scalar(value: str) -> Any:
     value = value.strip()
@@ -61,14 +63,14 @@ def load_config_file(path: str) -> Dict[str, Any]:
     config_path = Path(path)
     text = config_path.read_text(encoding="utf-8-sig")
     if config_path.suffix.lower() == ".json":
-        return json.loads(text)
+        return expand_environment_references(json.loads(text))
     try:
         import yaml
 
         loaded = yaml.safe_load(text)
-        return loaded or {}
+        return expand_environment_references(loaded or {})
     except ImportError:
-        return load_simple_yaml(text)
+        return expand_environment_references(load_simple_yaml(text))
 
 
 def emit_json(payload: Dict[str, Any], output_path: str | None = None) -> None:

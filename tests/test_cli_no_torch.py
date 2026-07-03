@@ -29,6 +29,14 @@ from parascale.commands.run import (
 from parascale.workloads.yolo import _resolve_model_path
 
 
+def test_cli_prints_package_version(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--version"])
+
+    assert exc_info.value.code == 0
+    assert capsys.readouterr().out.strip() == "parascale 0.1.0"
+
+
 def test_emit_json_skips_nonzero_distributed_rank(monkeypatch):
     output = _workspace_tmp("cli_rank_output") / "payload.json"
     output.unlink(missing_ok=True)
@@ -111,6 +119,41 @@ def test_load_config_file_accepts_utf8_bom_json():
     payload = load_config_file(str(config_path))
 
     assert payload["parascale"]["training_backend"] == "auto"
+
+
+def test_load_config_file_expands_nested_environment_references(monkeypatch):
+    tmp_path = _workspace_tmp("cli_environment_config")
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "model": {"path": "${PARASCALE_MODEL_ROOT}/clip"},
+                "data": {
+                    "shards": ["${PARASCALE_DATA_ROOT}/000.tar"],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PARASCALE_MODEL_ROOT", "/models")
+    monkeypatch.setenv("PARASCALE_DATA_ROOT", "/dataset")
+
+    payload = load_config_file(str(config_path))
+
+    assert payload["model"]["path"] == "/models/clip"
+    assert payload["data"]["shards"] == ["/dataset/000.tar"]
+
+
+def test_load_config_file_rejects_unresolved_environment_reference():
+    tmp_path = _workspace_tmp("cli_missing_environment_config")
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({"model": {"path": "${PARASCALE_MISSING_MODEL}/clip"}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="PARASCALE_MISSING_MODEL"):
+        load_config_file(str(config_path))
 
 
 def test_cli_train_dry_run_payload_marks_explicit_dry_run():

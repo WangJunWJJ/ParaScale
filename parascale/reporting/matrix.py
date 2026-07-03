@@ -64,8 +64,18 @@ def _load_result(path: Path) -> Dict[str, Any]:
             "status": "error",
             "error": payload.get("error", "benchmark failed"),
             "returncode": payload.get("returncode"),
+            "attempt": payload.get("attempt"),
+            "retry_trigger": payload.get("retry_trigger"),
+            "retry_terminated": bool(payload.get("retry_terminated", False)),
+            "retry_termination_reason": payload.get(
+                "retry_termination_reason"
+            ),
             "path": str(path),
-            "config_artifacts": _inferred_config_artifacts(path.parent / stem),
+            "config_artifacts": (
+                payload.get("config_artifacts")
+                if isinstance(payload.get("config_artifacts"), dict)
+                else _inferred_config_artifacts(path.parent / stem)
+            ),
         }
     payload = _read_json(path)
     train = payload.get("train", {})
@@ -186,6 +196,19 @@ def _retry_base_run_id(run_id: str) -> str | None:
     return run_id.split(marker, 1)[0]
 
 
+def _retry_attempt_number(run_id: str) -> int | None:
+    marker = "_oom_retry"
+    if marker not in run_id:
+        return None
+    suffix = run_id.split(marker, 1)[1]
+    digits = ""
+    for character in suffix:
+        if not character.isdigit():
+            break
+        digits += character
+    return int(digits) if digits else None
+
+
 def summarize_oom_recovery(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     recoveries: Dict[str, Dict[str, Any]] = {}
     for row in rows:
@@ -210,6 +233,11 @@ def summarize_oom_recovery(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "throughput": _safe_float(row.get("throughput")),
             "peak_memory_gb": _safe_float(row.get("peak_memory_gb")),
             "error": row.get("error", ""),
+            "attempt": row.get("attempt") or _retry_attempt_number(run_id),
+            "retry_trigger": row.get("retry_trigger") or "oom",
+            "retry_terminated": bool(row.get("retry_terminated", False)),
+            "retry_termination_reason": row.get("retry_termination_reason"),
+            "config_artifacts": row.get("config_artifacts", {}),
         }
         item["attempts"].append(attempt)
         if row.get("status") == "ok" and not item["recovered"]:
@@ -281,6 +309,76 @@ def _communication_plan_for_row(row: Dict[str, Any]) -> Dict[str, Any]:
     ).to_dict()
 
 
+def _candidate_evaluations(
+    backend_rows: Dict[str, Dict[str, Any]],
+    *,
+    selected_backend: str | None,
+    optimize_for: str,
+    max_throughput: float,
+    selected_memory: float,
+    throughput_tolerance: float,
+) -> List[Dict[str, Any]]:
+    evaluations = []
+    minimum_throughput = max_throughput * (
+        1.0 - max(0.0, throughput_tolerance)
+    )
+    for backend, row in sorted(backend_rows.items()):
+        throughput = _safe_float(row.get("throughput"))
+        memory = _safe_float(row.get("peak_memory_gb"))
+        valid = row.get("status") == "ok" and throughput > 0
+        within_tolerance = valid and throughput >= minimum_throughput
+        selected = valid and backend == selected_backend
+        rejection_reasons = []
+        if not valid:
+            rejection_reasons.append("benchmark_failed")
+        elif not selected:
+            if optimize_for == "throughput":
+                rejection_reasons.append("lower_throughput_than_selected")
+            elif optimize_for == "memory":
+                rejection_reasons.append("higher_memory_than_selected")
+            elif not within_tolerance:
+                rejection_reasons.append("outside_throughput_tolerance")
+            elif selected_memory > 0 and (memory <= 0 or memory > selected_memory):
+                rejection_reasons.append("higher_memory_than_selected")
+            else:
+                rejection_reasons.append("lost_deterministic_tie_break")
+        evaluations.append(
+            {
+                "backend": backend,
+                "status": row.get("status"),
+                "eligible": valid,
+                "selected": selected,
+                "throughput": throughput,
+                "peak_memory_gb": memory,
+                "throughput_ratio_to_best": (
+                    throughput / max_throughput if max_throughput > 0 else 0.0
+                ),
+                "within_throughput_tolerance": within_tolerance,
+                "rejection_reasons": rejection_reasons,
+            }
+        )
+    return evaluations
+
+
+def _expected_trade_off(optimize_for: str) -> str:
+    if optimize_for == "throughput":
+        return "Maximizes measured throughput and may use more memory."
+    if optimize_for == "memory":
+        return "Minimizes measured peak memory and may reduce throughput."
+    return (
+        "Minimizes memory within the throughput tolerance and may not select "
+        "the absolute fastest backend."
+    )
+
+
+def _recommendation_confidence(valid_candidate_count: int) -> str:
+    if valid_candidate_count >= 3:
+        return "high"
+    if valid_candidate_count == 2:
+        return "medium"
+    return "low"
+
+
 def recommend_backends(
     rows: List[Dict[str, Any]],
     *,
@@ -302,6 +400,17 @@ def recommend_backends(
                     "status": "no_valid_backend",
                     "reason": "没有可用的成功 benchmark 结果。",
                     "evidence": {},
+                    "candidate_evaluations": _candidate_evaluations(
+                        backend_rows,
+                        selected_backend=None,
+                        optimize_for=optimize_for,
+                        max_throughput=0.0,
+                        selected_memory=0.0,
+                        throughput_tolerance=throughput_tolerance,
+                    ),
+                    "expected_trade_off": _expected_trade_off(optimize_for),
+                    "confidence": "low",
+                    "actionable": False,
                     "recommended_config_updates": {},
                 }
             )
@@ -350,6 +459,7 @@ def recommend_backends(
         memory_vs_best_throughput = (
             selected_memory / best_memory if best_memory > 0 else 0.0
         )
+        valid_candidate_count = len(ok_rows)
         reason = (
             f"选择 {selected_backend}: policy={policy}, 吞吐为最高吞吐的 "
             f"{speedup_vs_best:.3f}，显存相对最高吞吐后端为 {memory_vs_best_throughput:.3f}。"
@@ -362,6 +472,17 @@ def recommend_backends(
                 "policy": policy,
                 "reason": reason,
                 "communication_plan": _communication_plan_for_row(selected),
+                "candidate_evaluations": _candidate_evaluations(
+                    backend_rows,
+                    selected_backend=selected_backend,
+                    optimize_for=optimize_for,
+                    max_throughput=max_throughput,
+                    selected_memory=selected_memory,
+                    throughput_tolerance=throughput_tolerance,
+                ),
+                "expected_trade_off": _expected_trade_off(optimize_for),
+                "confidence": _recommendation_confidence(valid_candidate_count),
+                "actionable": valid_candidate_count >= 2,
                 "evidence": {
                     "selected_throughput": selected_throughput,
                     "selected_peak_memory_gb": selected_memory,
@@ -372,6 +493,9 @@ def recommend_backends(
                         best_memory_row.get("peak_memory_gb")
                     ),
                     "throughput_tolerance": throughput_tolerance,
+                    "valid_candidate_count": valid_candidate_count,
+                    "failed_candidate_count": len(backend_rows)
+                    - valid_candidate_count,
                 },
                 "recommended_config_updates": _recommended_config_updates(
                     selected_backend
@@ -428,6 +552,41 @@ def write_markdown(report: Dict[str, Any], path: Path) -> None:
                     overlap=communication_plan.get("overlap_h2d", False),
                 )
             )
+        lines.append(
+            "  - Expected trade-off: {trade_off}; confidence={confidence}; "
+            "actionable={actionable}".format(
+                trade_off=item.get("expected_trade_off", "n/a"),
+                confidence=item.get("confidence", "low"),
+                actionable=item.get("actionable", False),
+            )
+        )
+        candidates = item.get("candidate_evaluations", [])
+        if candidates:
+            lines.extend(
+                [
+                    "",
+                    "### Candidate Evaluation: {run}".format(
+                        run=item.get("run_id", "")
+                    ),
+                    "",
+                    "| Backend | Status | Selected | Throughput | Peak memory GB | Reasons |",
+                    "| --- | --- | --- | ---: | ---: | --- |",
+                ]
+            )
+            for candidate in candidates:
+                lines.append(
+                    "| {backend} | {status} | {selected} | {throughput:.3f} | "
+                    "{memory:.3f} | {reasons} |".format(
+                        backend=candidate.get("backend", ""),
+                        status=candidate.get("status", ""),
+                        selected=candidate.get("selected", False),
+                        throughput=_safe_float(candidate.get("throughput")),
+                        memory=_safe_float(candidate.get("peak_memory_gb")),
+                        reasons=", ".join(
+                            candidate.get("rejection_reasons", [])
+                        ),
+                    )
+                )
     if report.get("tuner_explanations"):
         lines.extend(["", "## 选择依据", ""])
         for item in report["tuner_explanations"]:

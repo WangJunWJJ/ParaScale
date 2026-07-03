@@ -6,6 +6,8 @@
 import tempfile
 from pathlib import Path
 
+import pytest
+
 from parascale import (
     CheckpointConverter,
     CheckpointManager,
@@ -184,6 +186,12 @@ class _BackendSpecificCheckpoint:
         self.saved = {"step": step, "client_state": dict(client_state or {})}
         role = "fsdp_state" if self.name == "fsdp" else "deepspeed_checkpoint"
         path = "fsdp_state.pt" if self.name == "fsdp" else "deepspeed"
+        payload = checkpoint_manager.payload_path(int(step), path)
+        if self.name == "fsdp":
+            payload.parent.mkdir(parents=True, exist_ok=True)
+            payload.write_bytes(b"fsdp-state")
+        else:
+            payload.mkdir(parents=True, exist_ok=True)
         return {
             "files": [{"path": path, "role": role, "format": self.name}],
             "metadata": {"backend_checkpoint": self.name},
@@ -502,6 +510,61 @@ def test_checkpoint_validator_fails_backend_checkpoint_errors():
     assert report.ok is False
     assert any("backend_checkpoint_error" in item for item in report.errors)
     assert any("backend_state_written" in item for item in report.errors)
+
+
+def test_checkpoint_controller_rejects_corruption_before_backend_setup():
+    from parascale.runtime.training.checkpointing import CheckpointController
+
+    root = Path(tempfile.gettempdir()) / "parascale-test-runs" / "resume_corrupt"
+    manager = CheckpointManager(str(root))
+    payload = manager.payload_path(3, "backend_state.pt")
+    payload.parent.mkdir(parents=True, exist_ok=True)
+    payload.write_bytes(b"valid-state")
+    manager.write_manifest(
+        CheckpointManifest(
+            step=3,
+            backend="native",
+            files=[{"path": payload.name, "role": "backend_state"}],
+            metadata={"world_size": 1},
+        )
+    )
+    payload.write_bytes(b"corrupted")
+
+    class Engine:
+        config = type("Config", (), {"training_backend": "native"})()
+        training_backend = None
+        state = type("State", (), {"global_step": 0, "last_metrics": {}})()
+
+        def _distributed_world_size(self):
+            return 1
+
+    with pytest.raises(RuntimeError, match="validation failed before resume"):
+        CheckpointController(Engine()).load(manager, 3)
+
+
+def test_checkpoint_controller_rejects_world_size_change_by_default():
+    from parascale.runtime.training.checkpointing import CheckpointController
+
+    root = Path(tempfile.gettempdir()) / "parascale-test-runs" / "resume_world_size"
+    manager = CheckpointManager(str(root))
+    manager.write_manifest(
+        CheckpointManifest(
+            step=4,
+            backend="native_ddp",
+            metadata={"world_size": 2, "rank_count": 2},
+        )
+    )
+
+    class Engine:
+        config = type("Config", (), {"training_backend": "native_ddp"})()
+        training_backend = None
+        state = type("State", (), {"global_step": 0, "last_metrics": {}})()
+
+        def _distributed_world_size(self):
+            return 1
+
+    with pytest.raises(ValueError, match="world_size mismatch.*checkpoint=2.*runtime=1"):
+        CheckpointController(Engine()).load(manager, 4)
 
 
 def test_checkpoint_controller_skips_manifest_write_on_nonzero_rank_without_torch():

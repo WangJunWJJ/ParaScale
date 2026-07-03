@@ -16,6 +16,39 @@ from parascale.commands.launcher import run_matrix_command, train_matrix_command
 from parascale.commands.scenario import section
 
 
+def can_run_resume_phase(training_result: Mapping[str, Any]) -> bool:
+    """Return whether a completed training phase is eligible for resume."""
+    completed = (
+        training_result.get("status") == "ok"
+        and int(training_result.get("returncode", 0) or 0) == 0
+    )
+    interrupted_with_checkpoint = (
+        training_result.get("status") == "interrupted"
+        and bool(training_result.get("intentional_kill"))
+        and bool(training_result.get("checkpoint_ok"))
+    )
+    return completed or interrupted_with_checkpoint
+
+
+def skipped_resume_result(
+    *,
+    run_id: str,
+    backend: str,
+    training_result: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """Describe a resume phase skipped because its training dependency failed."""
+    return {
+        "run_id": f"{run_id}_resume",
+        "phase": "resume",
+        "backend": backend,
+        "status": "skipped",
+        "reason": "upstream_failed",
+        "depends_on": run_id,
+        "upstream_returncode": training_result.get("returncode"),
+        "upstream_error": training_result.get("error"),
+    }
+
+
 def run_stability_resume_phase(
     *,
     args: argparse.Namespace,

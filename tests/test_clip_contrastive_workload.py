@@ -15,9 +15,49 @@ from parascale.workloads.clip import (
     build_clip_contrastive_components,
 )
 from parascale.workloads.datacomp import (
+    _DataCompWdsIterableDataset,
     _iter_datacomp_tar_entries,
     _looks_like_supported_image,
 )
+
+
+def test_datacomp_streaming_repeats_assigned_shard_to_requested_sample_count(
+    tmp_path,
+):
+    import io
+    import tarfile
+
+    wds_dir = tmp_path / "repeating-wds"
+    wds_dir.mkdir()
+    tar_path = wds_dir / "datacomp-000000.tar"
+    with tarfile.open(tar_path, "w") as archive:
+        image = Image.new("RGB", (16, 16), color=(20, 40, 80))
+        image_buffer = io.BytesIO()
+        image.save(image_buffer, format="JPEG")
+        image_bytes = image_buffer.getvalue()
+        for name, payload in (
+            ("000000000.jpg", image_bytes),
+            ("000000000.txt", b"one reusable sample"),
+        ):
+            info = tarfile.TarInfo(name)
+            info.size = len(payload)
+            archive.addfile(info, io.BytesIO(payload))
+
+    spec = ClipContrastiveSpec(
+        data_type="datacomp_wds",
+        data_dir=str(wds_dir),
+        streaming=True,
+        image_size=16,
+        patch_size=8,
+        num_samples=3,
+    )
+
+    samples = list(_DataCompWdsIterableDataset(torch, spec))
+
+    assert len(samples) == 3
+    assert {sample["metadata"]["sample_id"] for sample in samples} == {
+        "000000000"
+    }
 
 
 def _clip_config(tmp_path):

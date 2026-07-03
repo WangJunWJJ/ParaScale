@@ -10,11 +10,15 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
+import signal
 import subprocess
+import time
 from pathlib import Path
 from typing import Any, Dict
 
+from parascale.checkpoint import CheckpointManager
 from parascale.commands.common import load_config_file
 from parascale.commands.scenario import (
     apply_pipeline_cache_args,
@@ -170,6 +174,10 @@ def run_matrix_command(
         }
     log_tail = read_log_tail(log_path)
     oom_detected = text_indicates_oom(log_tail.lower())
+    failure_details = classify_launcher_failure(
+        log_tail,
+        returncode=int(completed.returncode),
+    )
     payload = {
         "backend": backend,
         "status": "error",
@@ -179,11 +187,194 @@ def run_matrix_command(
         "oom_detected": oom_detected,
         "log_tail": log_tail,
         "error": "benchmark failed with OOM" if oom_detected else "benchmark failed",
+        **failure_details,
     }
     error_path.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     return {"run_id": run_id, **payload}
+
+
+def run_matrix_command_until_checkpoint(
+    command: list[str],
+    *,
+    env: Dict[str, str],
+    backend: str,
+    run_id: str,
+    error_path: Path,
+    log_path: Path,
+    checkpoint_root: Path,
+    checkpoint_step: int,
+    timeout_seconds: float = 3600.0,
+    poll_interval_seconds: float = 0.2,
+) -> Dict[str, Any]:
+    """SIGKILL a launcher only after the target checkpoint validates."""
+    executable = (
+        shutil.which(command[0]) if not Path(command[0]).is_file() else command[0]
+    )
+    if executable is None:
+        payload = {
+            "backend": backend,
+            "status": "error",
+            "returncode": 127,
+            "command": command,
+            "log": str(log_path),
+            "failure_type": "launcher_missing",
+            "error": f"launcher not available: {command[0]}",
+        }
+        error_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        return {"run_id": run_id, **payload}
+
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + max(0.1, float(timeout_seconds))
+    with log_path.open("w", encoding="utf-8", errors="replace") as log_file:
+        process = subprocess.Popen(
+            command,
+            env=env,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            start_new_session=os.name != "nt",
+        )
+        while True:
+            if _checkpoint_is_complete(checkpoint_root, checkpoint_step):
+                _kill_process_group(process)
+                process.wait(timeout=30)
+                checkpoint_ok = _checkpoint_is_valid(
+                    checkpoint_root,
+                    checkpoint_step,
+                )
+                if not checkpoint_ok:
+                    break
+                if error_path.exists():
+                    error_path.unlink()
+                return {
+                    "run_id": run_id,
+                    "phase": "train",
+                    "backend": backend,
+                    "status": "interrupted",
+                    "returncode": int(process.returncode or 0),
+                    "command": command,
+                    "log": str(log_path),
+                    "intentional_kill": True,
+                    "checkpoint_ok": True,
+                    "checkpoint_step": int(checkpoint_step),
+                }
+            returncode = process.poll()
+            if returncode is not None:
+                break
+            if time.monotonic() >= deadline:
+                _kill_process_group(process)
+                process.wait(timeout=30)
+                returncode = process.returncode
+                break
+            time.sleep(max(0.01, float(poll_interval_seconds)))
+
+    log_tail = read_log_tail(log_path)
+    failure_details = classify_launcher_failure(
+        log_tail,
+        returncode=int(returncode or 1),
+    )
+    if time.monotonic() >= deadline:
+        failure_details["failure_type"] = "checkpoint_wait_timeout"
+    payload = {
+        "backend": backend,
+        "status": "error",
+        "returncode": int(returncode or 1),
+        "command": command,
+        "log": str(log_path),
+        "checkpoint_step": int(checkpoint_step),
+        "checkpoint_ok": False,
+        "log_tail": log_tail,
+        "error": "launcher exited before a valid checkpoint was available",
+        **failure_details,
+    }
+    error_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    return {"run_id": run_id, **payload}
+
+
+def _checkpoint_is_valid(checkpoint_root: Path, checkpoint_step: int) -> bool:
+    try:
+        manager = CheckpointManager(str(checkpoint_root))
+        return bool(manager.validate(int(checkpoint_step)).ok)
+    except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
+        return False
+
+
+def _checkpoint_is_complete(checkpoint_root: Path, checkpoint_step: int) -> bool:
+    """Check atomic manifest and payload sizes without hashing the hot checkpoint."""
+    try:
+        manager = CheckpointManager(str(checkpoint_root))
+        manifest = manager.read_manifest(int(checkpoint_step))
+        for entry in manifest.files:
+            if entry.get("error") or "path" not in entry:
+                return False
+            path = manager.resolve_payload_path(manifest, entry)
+            if not path.exists():
+                return False
+            expected_size = entry.get("size_bytes")
+            if path.is_file() and expected_size is not None:
+                if path.stat().st_size != int(expected_size):
+                    return False
+        return True
+    except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
+        return False
+
+
+def _kill_process_group(process: subprocess.Popen[Any]) -> None:
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return
+    for pid in reversed(_process_descendants(process.pid)):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    try:
+        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+def _process_descendants(root_pid: int) -> list[int]:
+    """Return descendants using Linux procfs, including detached process groups."""
+    children: Dict[int, list[int]] = {}
+    proc_root = Path("/proc")
+    if not proc_root.is_dir():
+        return []
+    for entry in proc_root.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            status = (entry / "status").read_text(
+                encoding="utf-8",
+                errors="replace",
+            )
+            parent_line = next(
+                line for line in status.splitlines() if line.startswith("PPid:")
+            )
+            parent_pid = int(parent_line.split(":", 1)[1].strip())
+        except (OSError, StopIteration, ValueError):
+            continue
+        children.setdefault(parent_pid, []).append(int(entry.name))
+
+    descendants: list[int] = []
+    pending = list(children.get(int(root_pid), []))
+    while pending:
+        pid = pending.pop()
+        descendants.append(pid)
+        pending.extend(children.get(pid, []))
+    return descendants
 
 
 def read_log_tail(path: Path, max_chars: int = 4000) -> str:
@@ -213,6 +404,46 @@ def text_indicates_oom(text: str) -> bool:
         "deepspeed oom",
     ]
     return any(pattern in text for pattern in patterns)
+
+
+def classify_launcher_failure(text: str, *, returncode: int) -> Dict[str, Any]:
+    """Extract a stable failure category and distributed evidence from logs."""
+    lowered = text.lower()
+    if text_indicates_oom(lowered):
+        failure_type = "oom"
+    elif (
+        "collective operation timeout" in lowered
+        or "processgroupnccl" in lowered and "timeout" in lowered
+        or "hccl" in lowered and "timeout" in lowered
+    ):
+        failure_type = "distributed_timeout"
+    elif "dataloader worker" in lowered and (
+        "exited" in lowered or "killed" in lowered
+    ):
+        failure_type = "dataloader_worker_failure"
+    elif "checkpoint" in lowered and (
+        "checksum" in lowered or "manifest" in lowered or "failed" in lowered
+    ):
+        failure_type = "checkpoint_failure"
+    else:
+        failure_type = "process_failure"
+
+    details: Dict[str, Any] = {"failure_type": failure_type}
+    rank_match = re.search(r"\[rank(\d+)\]|\brank\s*:\s*(\d+)", text, re.IGNORECASE)
+    if rank_match:
+        details["failed_rank"] = int(rank_match.group(1) or rank_match.group(2))
+    collective_match = re.search(r"OpType=([A-Z_]+)", text)
+    if collective_match:
+        details["collective"] = collective_match.group(1)
+    sequence_match = re.search(r"SeqNum=(\d+)", text)
+    if sequence_match:
+        details["collective_sequence"] = int(sequence_match.group(1))
+    signal_match = re.search(r"\((SIG[A-Z0-9]+)\)", text)
+    if signal_match:
+        details["signal"] = signal_match.group(1)
+    if int(returncode) < 0 and "signal" not in details:
+        details["signal_number"] = abs(int(returncode))
+    return details
 
 
 def oom_retry_policy_payload() -> Dict[str, Any]:
@@ -307,6 +538,8 @@ def run_oom_retry_sequence(
                     "backend": failed_backend,
                     "batch_size": failed_batch_size,
                 },
+                "attempt": retry_index,
+                "retry_trigger": "oom",
                 "config_artifacts": artifacts,
             }
         )
@@ -323,10 +556,45 @@ def run_oom_retry_sequence(
             "backend": failed_backend,
             "batch_size": failed_batch_size,
         }
+        result["attempt"] = retry_index
+        result["retry_trigger"] = "oom"
+        result["config_artifacts"] = artifacts
         retry_results.append(result)
         if result.get("status") == "ok":
+            _persist_retry_metadata(result_path, result)
             break
+        if not matrix_result_is_oom(result):
+            result["retry_terminated"] = True
+            result["retry_termination_reason"] = "non_oom_failure"
+            _persist_retry_metadata(error_path, result)
+            break
+        _persist_retry_metadata(error_path, result)
     return retry_results
+
+
+def _persist_retry_metadata(path: Path, result: Dict[str, Any]) -> None:
+    payload: Dict[str, Any] = {}
+    if path.exists():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                payload = loaded
+        except (json.JSONDecodeError, OSError):
+            payload = {}
+    for key in (
+        "attempt",
+        "retry_trigger",
+        "retry_terminated",
+        "retry_termination_reason",
+        "retry_of",
+        "config_artifacts",
+    ):
+        if key in result:
+            payload[key] = result[key]
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
 
 def oom_retry_backends(failed_backend: str) -> list[str]:

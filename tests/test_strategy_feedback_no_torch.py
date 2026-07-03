@@ -319,6 +319,8 @@ def test_7_runtime_tuning_recommends_local_cache_for_slow_shard_reads():
     assert (
         tuning.config_updates["dataset_local_cache_dir"] == ".parascale_cache/dataset"
     )
+    assert decision.expected_trade_off
+    assert decision.to_dict()["expected_trade_off"] == decision.expected_trade_off
 
 
 def test_8_runtime_tuning_recommends_cuda_prefetch_for_h2d_bottleneck():

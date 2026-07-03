@@ -157,6 +157,16 @@ def test_balanced_recommendation_prefers_lower_memory_when_throughput_is_close()
     assert (
         recommendations[0]["recommended_config_updates"]["training_backend"] == "fsdp"
     )
+    candidates = {
+        item["backend"]: item
+        for item in recommendations[0]["candidate_evaluations"]
+    }
+    assert candidates["fsdp"]["selected"] is True
+    assert candidates["native_ddp"]["selected"] is False
+    assert "higher_memory_than_selected" in candidates["native_ddp"][
+        "rejection_reasons"
+    ]
+    assert recommendations[0]["expected_trade_off"]
 
 
 def test_balanced_recommendation_prefers_faster_backend_when_gap_is_large():
@@ -187,6 +197,35 @@ def test_balanced_recommendation_prefers_faster_backend_when_gap_is_large():
     recommendations = recommend_backends(rows, optimize_for="balanced")
 
     assert recommendations[0]["selected_backend"] == "native_ddp"
+
+
+def test_recommendation_exposes_failed_candidates_and_low_confidence():
+    rows = [
+        {
+            "run_id": "clip",
+            "backend": "native_ddp",
+            "status": "ok",
+            "throughput": 100.0,
+            "peak_memory_gb": 2.0,
+        },
+        {
+            "run_id": "clip",
+            "backend": "fsdp",
+            "status": "error",
+            "error": "benchmark failed",
+        },
+    ]
+
+    recommendation = recommend_backends(rows)[0]
+    candidates = {
+        item["backend"]: item
+        for item in recommendation["candidate_evaluations"]
+    }
+
+    assert recommendation["confidence"] == "low"
+    assert recommendation["actionable"] is False
+    assert recommendation["evidence"]["valid_candidate_count"] == 1
+    assert candidates["fsdp"]["rejection_reasons"] == ["benchmark_failed"]
 
 
 def test_backend_matrix_report_includes_recommendations():
@@ -254,6 +293,8 @@ def test_backend_matrix_markdown_reports_communication_plan():
 
     assert "Communication Plan" in markdown
     assert "native_ddp" in markdown
+    assert "Candidate Evaluation" in markdown
+    assert "Expected trade-off" in markdown
 
 
 def test_backend_matrix_report_marks_oom_retry_recovered():
@@ -283,6 +324,13 @@ def test_backend_matrix_report_marks_oom_retry_recovered():
                 "backend": "fsdp",
                 "error": "checkpoint shape mismatch",
                 "returncode": 1,
+                "attempt": 1,
+                "retry_trigger": "oom",
+                "retry_terminated": True,
+                "retry_termination_reason": "non_oom_failure",
+                "config_artifacts": {
+                    "resolved_config": "/runs/retry/config.resolved.json"
+                },
             }
         ),
         encoding="utf-8",
@@ -304,6 +352,14 @@ def test_backend_matrix_report_marks_oom_retry_recovered():
     assert report["oom_recovery"][0]["run_id"] == "model_b4"
     assert report["oom_recovery"][0]["recovered"] is True
     assert report["oom_recovery"][0]["selected_backend"] == "deepspeed_zero2"
+    first_attempt = report["oom_recovery"][0]["attempts"][0]
+    assert first_attempt["attempt"] == 1
+    assert first_attempt["retry_trigger"] == "oom"
+    assert first_attempt["retry_terminated"] is True
+    assert first_attempt["retry_termination_reason"] == "non_oom_failure"
+    assert first_attempt["config_artifacts"]["resolved_config"] == (
+        "/runs/retry/config.resolved.json"
+    )
     failed_row = next(
         row
         for row in report["results"]

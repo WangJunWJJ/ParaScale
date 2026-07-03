@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 import subprocess
 import tempfile
@@ -31,15 +30,52 @@ def run(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--repo-root", required=True)
-    args = parser.parse_args()
-    root = Path(args.repo_root).resolve()
-
     with tempfile.TemporaryDirectory(prefix="parascale-clean-install-") as temp:
         workdir = Path(temp)
-        config = root / "configs" / "quickstart" / "tiny_torch.yaml"
-        run(["parascale", "doctor"], workdir)
+        config = workdir / "tiny_torch.json"
+        config.write_text(
+            json.dumps(
+                {
+                    "parascale": {
+                        "training_backend": "native",
+                        "precision": "fp32",
+                        "checkpoint_save_path": "./runs/tiny/checkpoints",
+                        "checkpoint_save_interval": 1,
+                    },
+                    "runtime": {"device": "cpu"},
+                    "model": {
+                        "type": "tiny_mlp",
+                        "input_dim": 4,
+                        "hidden_dim": 8,
+                        "output_dim": 2,
+                    },
+                    "data": {
+                        "type": "tensor_random",
+                        "batch_size": 2,
+                        "input_dim": 4,
+                        "output_dim": 2,
+                    },
+                    "optimizer": {"type": "adamw", "lr": 0.001},
+                    "training": {
+                        "workload": "torch_tiny_mlp",
+                        "max_steps": 2,
+                        "checkpoint_dir": "./runs/tiny/checkpoints",
+                        "checkpoint_interval": 1,
+                    },
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        version = run(["parascale", "--version"], workdir)
+        if "0.1.0" not in version.stdout:
+            raise RuntimeError(
+                "clean-install version mismatch: " f"{version.stdout.strip()}"
+            )
+        run(
+            ["parascale", "doctor", "--strict", "--require", "torch"],
+            workdir,
+        )
         run(["parascale", "plan", "--config", str(config), "--json"], workdir)
         run(["parascale", "train", "--config", str(config)], workdir)
         validation = run(
@@ -48,7 +84,7 @@ def main() -> int:
                 "checkpoint",
                 "validate",
                 "--checkpoint",
-                str(workdir / "runs" / "quickstart" / "tiny_torch"),
+                str(workdir / "runs" / "tiny" / "checkpoints"),
             ],
             workdir,
         )

@@ -16,6 +16,7 @@ from parascale.commands.common import load_config_file
 from parascale.commands.launcher import (
     benchmark_matrix_env,
     run_matrix_command,
+    run_matrix_command_until_checkpoint,
     train_matrix_command,
 )
 from parascale.commands.scenario import (
@@ -25,16 +26,22 @@ from parascale.commands.scenario import (
     section,
 )
 from parascale.commands.stability_report import (
+    build_restart_validation,
+    build_resume_continuity,
     collect_stability_results,
     write_stability_markdown,
 )
 from parascale.commands.stability_resume import (
     append_stability_resume_command,
+    can_run_resume_phase,
     run_stability_resume_phase,
+    skipped_resume_result,
 )
 
 
 def run_benchmark_stability_from_args(args: argparse.Namespace) -> Dict[str, Any]:
+    if bool(getattr(args, "kill_restart", False)) and not bool(args.resume_stress):
+        raise ValueError("--kill-restart requires --resume-stress.")
     scenario = str(args.scenario)
     scenario_config = benchmark_matrix_scenario_config(scenario, args)
     output_dir = Path(args.output_dir or "runs/benchmarks/stability")
@@ -45,7 +52,7 @@ def run_benchmark_stability_from_args(args: argparse.Namespace) -> Dict[str, Any
     if scenario == "vlm-lora-real":
         default_backends = ["deepspeed_zero2", "fsdp"]
     backends = list(args.backends or default_backends)
-    workers_values = stability_workers(args)
+    workers_values = stability_workers(args, scenario=scenario)
     dataloader_sweeps = stability_dataloader_sweeps(args)
     env = benchmark_matrix_env()
     commands: list[Dict[str, Any]] = []
@@ -96,6 +103,13 @@ def run_benchmark_stability_from_args(args: argparse.Namespace) -> Dict[str, Any
                             "output": str(result_path),
                             "log": str(log_path),
                             "command": command,
+                            "interruption_mode": (
+                                "sigkill_after_checkpoint"
+                                if bool(getattr(args, "kill_restart", False))
+                                else "graceful_checkpoint_boundary"
+                                if bool(args.resume_stress)
+                                else "none"
+                            ),
                         }
                     )
                     if args.dry_run:
@@ -114,16 +128,35 @@ def run_benchmark_stability_from_args(args: argparse.Namespace) -> Dict[str, Any
                                 ),
                             )
                         continue
-                    result = run_matrix_command(
-                        command,
-                        env=env,
-                        backend=backend,
-                        run_id=run_id,
-                        error_path=error_path,
-                        log_path=log_path,
-                    )
+                    if bool(getattr(args, "kill_restart", False)):
+                        checkpoint_step = int(
+                            args.kill_step or max(1, int(args.max_steps) // 2)
+                        )
+                        checkpoint_root = Path(
+                            str(section(config_data, "training")["checkpoint_dir"])
+                        )
+                        result = run_matrix_command_until_checkpoint(
+                            command,
+                            env=env,
+                            backend=backend,
+                            run_id=run_id,
+                            error_path=error_path,
+                            log_path=log_path,
+                            checkpoint_root=checkpoint_root,
+                            checkpoint_step=checkpoint_step,
+                            timeout_seconds=float(args.kill_timeout_seconds),
+                        )
+                    else:
+                        result = run_matrix_command(
+                            command,
+                            env=env,
+                            backend=backend,
+                            run_id=run_id,
+                            error_path=error_path,
+                            log_path=log_path,
+                        )
                     results.append(result)
-                    if bool(args.resume_stress):
+                    if bool(args.resume_stress) and can_run_resume_phase(result):
                         results.extend(
                             run_stability_resume_phase(
                                 args=args,
@@ -140,18 +173,36 @@ def run_benchmark_stability_from_args(args: argparse.Namespace) -> Dict[str, Any
                                 ),
                             )
                         )
+                    elif bool(args.resume_stress):
+                        results.append(
+                            skipped_resume_result(
+                                run_id=run_id,
+                                backend=backend,
+                                training_result=result,
+                            )
+                        )
+    stability_rows = collect_stability_results(
+        output_dir, warmup_steps=int(args.warmup_steps or 0)
+    )
     payload: Dict[str, Any] = {
         "mode": "benchmark_stability",
         "dry_run": bool(args.dry_run),
         "scenario": scenario,
+        "interruption_mode": (
+            "sigkill_after_checkpoint"
+            if bool(getattr(args, "kill_restart", False))
+            else "graceful_checkpoint_boundary"
+            if bool(args.resume_stress)
+            else "none"
+        ),
         "output_dir": str(output_dir),
         "summary": str(summary_path),
         "markdown": str(markdown_path),
         "commands": commands,
         "results": results,
-        "stability": collect_stability_results(
-            output_dir, warmup_steps=int(args.warmup_steps or 0)
-        ),
+        "stability": stability_rows,
+        "resume_continuity": build_resume_continuity(stability_rows),
+        "restart_validation": build_restart_validation(results, stability_rows),
     }
     if not args.dry_run:
         summary_path.write_text(
@@ -161,11 +212,18 @@ def run_benchmark_stability_from_args(args: argparse.Namespace) -> Dict[str, Any
     return payload
 
 
-def stability_workers(args: argparse.Namespace) -> list[int]:
+def stability_workers(
+    args: argparse.Namespace, *, scenario: str | None = None
+) -> list[int]:
     values = getattr(args, "dataloader_workers_sweep", None)
     if values:
         return sorted({max(0, int(value)) for value in values})
-    return [max(0, int(getattr(args, "dataloader_workers", 0) or 0))]
+    configured = getattr(args, "dataloader_workers", None)
+    if configured is not None:
+        return [max(0, int(configured))]
+    if scenario in {"clip-datacomp-golden", "vlm-lora-golden"}:
+        return [4]
+    return [0]
 
 
 def bool_sweep(values: Any, default: bool | None = None) -> list[bool | None]:
@@ -257,8 +315,12 @@ def apply_stability_config(
     if args.checkpoint_interval is not None:
         parascale["checkpoint_save_interval"] = int(args.checkpoint_interval)
         training["checkpoint_interval"] = int(args.checkpoint_interval)
+    if bool(getattr(args, "kill_restart", False)):
+        kill_step = int(args.kill_step or max(1, int(args.max_steps) // 2))
+        parascale["checkpoint_save_interval"] = kill_step
+        training["checkpoint_interval"] = kill_step
     training["skip_final_checkpoint"] = False
-    if args.resume_stress:
+    if args.resume_stress and not bool(getattr(args, "kill_restart", False)):
         kill_step = int(args.kill_step or max(1, int(args.max_steps) // 2))
         training["max_steps"] = kill_step
         training["benchmark_steps"] = kill_step

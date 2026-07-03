@@ -54,6 +54,46 @@ def test_pyproject_defines_build_and_console_entrypoint():
     assert 'tomli>=2.0; python_version < "3.11"' in data["project"][
         "optional-dependencies"
     ]["dev"]
+    assert "pillow>=10.0.0" in data["project"]["optional-dependencies"]["dev"]
+
+
+def test_ascend_extra_is_vendor_managed_outside_public_pypi_matrix():
+    data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert data["project"]["optional-dependencies"]["ascend"] == [
+        "torch-npu>=2.4.0"
+    ]
+    assert "extra: [gpu, deepspeed, vlm]" in workflow
+    assert "torch-npu wheels are vendor-managed" in workflow
+
+
+def test_release_package_boundary_excludes_non_product_assets():
+    data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    package_find = data["tool"]["setuptools"]["packages"]["find"]
+
+    assert package_find["include"] == ["parascale*"]
+    assert package_find["exclude"] == ["tests*", "examples*"]
+    gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
+    for forbidden in (
+        ".superpowers/",
+        "dist/",
+        "runs/",
+        "*.pt",
+        "*.pth",
+        "*.tar.gz",
+    ):
+        assert forbidden in gitignore
+
+
+def test_trial_release_changelog_declares_version_and_limitations():
+    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+
+    assert "## 0.1.0" in changelog
+    for section in ("Added", "Changed", "Fixed", "Validation", "Known Limitations"):
+        assert f"### {section}" in changelog
 
 
 def test_clean_install_verifier_uses_only_public_entrypoints():
@@ -67,6 +107,12 @@ def test_clean_install_verifier_uses_only_public_entrypoints():
     assert "checkpoint" in source
     assert "validate" in source
     assert "PYTHONPATH" not in source
+    assert '"--version"' in source
+    assert '"--strict"' in source
+    assert '"--require"' in source
+    assert '"torch"' in source
+    assert "configs" not in source
+    assert "repo-root" not in source
 
 
 def test_ci_covers_supported_python_and_clean_install():
@@ -78,5 +124,7 @@ def test_ci_covers_supported_python_and_clean_install():
         assert version in workflow
     assert "python -m build" in workflow
     assert "verify_clean_install.py" in workflow
+    assert "verify_clean_install.py --repo-root" not in workflow
     assert "python tests/run_tests.py" in workflow
     assert "python -m ruff check" in workflow
+    assert "pillow>=10.0.0" in workflow

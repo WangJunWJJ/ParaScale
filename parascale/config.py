@@ -152,6 +152,7 @@ class TrainingRunConfig:
     checkpoint_save_path: str = "./checkpoints"
     checkpoint_save_interval: int = 1000
     adapter_only_checkpoint: bool = False
+    allow_world_size_change_on_resume: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         data = dict(self.__dict__)
@@ -287,6 +288,9 @@ class LayeredParaScaleConfig:
                 checkpoint_save_path=config.checkpoint_save_path,
                 checkpoint_save_interval=config.checkpoint_save_interval,
                 adapter_only_checkpoint=config.adapter_only_checkpoint,
+                allow_world_size_change_on_resume=(
+                    config.allow_world_size_change_on_resume
+                ),
             ),
             quantization=config.quantization,
         )
@@ -371,6 +375,7 @@ class ParaScaleConfig:
     checkpoint_save_path: str = "./checkpoints"
     checkpoint_save_interval: int = 1000
     adapter_only_checkpoint: bool = False
+    allow_world_size_change_on_resume: bool = False
     quantization: QuantizationConfig = field(default_factory=QuantizationConfig)
 
     def __post_init__(self) -> None:
@@ -638,6 +643,9 @@ class ParaScaleConfig:
             "checkpoint_save_path": self.checkpoint_save_path,
             "checkpoint_save_interval": self.checkpoint_save_interval,
             "adapter_only_checkpoint": self.adapter_only_checkpoint,
+            "allow_world_size_change_on_resume": (
+                self.allow_world_size_change_on_resume
+            ),
             "quantization": self.quantization.to_dict(),
         }
 

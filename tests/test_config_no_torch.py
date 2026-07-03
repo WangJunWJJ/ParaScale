@@ -33,6 +33,7 @@ def test_backend_config_roundtrip_without_torch():
         fsdp_state_dict_type="sharded",
         fsdp_activation_checkpointing_policy="transformer_auto",
         fsdp_checkpoint_module_classes=["Qwen2DecoderLayer"],
+        allow_world_size_change_on_resume=True,
     )
 
     restored = ParaScaleConfig.from_dict(config.to_dict())
@@ -60,6 +61,7 @@ def test_backend_config_roundtrip_without_torch():
     assert restored.fsdp_state_dict_type == "sharded"
     assert restored.fsdp_activation_checkpointing_policy == "transformer_auto"
     assert restored.fsdp_checkpoint_module_classes == ["Qwen2DecoderLayer"]
+    assert restored.allow_world_size_change_on_resume is True
 
 
 def test_config_accepts_ascend_native_backend_without_torch():
@@ -462,6 +464,19 @@ def test_benchmark_aggregation_lives_in_reporting_without_torch():
     assert metrics["measured_steps"] == 1.0
     assert metrics["stable_images_per_second"] == 20.0
     assert metrics["stable_step_time_ms"] == 100.0
+
+
+def test_benchmark_aggregation_includes_stable_loss_window():
+    from parascale.reporting.aggregation import aggregate_stable_metrics
+
+    metrics = aggregate_stable_metrics(
+        [{"loss": 9.0}, {"loss": 2.0}, {"loss": 1.0}],
+        warmup_steps=1,
+    )
+
+    assert metrics["stable_loss"] == 1.5
+    assert metrics["stable_min_loss"] == 1.0
+    assert metrics["stable_max_loss"] == 2.0
 
 
 def test_orchestrator_does_not_own_workload_capability_or_aggregation_without_torch():

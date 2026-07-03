@@ -28,6 +28,12 @@ ParaScale 不重新实现 PyTorch、FSDP 或 DeepSpeed。它在成熟计算后�
 
 ## 安装
 
+当前试用版版本为 `0.1.0`。安装后可使用以下命令确认实际加载的版本：
+
+```bash
+parascale --version
+```
+
 ### 环境要求
 
 - Python 3.10+
@@ -36,6 +42,17 @@ ParaScale 不重新实现 PyTorch、FSDP 或 DeepSpeed。它在成熟计算后�
 - Ascend 训练需匹配的 CANN、`torch_npu` 与 HCCL
 
 建议先安装与目标硬件匹配的 PyTorch，再安装 ParaScale，避免 pip 自动选择不匹配的设备 wheel。
+
+### 从 wheel 安装
+
+下载发布页中的 `parascale-0.1.0-py3-none-any.whl` 后执行：
+
+```bash
+python -m pip install parascale-0.1.0-py3-none-any.whl
+parascale doctor --strict --require torch
+```
+
+wheel 只包含 ParaScale 核心 Python 包。示例配置和运行脚本保留在源码仓库的 `configs/` 与 `examples/` 中。
 
 ### 从源码安装
 
@@ -126,6 +143,34 @@ python -m parascale.cli benchmark-matrix \
 ```
 
 `--dry-run` 只生成配置和启动命令。正式性能结论必须使用相同模型、数据、全局 batch、精度、硬件、warmup 和 measurement window。
+
+### 6. 运行真实训练黄金路径
+
+P1 提供两份可移植配置：DataComp WDS + CLIP ViT-B/32，以及 LLaVA-OneVision 0.5B LoRA。先声明本机或容器内的资产根目录：
+
+```bash
+export PARASCALE_MODEL_ROOT=/models
+export PARASCALE_DATA_ROOT=/dataset
+export PARASCALE_RUN_ROOT=/workspace/runs
+```
+
+配置仅支持显式的 `${VAR}` 环境变量引用；变量未定义时会在启动前返回配置错误，不会使用隐式路径或静默降级。
+
+```bash
+# 双卡 CLIP：250 step 后保存，再由新进程恢复至总计 500 step
+python -m parascale.cli benchmark-stability \
+  --scenario clip-datacomp-golden \
+  --max-steps 500 --kill-step 250 --resume-steps 250 \
+  --checkpoint-interval 250 --resume-stress
+
+# 双卡真实 VLM LoRA：adapter-only checkpoint/resume
+python -m parascale.cli benchmark-stability \
+  --scenario vlm-lora-golden \
+  --max-steps 500 --kill-step 250 --resume-steps 250 \
+  --checkpoint-interval 250 --resume-stress
+```
+
+报告统一给出稳定窗口 loss、images/s 或 tokens/s、峰值显存、dataloader wait、checkpoint 状态，以及恢复前后的 loss/吞吐比。正式长训容器建议增加 `--shm-size=8g`。
 
 ## 文档
 
@@ -257,7 +302,7 @@ benchmark 资产统一位于 [`tests/benchmarks/`](tests/benchmarks/)，稳定�
 
 ## 版本历史
 
-### 0.1.0 - 试用版
+### 0.1.0 - GPU-verified 试用版（2026-07-03）
 
 - 建立 runtime-first 架构和统一 CLI；
 - 提供 ResolvedConfig、RuntimePlan 和 backend registry；
@@ -265,8 +310,11 @@ benchmark 资产统一位于 [`tests/benchmarks/`](tests/benchmarks/)，稳定�
 - 建立视觉/多模态数据管线、profile/tuner 和 benchmark matrix；
 - 完成选定路径的 checkpoint/resume、推理和远程 GPU smoke；
 - 将可运行示例按 GPU 与 Ascend 环境组织。
+- wheel clean-install 已通过公共 CLI 完成 strict doctor、plan、tiny train 与 checkpoint validate。
+- 双 RTX 4090 D 已完成真实 DataComp CLIP-B/32 的 native-DDP、FSDP、DeepSpeed 矩阵及 checkpoint/resume smoke。
+- Ascend 架构入口已保留；910B4 验收时设备被现有任务占满，本版本经发布负责人明确豁免该门禁，发布等级为 `GPU-verified / Ascend-unverified`，不声明 Ascend production verified。
 
-详细记录见 [统一测试与 benchmark 报告](tests/UNIFIED_TEST_BENCHMARK_REPORT.md)。
+详细版本变化见 [CHANGELOG](CHANGELOG.md)，历史测试记录见 [统一测试与 benchmark 报告](tests/UNIFIED_TEST_BENCHMARK_REPORT.md)。
 
 ## 许可证
 

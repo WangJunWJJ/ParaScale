@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import os
 
+from parascale._version import __version__
 from parascale.commands.benchmark import (
     add_pipeline_cache_arguments as add_pipeline_cache_arguments,
 )
@@ -140,6 +141,11 @@ def main(argv: list[str] | None = None) -> int:
         description="ParaScale training utilities.",
         epilog=ROOT_EXAMPLES,
         formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
     )
     parser.add_argument(
         "--local_rank",
@@ -289,7 +295,13 @@ def main(argv: list[str] | None = None) -> int:
     matrix_parser.add_argument(
         "--scenario",
         required=True,
-        choices=["vlm-lora-hf-clip", "vlm-lora-real", "yolo-world-large"],
+        choices=[
+            "clip-datacomp-golden",
+            "vlm-lora-hf-clip",
+            "vlm-lora-golden",
+            "vlm-lora-real",
+            "yolo-world-large",
+        ],
         help="Validated benchmark scenario to execute.",
     )
     matrix_parser.add_argument(
@@ -362,7 +374,12 @@ def main(argv: list[str] | None = None) -> int:
     stability_parser.add_argument(
         "--scenario",
         required=True,
-        choices=["vlm-lora-real", "yolo-world-large"],
+        choices=[
+            "clip-datacomp-golden",
+            "vlm-lora-golden",
+            "vlm-lora-real",
+            "yolo-world-large",
+        ],
         help="Validated stability scenario to execute.",
     )
     stability_parser.add_argument(
@@ -399,7 +416,7 @@ def main(argv: list[str] | None = None) -> int:
     stability_parser.add_argument("--num-samples", type=int)
     stability_parser.add_argument("--nproc-per-node", type=int, default=2)
     stability_parser.add_argument("--master-port", type=int, default=29810)
-    stability_parser.add_argument("--dataloader-workers", type=int, default=0)
+    stability_parser.add_argument("--dataloader-workers", type=int)
     stability_parser.add_argument(
         "--dataloader-workers-sweep",
         nargs="+",
@@ -433,6 +450,20 @@ def main(argv: list[str] | None = None) -> int:
         "--kill-step",
         type=int,
         help="Checkpoint step used as the simulated kill/restart boundary.",
+    )
+    stability_parser.add_argument(
+        "--kill-restart",
+        action="store_true",
+        help=(
+            "SIGKILL the launcher process group after kill-step checkpoint "
+            "validates, then resume with a fresh launcher."
+        ),
+    )
+    stability_parser.add_argument(
+        "--kill-timeout-seconds",
+        type=float,
+        default=3600.0,
+        help="Maximum time to wait for the kill-step checkpoint.",
     )
     stability_parser.add_argument(
         "--resume-steps",

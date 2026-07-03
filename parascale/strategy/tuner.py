@@ -22,6 +22,7 @@ class TuningDecision:
     evidence: Dict[str, Any] = field(default_factory=dict)
     threshold: Dict[str, Any] = field(default_factory=dict)
     config_updates: Dict[str, Any] = field(default_factory=dict)
+    expected_trade_off: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -30,6 +31,7 @@ class TuningDecision:
             "evidence": dict(self.evidence),
             "threshold": dict(self.threshold),
             "config_updates": dict(self.config_updates),
+            "expected_trade_off": self.expected_trade_off,
         }
 
 
@@ -210,6 +212,10 @@ def tune_strategy_from_runtime(
                     "oom_count": "> 0",
                 },
                 config_updates=dict(updates),
+                expected_trade_off=(
+                    "Lower peak memory and OOM risk at the cost of recomputation, "
+                    "offload traffic, or reduced throughput."
+                ),
             )
         )
     elif near_memory_limit and not tuned.activation_checkpointing:
@@ -226,6 +232,10 @@ def tune_strategy_from_runtime(
                 },
                 threshold={"near_memory_limit_bytes": near_memory_threshold},
                 config_updates={"enable_activation_checkpointing": True},
+                expected_trade_off=(
+                    "Lower activation memory at the cost of additional forward "
+                    "recomputation."
+                ),
             )
         )
 
@@ -254,6 +264,9 @@ def tune_strategy_from_runtime(
                     for key in ["batching_strategy", "max_tokens_per_batch"]
                     if key in updates
                 },
+                expected_trade_off=(
+                    "Less padding waste with more variable per-step batch shapes."
+                ),
             )
         )
 
@@ -320,6 +333,10 @@ def tune_strategy_from_runtime(
                         if key in updates
                     },
                 },
+                expected_trade_off=(
+                    "Lower input wait and jitter at the cost of additional CPU, "
+                    "host memory, worker processes, or cache storage."
+                ),
             )
         )
 
@@ -406,6 +423,10 @@ def build_oom_retry_plan(
             },
             threshold={"oom_count": "> 0"},
             config_updates=dict(result.config_updates),
+            expected_trade_off=(
+                "Improved recovery probability at the cost of lower throughput "
+                "or higher CPU/offload traffic."
+            ),
         ),
     )
     return result
