@@ -111,6 +111,9 @@ def test_clean_install_verifier_uses_only_public_entrypoints():
     assert '"--strict"' in source
     assert '"--require"' in source
     assert '"torch"' in source
+    assert source.count('"config"') >= 2
+    assert '"migrate"' in source
+    assert "migrated_config" in source
     assert "configs" not in source
     assert "repo-root" not in source
 
@@ -128,3 +131,29 @@ def test_ci_covers_supported_python_and_clean_install():
     assert "python tests/run_tests.py" in workflow
     assert "python -m ruff check" in workflow
     assert "pillow>=10.0.0" in workflow
+    assert "actions/checkout@v6" in workflow
+    assert "actions/setup-python@v6" in workflow
+    assert "permissions:\n  contents: read" in workflow
+
+
+def test_github_issue_forms_cover_trial_release_feedback():
+    template_dir = ROOT / ".github" / "ISSUE_TEMPLATE"
+    expected = {
+        "bug_report.yml": ("ParaScale version", "ResolvedConfig", "Reproduction"),
+        "performance_regression.yml": (
+            "Baseline",
+            "Measurement window",
+            "ResolvedConfig",
+        ),
+        "workload_request.yml": ("Model", "Dataset", "Acceptance criteria"),
+    }
+
+    for filename, required_text in expected.items():
+        text = (template_dir / filename).read_text(encoding="utf-8")
+        assert "name:" in text
+        assert "description:" in text
+        assert "body:" in text
+        for value in required_text:
+            assert value in text
+    config = (template_dir / "config.yml").read_text(encoding="utf-8")
+    assert "blank_issues_enabled: false" in config

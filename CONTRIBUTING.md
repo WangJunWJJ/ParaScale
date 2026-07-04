@@ -130,3 +130,5 @@ pip install pre-commit
 * 严禁未经pull request而直接merge到master分支
 * 更严禁直接修改master分支
 * 在commit和pull request时，详细说明修改内容
+* 已发布的 Git tag 和 GitHub Release 必须保持不可变，不得删除后重建或移动到其他 commit
+* 发布后的修复必须递增 patch 版本，例如从 `v0.1.0` 发布为 `v0.1.1`

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from parascale.configuration.environment import expand_environment_references
+from parascale.configuration.schema import validate_config_schema
 
 
 def parse_scalar(value: str) -> Any:
@@ -63,14 +64,19 @@ def load_config_file(path: str) -> Dict[str, Any]:
     config_path = Path(path)
     text = config_path.read_text(encoding="utf-8-sig")
     if config_path.suffix.lower() == ".json":
-        return expand_environment_references(json.loads(text))
+        loaded = expand_environment_references(json.loads(text))
+        validate_config_schema(loaded)
+        return loaded
     try:
         import yaml
 
-        loaded = yaml.safe_load(text)
-        return expand_environment_references(loaded or {})
+        loaded = expand_environment_references(yaml.safe_load(text) or {})
+        validate_config_schema(loaded)
+        return loaded
     except ImportError:
-        return expand_environment_references(load_simple_yaml(text))
+        loaded = expand_environment_references(load_simple_yaml(text))
+        validate_config_schema(loaded)
+        return loaded
 
 
 def emit_json(payload: Dict[str, Any], output_path: str | None = None) -> None:

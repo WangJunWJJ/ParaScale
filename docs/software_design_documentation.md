@@ -720,6 +720,10 @@ doctor 的事实采集与要求判断保持分离：普通模式只报告环境�
 
 CLI 只在命令分发边界分类预期异常，退出码为 2 配置/环境要求、3 依赖、4 runtime、5 checkpoint、6 benchmark 和 70 internal error。该错误协议属于低频控制面，不进入训练 step 热路径。CI extras resolution 不能替代远程 CUDA、NPU 或 DeepSpeed 实机发布验收。
 
+配置系统采用显式版本协议。仓库当前 schema 为 v1；未声明版本的配置按 legacy v0 解析并可通过 `parascale config migrate` 迁移，版本高于 runtime 支持范围时必须在装配前失败。schema 校验、来源追踪和序列化均属于低频控制面，不得进入训练 step、batch move 或通信热路径。根包公共 API 以 `PUBLIC_API_VERSION` 和快照测试冻结，破坏性变化必须伴随 API 版本升级、迁移说明和回归测试。
+
+已发布 tag 与 Release 是不可变供应链标识。任何发布后修复必须递增 patch 版本并重新执行源码测试、wheel clean-install 和适用的远程硬件门禁，不得通过移动历史 tag 替换已发布代码。
+
 `0.1.0` 发布候选继续执行“先验收、后打 tag”的门禁顺序。候选 wheel 必须在不挂载源码的隔离环境中通过 `parascale --version`、strict doctor、plan、tiny train 和 checkpoint validate。CUDA 门禁使用双 RTX 4090 D、真实 DataComp WDS 和预训练 CLIP-B/32 对 native-DDP、FSDP、DeepSpeed 做同口径矩阵，并独立验证 checkpoint/resume。Ascend 门禁默认必须等待目标 910B4 资源空闲后执行，不能以 dry-run、mock 或接口测试替代实机结论。若发布负责人明确接受风险并豁免该门禁，版本必须标记为 `GPU-verified / Ascend-unverified`，且不得声明 Ascend production verified。
 
 ## 附录 A：2026-06-23 架构重整基线

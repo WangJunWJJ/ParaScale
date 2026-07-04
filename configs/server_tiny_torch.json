@@ -1,4 +1,5 @@
 {
+  "schema_version": 1,
   "parascale": {
     "training_backend": "native",
     "precision": "fp32",
