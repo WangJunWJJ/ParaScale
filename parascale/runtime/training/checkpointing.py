@@ -103,11 +103,17 @@ class CheckpointController:
             }
         if shard_mode and rank == 0:
             self._add_expected_fsdp_shards(files, world_size, state_dict_type)
+        data_resume = getattr(self.engine, "data_resume", None)
+        data_state = data_resume.capture() if data_resume is not None else {}
         manifest = CheckpointManifest(
             step=checkpoint_step,
             global_step=self.engine.state.global_step,
+            consumed_samples=int(
+                getattr(self.engine.state, "consumed_samples", 0) or 0
+            ),
             backend=backend_name,
             parallel_plan=self.engine.plan().to_dict(),
+            data_state=data_state,
             files=files,
             metadata={
                 "last_metrics": dict(self.engine.state.last_metrics),
@@ -185,6 +191,9 @@ class CheckpointController:
 
         self.engine.state.global_step = int(manifest.global_step or manifest.step)
         self.engine.state.last_metrics = dict(manifest.metadata.get("last_metrics", {}))
+        data_resume = getattr(self.engine, "data_resume", None)
+        if data_resume is not None:
+            data_resume.restore_manifest(manifest)
         manifest.metadata["backend_state_loaded"] = backend_state_loaded
         if self.engine.training_backend is not None:
             if hasattr(self.engine.training_backend, "optimizer_state_loaded"):

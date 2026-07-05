@@ -23,6 +23,7 @@ from parascale.strategy import StrategyPlan, build_strategy_plan
 
 from .accumulation import AccumulationController
 from .checkpointing import CheckpointController
+from .data_state import DataResumeController
 from .fit_loop import FitLoopRunner
 from .memory import RuntimeMemoryTracker
 from .metrics import (
@@ -44,6 +45,9 @@ class TrainState:
     global_step: int = 0
     last_metrics: Dict[str, Any] = field(default_factory=dict)
     metrics_history: list[Dict[str, Any]] = field(default_factory=list)
+    consumed_micro_batches: int = 0
+    consumed_samples: int = 0
+    data_state: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -62,6 +66,7 @@ class TrainEngine:
     precision: Any = None
     step_runner: Any = None
     fit_loop: Any = None
+    data_resume: Any = None
 
     def __post_init__(self) -> None:
         if self.precision is None:
@@ -70,6 +75,8 @@ class TrainEngine:
             self.step_runner = StepRunner(self)
         if self.fit_loop is None:
             self.fit_loop = FitLoopRunner(self)
+        if self.data_resume is None:
+            self.data_resume = DataResumeController(self)
 
     def plan(self) -> StrategyPlan:
         if self.strategy_plan is None:

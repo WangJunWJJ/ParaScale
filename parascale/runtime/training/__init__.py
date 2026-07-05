@@ -7,6 +7,7 @@
 
 from .accumulation import AccumulationController
 from .checkpointing import CheckpointController
+from .data_state import DataResumeController
 from .engine import TrainEngine, TrainState
 from .fit_loop import FitLoopRunner
 from .memory import RuntimeMemoryTracker
@@ -17,6 +18,7 @@ from .step import StepRunner
 __all__ = [
     "AccumulationController",
     "CheckpointController",
+    "DataResumeController",
     "FitLoopRunner",
     "PrecisionController",
     "RuntimeMemoryTracker",

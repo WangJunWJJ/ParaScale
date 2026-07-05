@@ -541,6 +541,124 @@ def test_fsdp_load_state_dict_uses_saved_format_context(monkeypatch):
     ]
 
 
+def test_checkpoint_resume_replays_to_consumed_data_position():
+    root = Path(tempfile.gettempdir()) / "parascale-test-runs" / "data_replay_resume"
+    manager = CheckpointManager(str(root))
+    batches = [
+        {"sample_id": "a", "num_images": 2},
+        {"sample_id": "b", "num_images": 2},
+        {"sample_id": "c", "num_images": 2},
+    ]
+    backend = _BackendSpecificCheckpoint("fsdp")
+    train = TrainEngine(
+        config=ParaScaleConfig(training_backend="fsdp"),
+        training_backend=backend,
+    )
+    train.state.initialized = True
+    seen = []
+    train.fit(
+        batches,
+        max_steps=2,
+        step_fn=lambda batch: seen.append(batch["sample_id"]),
+        checkpoint_manager=manager,
+        checkpoint_interval=2,
+    )
+
+    manifest = manager.read_manifest(2)
+
+    assert seen == ["a", "b"]
+    assert manifest.consumed_samples == 4
+    assert manifest.data_state["consumed_micro_batches"] == 2
+    assert manifest.data_state["resume_mode"] == "replay_skip"
+
+    restored = TrainEngine(
+        config=ParaScaleConfig(training_backend="fsdp"),
+        training_backend=_BackendSpecificCheckpoint("fsdp"),
+    )
+    restored.state.initialized = True
+    restored.load_checkpoint(manager, 2)
+    resumed_seen = []
+    with pytest.warns(RuntimeWarning, match="replaying and skipping 2"):
+        restored.fit(
+            batches,
+            max_steps=1,
+            step_fn=lambda batch: resumed_seen.append(batch["sample_id"]),
+        )
+
+    assert resumed_seen == ["c"]
+
+
+def test_checkpoint_resume_restores_stateful_dataloader_without_replay():
+    class StatefulLoader:
+        def __init__(self, batches):
+            self.batches = list(batches)
+            self.cursor = 0
+            self.loaded_state = None
+
+        def __iter__(self):
+            while self.cursor < len(self.batches):
+                batch = self.batches[self.cursor]
+                self.cursor += 1
+                yield batch
+
+        def __len__(self):
+            return len(self.batches) - self.cursor
+
+        def state_dict(self):
+            return {"cursor": self.cursor}
+
+        def load_state_dict(self, state):
+            self.loaded_state = dict(state)
+            self.cursor = int(state["cursor"])
+
+    root = Path(tempfile.gettempdir()) / "parascale-test-runs" / "data_state_resume"
+    manager = CheckpointManager(str(root))
+    batches = [
+        {"sample_id": "a", "num_images": 1},
+        {"sample_id": "b", "num_images": 1},
+        {"sample_id": "c", "num_images": 1},
+    ]
+    loader = StatefulLoader(batches)
+    train = TrainEngine(
+        config=ParaScaleConfig(training_backend="fsdp"),
+        training_backend=_BackendSpecificCheckpoint("fsdp"),
+    )
+    train.state.initialized = True
+    train.fit(
+        loader,
+        max_steps=2,
+        step_fn=lambda _batch: None,
+        checkpoint_manager=manager,
+        checkpoint_interval=2,
+    )
+
+    manifest = manager.read_manifest(2)
+
+    assert manifest.data_state == {
+        "consumed_micro_batches": 2,
+        "resume_mode": "state_dict",
+        "state": {"cursor": 2},
+        "target": "dataloader",
+    }
+
+    restored_loader = StatefulLoader(batches)
+    restored = TrainEngine(
+        config=ParaScaleConfig(training_backend="fsdp"),
+        training_backend=_BackendSpecificCheckpoint("fsdp"),
+    )
+    restored.state.initialized = True
+    restored.load_checkpoint(manager, 2)
+    resumed_seen = []
+    restored.fit(
+        restored_loader,
+        max_steps=1,
+        step_fn=lambda batch: resumed_seen.append(batch["sample_id"]),
+    )
+
+    assert restored_loader.loaded_state == {"cursor": 2}
+    assert resumed_seen == ["c"]
+
+
 def test_checkpoint_manifest_round_trip():
     root = Path(tempfile.gettempdir()) / "parascale-test-runs" / "checkpoint_manifest"
     manager = CheckpointManager(str(root))
