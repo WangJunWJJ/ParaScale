@@ -420,6 +420,127 @@ def test_train_engine_delegates_backend_specific_checkpoints_without_torch():
         assert restored.metadata["backend_state_loaded"] is True
 
 
+def test_checkpoint_resume_passes_manifest_fsdp_state_dict_type():
+    class Backend:
+        name = "fsdp"
+
+        def __init__(self):
+            self.loaded = None
+
+        def load_checkpoint(self, _manager, step=None, **kwargs):
+            self.loaded = {"step": step, **kwargs}
+            return {}
+
+    root = Path(tempfile.gettempdir()) / "parascale-test-runs" / "manifest_format"
+    manager = CheckpointManager(str(root))
+    payload = manager.payload_path(5, "rank-00000/fsdp_state.pt")
+    payload.parent.mkdir(parents=True, exist_ok=True)
+    payload.write_bytes(b"sharded-state")
+    manager.write_manifest(
+        CheckpointManifest(
+            step=5,
+            backend="fsdp",
+            files=[
+                {
+                    "path": "rank-00000/fsdp_state.pt",
+                    "role": "fsdp_state",
+                    "state_dict_type": "sharded",
+                    "rank": 0,
+                }
+            ],
+            metadata={"rank_count": 1},
+        )
+    )
+    backend = Backend()
+    train = TrainEngine(
+        config=ParaScaleConfig(
+            training_backend="fsdp",
+            fsdp_state_dict_type="full",
+        ),
+        training_backend=backend,
+    )
+
+    train.load_checkpoint(manager, 5)
+
+    assert backend.loaded == {"step": 5, "state_dict_type": "sharded"}
+
+
+def test_fsdp_load_checkpoint_uses_manifest_format_for_payload_path(
+    monkeypatch,
+):
+    import parascale.runtime.backends.fsdp as fsdp_module
+    from parascale.runtime.backends.fsdp import FSDPTrainingBackend
+
+    root = Path(tempfile.gettempdir()) / "parascale-test-runs" / "fsdp_load_path"
+    manager = CheckpointManager(str(root))
+    payload_path = manager.payload_path(3, "rank-00001/fsdp_state.pt")
+    payload_path.parent.mkdir(parents=True, exist_ok=True)
+    payload_path.write_bytes(b"payload")
+    loaded_paths = []
+
+    class TorchStub:
+        @staticmethod
+        def load(path, **_kwargs):
+            loaded_paths.append(path)
+            return {"backend_state": {}, "client_state": {}}
+
+    backend = FSDPTrainingBackend(
+        config=ParaScaleConfig(
+            training_backend="fsdp",
+            fsdp_state_dict_type="full",
+        ),
+        local_rank=1,
+    )
+    backend._rank = lambda: 1
+    monkeypatch.setattr(fsdp_module, "_require_torch", lambda: TorchStub())
+
+    backend.load_checkpoint(manager, step=3, state_dict_type="sharded")
+
+    assert loaded_paths == [payload_path]
+
+
+def test_fsdp_load_state_dict_uses_saved_format_context(monkeypatch):
+    from contextlib import contextmanager
+
+    from parascale.runtime.backends.fsdp import FSDPTrainingBackend
+
+    events = []
+
+    class Model:
+        def load_state_dict(self, state):
+            events.append(("load", state))
+
+    @contextmanager
+    def state_dict_context(state_type, *, rank0_only):
+        events.append(("enter", state_type, rank0_only))
+        yield
+        events.append(("exit", state_type, rank0_only))
+
+    backend = FSDPTrainingBackend(
+        model=Model(),
+        config=ParaScaleConfig(training_backend="fsdp"),
+    )
+    monkeypatch.setattr(
+        backend,
+        "_fsdp_state_dict_context",
+        state_dict_context,
+        raising=False,
+    )
+
+    backend.load_state_dict(
+        {
+            "model_state_dict": {"weight": "shard"},
+            "state_dict_type": "sharded",
+        }
+    )
+
+    assert events == [
+        ("enter", "sharded", False),
+        ("load", {"weight": "shard"}),
+        ("exit", "sharded", False),
+    ]
+
+
 def test_checkpoint_manifest_round_trip():
     root = Path(tempfile.gettempdir()) / "parascale-test-runs" / "checkpoint_manifest"
     manager = CheckpointManager(str(root))

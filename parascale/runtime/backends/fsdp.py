@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from typing import Any, Dict, Optional, Tuple
 
 from .base import TrainingBackend, _require_torch
@@ -215,22 +216,27 @@ class FSDPTrainingBackend(TrainingBackend):
     def load_state_dict(self, state: Dict[str, Any]) -> None:
         if self.model is None:
             return super().load_state_dict(state)
+        state_type = str(
+            state.get("state_dict_type")
+            or getattr(self.config, "fsdp_state_dict_type", "full")
+        )
         model_state = state.get("model_state_dict")
-        if model_state is not None and hasattr(self.model, "load_state_dict"):
-            self.model.load_state_dict(model_state)
         optimizer_state = state.get("optimizer_state_dict")
-        if self.optimizer is None or optimizer_state is None:
-            return None
-        try:
-            from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+        with self._fsdp_state_dict_context(state_type, rank0_only=False):
+            if model_state is not None and hasattr(self.model, "load_state_dict"):
+                self.model.load_state_dict(model_state)
+            if self.optimizer is None or optimizer_state is None:
+                return None
+            try:
+                from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 
-            optimizer_state = FSDP.optim_state_dict_to_load(
-                self.model,
-                self.optimizer,
-                optimizer_state,
-            )
-        except Exception:
-            pass
+                optimizer_state = FSDP.optim_state_dict_to_load(
+                    self.model,
+                    self.optimizer,
+                    optimizer_state,
+                )
+            except Exception:
+                pass
         try:
             self.optimizer.load_state_dict(optimizer_state)
             self.optimizer_state_loaded = True
@@ -238,6 +244,53 @@ class FSDPTrainingBackend(TrainingBackend):
             self.optimizer_state_loaded = False
             self.optimizer_state_error = str(exc)
         return None
+
+    def _fsdp_state_dict_context(
+        self,
+        state_type: str,
+        *,
+        rank0_only: bool,
+    ) -> Any:
+        try:
+            from torch.distributed.fsdp import (
+                FullOptimStateDictConfig,
+                FullStateDictConfig,
+                LocalOptimStateDictConfig,
+                LocalStateDictConfig,
+                ShardedOptimStateDictConfig,
+                ShardedStateDictConfig,
+                StateDictType,
+            )
+            from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+        except Exception:
+            return nullcontext()
+
+        if state_type == "sharded":
+            state_dict_type = StateDictType.SHARDED_STATE_DICT
+            state_config = ShardedStateDictConfig(offload_to_cpu=True)
+            optim_config = ShardedOptimStateDictConfig(offload_to_cpu=True)
+        elif state_type == "local":
+            state_dict_type = StateDictType.LOCAL_STATE_DICT
+            state_config = LocalStateDictConfig()
+            optim_config = LocalOptimStateDictConfig()
+        elif state_type == "full":
+            state_dict_type = StateDictType.FULL_STATE_DICT
+            state_config = FullStateDictConfig(
+                offload_to_cpu=True,
+                rank0_only=rank0_only,
+            )
+            optim_config = FullOptimStateDictConfig(
+                offload_to_cpu=True,
+                rank0_only=rank0_only,
+            )
+        else:
+            raise ValueError(f"unsupported FSDP state_dict_type: {state_type}")
+        return FSDP.state_dict_type(
+            self.model,
+            state_dict_type,
+            state_config,
+            optim_config,
+        )
 
     def save_checkpoint(
         self,
@@ -298,7 +351,10 @@ class FSDPTrainingBackend(TrainingBackend):
 
         torch = _require_torch()
         checkpoint_step = int(step or 0)
-        state_type = getattr(self.config, "fsdp_state_dict_type", "full")
+        state_type = str(
+            kwargs.get("state_dict_type")
+            or getattr(self.config, "fsdp_state_dict_type", "full")
+        )
         rank = self._rank()
         filename = (
             f"rank-{rank:05d}/fsdp_state.pt"
@@ -313,6 +369,8 @@ class FSDPTrainingBackend(TrainingBackend):
         payload = torch.load(payload_path, map_location="cpu", weights_only=True)
         backend_state = payload.get("backend_state", payload)
         if isinstance(backend_state, dict):
+            backend_state = dict(backend_state)
+            backend_state["state_dict_type"] = state_type
             self.load_state_dict(backend_state)
         return payload.get("client_state", {})
 

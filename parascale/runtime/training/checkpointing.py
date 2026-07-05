@@ -172,6 +172,7 @@ class CheckpointController:
             backend_state_loaded = self._load_backend_specific_checkpoint(
                 checkpoint_manager,
                 manifest,
+                backend_specific_entry,
                 scheduler,
             )
         elif backend_entry is not None and self.engine.training_backend is not None:
@@ -326,11 +327,22 @@ class CheckpointController:
         self,
         checkpoint_manager: Any,
         manifest: Any,
+        backend_entry: Dict[str, Any],
         scheduler: Any,
     ) -> bool:
+        state_dict_type = backend_entry.get("state_dict_type")
+        if state_dict_type is None:
+            state_dict_type = manifest.metadata.get(
+                "state_dict_type",
+                manifest.metadata.get("fsdp_state_dict_type"),
+            )
+        load_kwargs = {}
+        if state_dict_type is not None:
+            load_kwargs["state_dict_type"] = str(state_dict_type)
         client_state = self.engine.training_backend.load_checkpoint(
             checkpoint_manager,
             step=manifest.step,
+            **load_kwargs,
         )
         scheduler_state = client_state.get("scheduler_state_dict")
         if scheduler is not None and scheduler_state is not None:
