@@ -260,17 +260,19 @@ class FSDPTrainingBackend(TrainingBackend):
             if state_type in {"sharded", "local"}
             else "fsdp_state.pt"
         )
-        payload_path = checkpoint_manager.payload_path(checkpoint_step, filename)
-        payload_path.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(
-            {
-                "backend_state": self.state_dict(),
-                "client_state": client_state or {},
-            },
-            payload_path,
-        )
-        return {
-            "files": [
+        backend_state = self.state_dict()
+        files = []
+        if rank == 0 or state_type in {"sharded", "local"}:
+            payload_path = checkpoint_manager.payload_path(checkpoint_step, filename)
+            payload_path.parent.mkdir(parents=True, exist_ok=True)
+            torch.save(
+                {
+                    "backend_state": backend_state,
+                    "client_state": client_state or {},
+                },
+                payload_path,
+            )
+            files.append(
                 {
                     "path": filename,
                     "role": "fsdp_state",
@@ -278,7 +280,9 @@ class FSDPTrainingBackend(TrainingBackend):
                     "state_dict_type": state_type,
                     "rank": rank,
                 }
-            ],
+            )
+        return {
+            "files": files,
             "metadata": {
                 "backend_checkpoint": self.name,
                 "fsdp_state_dict_type": state_type,

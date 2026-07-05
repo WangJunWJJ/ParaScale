@@ -761,6 +761,102 @@ def test_checkpoint_controller_allows_nonzero_rank_fsdp_shard_without_manifest()
     assert engine.barrier_called is True
 
 
+def test_checkpoint_controller_full_fsdp_save_runs_on_nonzero_rank():
+    from parascale.runtime.training.checkpointing import CheckpointController
+
+    class State:
+        global_step = 7
+        last_metrics = {}
+
+    class Backend:
+        name = "fsdp"
+
+        def __init__(self):
+            self.saved = False
+
+        def save_checkpoint(self, _manager, step=None, client_state=None):
+            self.saved = True
+            return {
+                "files": [],
+                "metadata": {"fsdp_state_dict_type": "full"},
+            }
+
+    class Engine:
+        def __init__(self):
+            self.state = State()
+            self.training_backend = Backend()
+            self.config = ParaScaleConfig(
+                training_backend="fsdp",
+                fsdp_state_dict_type="full",
+            )
+            self.barrier_called = False
+
+        def _distributed_rank(self):
+            return 1
+
+        def _distributed_world_size(self):
+            return 2
+
+        def _distributed_barrier(self):
+            self.barrier_called = True
+
+        def plan(self):
+            raise AssertionError("nonzero rank must not write a manifest")
+
+    class Manager:
+        def payload_path(self, *_args):
+            return Path(tempfile.gettempdir()) / "unused.pt"
+
+        def write_manifest(self, _manifest):
+            raise AssertionError("nonzero rank must not write a manifest")
+
+    engine = Engine()
+
+    result = CheckpointController(engine).save(Manager())
+
+    assert engine.training_backend.saved is True
+    assert result["skipped"] is True
+    assert result["reason"] == (
+        "backend checkpoint written; manifest is written by rank 0"
+    )
+    assert engine.barrier_called is True
+
+
+def test_fsdp_full_checkpoint_nonzero_rank_participates_without_writing(
+    monkeypatch,
+):
+    import parascale.runtime.backends.fsdp as fsdp_module
+    from parascale.runtime.backends.fsdp import FSDPTrainingBackend
+
+    saved_paths = []
+
+    class TorchStub:
+        @staticmethod
+        def save(_payload, path):
+            saved_paths.append(path)
+
+    backend = FSDPTrainingBackend(
+        config=ParaScaleConfig(
+            training_backend="fsdp",
+            fsdp_state_dict_type="full",
+        ),
+        local_rank=1,
+    )
+    backend.state_dict = lambda: {"backend": "fsdp"}
+    backend._rank = lambda: 1
+    monkeypatch.setattr(fsdp_module, "_require_torch", lambda: TorchStub())
+
+    result = backend.save_checkpoint(
+        CheckpointManager(str(Path(tempfile.gettempdir()) / "fsdp-rank1-no-write")),
+        step=3,
+        client_state={"global_step": 3},
+    )
+
+    assert saved_paths == []
+    assert result["files"] == []
+    assert result["metadata"]["rank"] == 1
+
+
 def test_checkpoint_controller_rank0_manifest_lists_expected_fsdp_shards():
     from parascale.runtime.training.checkpointing import CheckpointController
 

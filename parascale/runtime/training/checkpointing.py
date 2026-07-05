@@ -43,7 +43,9 @@ class CheckpointController:
         shard_mode = bool(
             backend_name == "fsdp" and state_dict_type in {"sharded", "local"}
         )
-        all_rank_backend_save = backend_name == "deepspeed"
+        all_rank_backend_save = backend_name == "deepspeed" or (
+            backend_name == "fsdp" and state_dict_type == "full"
+        )
         if rank != 0 and not shard_mode and not all_rank_backend_save:
             self._barrier()
             return {
