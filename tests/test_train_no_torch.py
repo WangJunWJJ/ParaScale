@@ -807,6 +807,63 @@ def test_train_engine_exposes_checkpoint_collective_rank_and_barrier():
     assert collective.history[-1]["op"] == "barrier"
 
 
+def test_train_engine_initialize_preserves_injected_collective_rank(monkeypatch):
+    from parascale.core import MockCollectiveBackend
+    from parascale.runtime.training import TrainEngine
+
+    monkeypatch.delenv("RANK", raising=False)
+    collective = MockCollectiveBackend(world_size=2, rank=1)
+    plan = type("Plan", (), {"dp_size": 2, "tp_size": 1, "pp_size": 1})()
+    engine = TrainEngine(
+        config=object(),
+        collective=collective,
+        strategy_plan=plan,
+        training_backend=object(),
+    )
+
+    engine.initialize()
+
+    assert collective.rank == 1
+    assert collective.history[-1]["kwargs"]["rank"] == 1
+
+
+def test_train_engine_initialize_uses_launcher_rank(monkeypatch):
+    from parascale.core import MockCollectiveBackend
+    from parascale.runtime.training import TrainEngine
+
+    monkeypatch.setenv("RANK", "3")
+    collective = MockCollectiveBackend(world_size=4, rank=1)
+    plan = type("Plan", (), {"dp_size": 4, "tp_size": 1, "pp_size": 1})()
+    engine = TrainEngine(
+        config=object(),
+        collective=collective,
+        strategy_plan=plan,
+        training_backend=object(),
+    )
+
+    engine.initialize()
+
+    assert collective.rank == 3
+    assert collective.history[-1]["kwargs"]["rank"] == 3
+
+
+def test_train_engine_initialize_rejects_invalid_launcher_rank(monkeypatch):
+    from parascale.core import MockCollectiveBackend
+    from parascale.runtime.training import TrainEngine
+
+    monkeypatch.setenv("RANK", "not-an-integer")
+    plan = type("Plan", (), {"dp_size": 2, "tp_size": 1, "pp_size": 1})()
+    engine = TrainEngine(
+        config=object(),
+        collective=MockCollectiveBackend(world_size=2, rank=1),
+        strategy_plan=plan,
+        training_backend=object(),
+    )
+
+    with pytest.raises(ValueError):
+        engine.initialize()
+
+
 def test_nonzero_rank_checkpoint_result_skips_manifest_validation():
     from parascale.runtime.orchestrator import _validate_final_checkpoint_result
 

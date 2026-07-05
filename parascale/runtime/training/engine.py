@@ -81,7 +81,10 @@ class TrainEngine:
     def initialize(self) -> "TrainEngine":
         plan = self.plan()
         world_size = max(1, plan.dp_size * plan.tp_size * plan.pp_size)
-        self.collective.init_process_group(world_size=world_size, rank=0)
+        self.collective.init_process_group(
+            world_size=world_size,
+            rank=self._distributed_rank(),
+        )
         if self.training_backend is None:
             self.training_backend = create_runtime_training_backend(
                 config=self.config, local_rank=self._local_rank()
@@ -288,6 +291,8 @@ class TrainEngine:
         dist = self._initialized_torch_distributed()
         if dist is not None:
             return int(dist.get_rank())
+        if "RANK" in os.environ:
+            return int(os.environ["RANK"])
         return int(getattr(self.collective, "rank", 0) or 0)
 
     def _distributed_world_size(self) -> int:
