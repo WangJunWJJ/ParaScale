@@ -64,9 +64,9 @@ class QuantizedState:
 
     def update(self, new_tensor: torch.Tensor) -> None:
         new_state = QuantizedState(new_tensor, self.group_size)
-        self.quantized_data = new_state.quantized_data
-        self.scale = new_state.scale
-        self.zero_point = new_state.zero_point
+        self.quantized_data.copy_(new_state.quantized_data)
+        self.scale.copy_(new_state.scale)
+        self.zero_point.copy_(new_state.zero_point)
         self.shape = new_state.shape
 
     def memory_usage(self) -> int:
@@ -426,20 +426,18 @@ class FourBitAdamW(_PortableFourBitOptimizer, optim.Optimizer):
                 )
                 p.data.addcdiv_(exp_avg, denom, value=-step_size)
                 if self.compensate_quant_error:
-                    new_exp_avg_q = QuantizedState(exp_avg, self.group_size)
-                    new_exp_avg_sq_q = QuantizedState(exp_avg_sq, self.group_size)
+                    exp_avg_q.update(exp_avg)
+                    exp_avg_sq_q.update(exp_avg_sq)
                     error_dtype = self._error_dtype(p.data)
-                    state["exp_avg_error"] = (exp_avg - new_exp_avg_q.dequantize()).to(
+                    state["exp_avg_error"] = (exp_avg - exp_avg_q.dequantize()).to(
                         error_dtype
                     )
                     state["exp_avg_sq_error"] = (
-                        exp_avg_sq - new_exp_avg_sq_q.dequantize()
+                        exp_avg_sq - exp_avg_sq_q.dequantize()
                     ).to(error_dtype)
-                    state["exp_avg"] = new_exp_avg_q
-                    state["exp_avg_sq"] = new_exp_avg_sq_q
                 else:
-                    state["exp_avg"] = QuantizedState(exp_avg, self.group_size)
-                    state["exp_avg_sq"] = QuantizedState(exp_avg_sq, self.group_size)
+                    exp_avg_q.update(exp_avg)
+                    exp_avg_sq_q.update(exp_avg_sq)
         return loss
 
     def get_memory_stats(self) -> Dict[str, float]:
@@ -547,15 +545,14 @@ class FourBitSGD(_PortableFourBitOptimizer, optim.Optimizer):
                     grad = buf
                 p.data.add_(grad, alpha=-group["lr"])
                 if self.compensate_quant_error:
-                    new_buf_q = QuantizedState(buf, self.group_size)
-                    param_state["momentum_error"] = (buf - new_buf_q.dequantize()).to(
+                    momentum_buffer_q.update(buf)
+                    param_state["momentum_error"] = (
+                        buf - momentum_buffer_q.dequantize()
+                    ).to(
                         self._error_dtype(p.data)
                     )
-                    param_state["momentum_buffer"] = new_buf_q
                 else:
-                    param_state["momentum_buffer"] = QuantizedState(
-                        buf, self.group_size
-                    )
+                    momentum_buffer_q.update(buf)
         return loss
 
     def get_memory_stats(self) -> Dict[str, float]:

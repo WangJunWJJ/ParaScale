@@ -61,6 +61,23 @@ def test_quantized_state_pack_and_unpack_do_not_use_python_range(monkeypatch):
     assert restored.shape == (256,)
 
 
+def test_four_bit_adamw_reuses_persistent_quantized_state_buffers():
+    model = nn.Linear(4, 2)
+    optimizer = FourBitAdamW(model.parameters(), lr=0.01)
+    parameter = next(model.parameters())
+
+    model(torch.ones(2, 4)).sum().backward()
+    optimizer.step()
+    state = optimizer.state[parameter]["exp_avg"]
+    data_ptr = state.quantized_data.data_ptr()
+
+    model(torch.ones(2, 4)).sum().backward()
+    optimizer.step()
+
+    assert optimizer.state[parameter]["exp_avg"] is state
+    assert state.quantized_data.data_ptr() == data_ptr
+
+
 class SimpleModel(nn.Module):
 
     def __init__(self, input_dim=10, hidden_dim=20, output_dim=5):
