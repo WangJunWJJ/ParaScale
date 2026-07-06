@@ -88,6 +88,20 @@ def test_quantized_state_update_returns_error_without_redecode():
     torch.testing.assert_close(error, updated - state.dequantize())
 
 
+def test_block_scaled_fp16_residual_preserves_tiny_second_moment_error():
+    torch.manual_seed(7)
+    updated = torch.rand(256) * 1e-7
+    state = QuantizedState(torch.zeros_like(updated), group_size=128)
+
+    normalized = state.update_and_normalized_error(updated).half()
+    restored_error = state.denormalize_error(normalized.float())
+    absolute_error = updated - state.dequantize()
+
+    assert torch.count_nonzero(absolute_error.half()) == 0
+    assert torch.count_nonzero(normalized) > 0
+    torch.testing.assert_close(restored_error, absolute_error, rtol=1e-3, atol=1e-12)
+
+
 class SimpleModel(nn.Module):
 
     def __init__(self, input_dim=10, hidden_dim=20, output_dim=5):

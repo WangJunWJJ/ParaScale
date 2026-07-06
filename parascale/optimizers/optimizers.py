@@ -90,6 +90,21 @@ class QuantizedState:
         self.shape = new_tensor.shape
         return new_tensor - reconstructed.view(new_tensor.shape)
 
+    def update_and_normalized_error(self, new_tensor: torch.Tensor) -> torch.Tensor:
+        absolute_error = self.update_and_error(new_tensor)
+        scale = self._expanded_scale(new_tensor.dtype)
+        return torch.where(scale != 0, absolute_error / scale, absolute_error)
+
+    def denormalize_error(self, normalized_error: torch.Tensor) -> torch.Tensor:
+        return normalized_error * self._expanded_scale(normalized_error.dtype)
+
+    def _expanded_scale(self, dtype: torch.dtype) -> torch.Tensor:
+        return (
+            self.scale.to(dtype)
+            .repeat_interleave(self.group_size)[: math.prod(self.shape)]
+            .view(self.shape)
+        )
+
     def memory_usage(self) -> int:
         return (
             self.quantized_data.numel() * 1
@@ -176,6 +191,7 @@ class _PortableFourBitOptimizer:
             "group_size": int(self.group_size),
             "compensate_quant_error": bool(self.compensate_quant_error),
             "error_compensation_dtype": self.error_compensation_dtype,
+            "error_compensation_mode": self.error_compensation_mode,
         }
         return state
 
@@ -185,6 +201,9 @@ class _PortableFourBitOptimizer:
         version = int(metadata.get("state_schema_version", 1) or 1)
         if version != 1:
             raise ValueError(f"unsupported 4-bit optimizer state schema: {version}")
+        self.error_compensation_mode = str(
+            metadata.get("error_compensation_mode", "absolute") or "absolute"
+        )
         device = next(
             parameter.device
             for group in self.param_groups
@@ -384,6 +403,7 @@ class FourBitAdamW(_PortableFourBitOptimizer, optim.Optimizer):
         group_size: int = 128,
         compensate_quant_error: bool = True,
         error_compensation_dtype: Optional[str] = None,
+        error_compensation_mode: str = "absolute",
     ):
         if error_compensation_dtype not in (None, "fp16", "fp32"):
             raise ValueError("error_compensation_dtype must be None, 'fp16' or 'fp32'")
@@ -392,6 +412,7 @@ class FourBitAdamW(_PortableFourBitOptimizer, optim.Optimizer):
         self.group_size = group_size
         self.compensate_quant_error = compensate_quant_error
         self.error_compensation_dtype = error_compensation_dtype
+        self.error_compensation_mode = error_compensation_mode
 
     def _error_dtype(self, tensor: torch.Tensor) -> torch.dtype:
         if self.error_compensation_dtype == "fp16":
@@ -399,6 +420,23 @@ class FourBitAdamW(_PortableFourBitOptimizer, optim.Optimizer):
         if self.error_compensation_dtype == "fp32":
             return torch.float32
         return tensor.dtype
+
+    def _restore_error(
+        self, state: QuantizedState, error: torch.Tensor, dtype: torch.dtype
+    ) -> torch.Tensor:
+        restored = error.to(dtype)
+        if self.error_compensation_mode == "block_scaled":
+            restored = state.denormalize_error(restored)
+        return restored
+
+    def _capture_error(
+        self, state: QuantizedState, tensor: torch.Tensor
+    ) -> torch.Tensor:
+        if self.error_compensation_mode == "block_scaled":
+            error = state.update_and_normalized_error(tensor)
+        else:
+            error = state.update_and_error(tensor)
+        return error.to(self._error_dtype(tensor))
 
     def step(self, closure=None):
         loss = None
@@ -431,9 +469,13 @@ class FourBitAdamW(_PortableFourBitOptimizer, optim.Optimizer):
                 exp_avg = exp_avg_q.dequantize()
                 exp_avg_sq = exp_avg_sq_q.dequantize()
                 if self.compensate_quant_error:
-                    exp_avg = exp_avg + state["exp_avg_error"].to(exp_avg.dtype)
-                    exp_avg_sq = exp_avg_sq + state["exp_avg_sq_error"].to(
-                        exp_avg_sq.dtype
+                    exp_avg = exp_avg + self._restore_error(
+                        exp_avg_q, state["exp_avg_error"], exp_avg.dtype
+                    )
+                    exp_avg_sq = exp_avg_sq + self._restore_error(
+                        exp_avg_sq_q,
+                        state["exp_avg_sq_error"],
+                        exp_avg_sq.dtype,
                     )
                 if group["weight_decay"] != 0:
                     p.data.mul_(1 - group["lr"] * group["weight_decay"])
@@ -447,13 +489,10 @@ class FourBitAdamW(_PortableFourBitOptimizer, optim.Optimizer):
                 )
                 p.data.addcdiv_(exp_avg, denom, value=-step_size)
                 if self.compensate_quant_error:
-                    error_dtype = self._error_dtype(p.data)
-                    state["exp_avg_error"] = exp_avg_q.update_and_error(exp_avg).to(
-                        error_dtype
+                    state["exp_avg_error"] = self._capture_error(exp_avg_q, exp_avg)
+                    state["exp_avg_sq_error"] = self._capture_error(
+                        exp_avg_sq_q, exp_avg_sq
                     )
-                    state["exp_avg_sq_error"] = exp_avg_sq_q.update_and_error(
-                        exp_avg_sq
-                    ).to(error_dtype)
                 else:
                     exp_avg_q.update(exp_avg)
                     exp_avg_sq_q.update(exp_avg_sq)
@@ -504,6 +543,7 @@ class FourBitSGD(_PortableFourBitOptimizer, optim.Optimizer):
         group_size: int = 128,
         compensate_quant_error: bool = True,
         error_compensation_dtype: Optional[str] = None,
+        error_compensation_mode: str = "absolute",
     ):
         if nesterov and (momentum <= 0 or dampening != 0):
             raise ValueError("Nesterov momentum requires a momentum and zero dampening")
@@ -520,6 +560,7 @@ class FourBitSGD(_PortableFourBitOptimizer, optim.Optimizer):
         self.group_size = group_size
         self.compensate_quant_error = compensate_quant_error
         self.error_compensation_dtype = error_compensation_dtype
+        self.error_compensation_mode = error_compensation_mode
 
     def _error_dtype(self, tensor: torch.Tensor) -> torch.dtype:
         if self.error_compensation_dtype == "fp16":
@@ -527,6 +568,23 @@ class FourBitSGD(_PortableFourBitOptimizer, optim.Optimizer):
         if self.error_compensation_dtype == "fp32":
             return torch.float32
         return tensor.dtype
+
+    def _restore_error(
+        self, state: QuantizedState, error: torch.Tensor, dtype: torch.dtype
+    ) -> torch.Tensor:
+        restored = error.to(dtype)
+        if self.error_compensation_mode == "block_scaled":
+            restored = state.denormalize_error(restored)
+        return restored
+
+    def _capture_error(
+        self, state: QuantizedState, tensor: torch.Tensor
+    ) -> torch.Tensor:
+        if self.error_compensation_mode == "block_scaled":
+            error = state.update_and_normalized_error(tensor)
+        else:
+            error = state.update_and_error(tensor)
+        return error.to(self._error_dtype(tensor))
 
     def step(self, closure=None):
         loss = None
@@ -556,7 +614,11 @@ class FourBitSGD(_PortableFourBitOptimizer, optim.Optimizer):
                 momentum_buffer_q = param_state["momentum_buffer"]
                 buf = momentum_buffer_q.dequantize()
                 if self.compensate_quant_error:
-                    buf = buf + param_state["momentum_error"].to(buf.dtype)
+                    buf = buf + self._restore_error(
+                        momentum_buffer_q,
+                        param_state["momentum_error"],
+                        buf.dtype,
+                    )
                 buf.mul_(momentum).add_(grad, alpha=1 - dampening)
                 if nesterov:
                     grad = grad.add(buf, alpha=momentum)
@@ -564,10 +626,8 @@ class FourBitSGD(_PortableFourBitOptimizer, optim.Optimizer):
                     grad = buf
                 p.data.add_(grad, alpha=-group["lr"])
                 if self.compensate_quant_error:
-                    param_state["momentum_error"] = momentum_buffer_q.update_and_error(
-                        buf
-                    ).to(
-                        self._error_dtype(p.data)
+                    param_state["momentum_error"] = self._capture_error(
+                        momentum_buffer_q, buf
                     )
                 else:
                     momentum_buffer_q.update(buf)

@@ -21,7 +21,8 @@
     "momentum": 0.9,
     "group_size": 128,
     "compensate_quant_error": true,
-    "error_compensation_dtype": "fp32"
+    "error_compensation_dtype": "fp16",
+    "error_compensation_mode": "block_scaled"
   },
   "model_profile": {
     "total_params": 10000,

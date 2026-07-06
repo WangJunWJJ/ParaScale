@@ -40,6 +40,7 @@ def build_optimizer(model: Any, config_data: Dict[str, Any]) -> Any:
             group_size=spec.group_size,
             compensate_quant_error=spec.compensate_quant_error,
             error_compensation_dtype=spec.error_compensation_dtype,
+            error_compensation_mode=spec.error_compensation_mode,
         )
     else:
         optimizer = FourBitSGD(
@@ -52,6 +53,7 @@ def build_optimizer(model: Any, config_data: Dict[str, Any]) -> Any:
             group_size=spec.group_size,
             compensate_quant_error=spec.compensate_quant_error,
             error_compensation_dtype=spec.error_compensation_dtype,
+            error_compensation_mode=spec.error_compensation_mode,
         )
     metadata = spec.to_metadata()
     metadata["trainable_params"] = sum(parameter.numel() for parameter in params)

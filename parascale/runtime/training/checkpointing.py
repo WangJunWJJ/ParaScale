@@ -227,7 +227,16 @@ class CheckpointController:
             "group_size",
             "compensate_quant_error",
             "error_compensation_dtype",
+            "error_compensation_mode",
         ):
+            if key == "error_compensation_mode" and key not in saved:
+                if current.get(key, "absolute") == "absolute":
+                    continue
+                raise ValueError(
+                    "checkpoint optimizer metadata mismatch for "
+                    "error_compensation_mode: saved='absolute', "
+                    f"current={current.get(key)!r}"
+                )
             if saved.get(key) != current.get(key):
                 raise ValueError(
                     "checkpoint optimizer metadata mismatch for "

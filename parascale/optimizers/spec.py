@@ -17,6 +17,7 @@ _COMMON_KEYS = {
     "group_size",
     "compensate_quant_error",
     "error_compensation_dtype",
+    "error_compensation_mode",
 }
 _ALLOWED_KEYS = {
     "adamw": {"type", "lr", "betas", "eps", "weight_decay"},
@@ -40,6 +41,7 @@ class OptimizerSpec:
     group_size: int = 128
     compensate_quant_error: bool = True
     error_compensation_dtype: str | None = None
+    error_compensation_mode: str = "absolute"
 
     @classmethod
     def from_config(cls, config_data: Dict[str, Any]) -> "OptimizerSpec":
@@ -67,6 +69,18 @@ class OptimizerSpec:
             raise ValueError(
                 "optimizer.error_compensation_dtype must be fp16, fp32, or null"
             )
+        compensation_mode = str(
+            optimizer.get("error_compensation_mode", "absolute") or "absolute"
+        )
+        if compensation_mode not in {"absolute", "block_scaled"}:
+            raise ValueError(
+                "optimizer.error_compensation_mode must be absolute or block_scaled"
+            )
+        if compensation_mode == "block_scaled" and compensation_dtype != "fp16":
+            raise ValueError(
+                "optimizer.error_compensation_mode=block_scaled requires "
+                "error_compensation_dtype=fp16"
+            )
         return cls(
             type=optimizer_type,
             lr=float(optimizer.get("lr", 0.001)),
@@ -81,6 +95,7 @@ class OptimizerSpec:
                 optimizer.get("compensate_quant_error", True)
             ),
             error_compensation_dtype=compensation_dtype,
+            error_compensation_mode=compensation_mode,
         )
 
     @property
@@ -110,6 +125,9 @@ class OptimizerSpec:
             ),
             "error_compensation_dtype": (
                 self.error_compensation_dtype if self.is_four_bit else None
+            ),
+            "error_compensation_mode": (
+                self.error_compensation_mode if self.is_four_bit else None
             ),
         }
 

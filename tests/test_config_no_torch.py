@@ -45,6 +45,23 @@ def test_optimizer_spec_rejects_fields_for_another_optimizer_type():
         )
 
 
+def test_optimizer_spec_accepts_block_scaled_fp16_residuals():
+    from parascale.optimizers.spec import OptimizerSpec
+
+    spec = OptimizerSpec.from_config(
+        {
+            "optimizer": {
+                "type": "four_bit_adamw",
+                "error_compensation_dtype": "fp16",
+                "error_compensation_mode": "block_scaled",
+            }
+        }
+    )
+
+    assert spec.error_compensation_mode == "block_scaled"
+    assert spec.to_metadata()["error_compensation_mode"] == "block_scaled"
+
+
 @pytest.mark.parametrize("backend", ["fsdp", "deepspeed"])
 def test_four_bit_optimizer_spec_rejects_sharded_backends(backend):
     from parascale.optimizers.spec import OptimizerSpec
