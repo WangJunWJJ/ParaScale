@@ -23,6 +23,15 @@ class QuantizedState:
         self.shape = tensor.shape
         self.group_size = group_size
         self.device = tensor.device
+        quantized, scale, zero_point = self._quantize(tensor, group_size)
+        self.scale = scale
+        self.zero_point = zero_point
+        self.quantized_data = self._pack(quantized)
+
+    @staticmethod
+    def _quantize(
+        tensor: torch.Tensor, group_size: int
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         flat_tensor = tensor.flatten()
         num_elements = flat_tensor.numel()
         num_groups = (num_elements + group_size - 1) // group_size
@@ -37,18 +46,19 @@ class QuantizedState:
         grouped = flat_tensor.view(num_groups, group_size)
         group_min = grouped.min(dim=1, keepdim=True)[0]
         group_max = grouped.max(dim=1, keepdim=True)[0]
-        self.scale = (group_max - group_min) / 15.0
-        self.scale = self.scale.squeeze(1)
-        self.zero_point = group_min.squeeze(1)
+        scale = ((group_max - group_min) / 15.0).squeeze(1)
+        zero_point = group_min.squeeze(1)
         quantized = (
             ((grouped - group_min) / (group_max - group_min + 1e-08) * 15)
             .round()
             .clamp(0, 15)
             .to(torch.uint8)
         )
-        self.quantized_data = (
-            quantized[:, 0::2] << 4 | quantized[:, 1::2]
-        ).reshape(-1)
+        return quantized, scale, zero_point
+
+    @staticmethod
+    def _pack(quantized: torch.Tensor) -> torch.Tensor:
+        return (quantized[:, 0::2] << 4 | quantized[:, 1::2]).reshape(-1)
 
     def dequantize(self) -> torch.Tensor:
         num_groups = len(self.scale)
@@ -63,11 +73,22 @@ class QuantizedState:
         return flat_result.view(self.shape)
 
     def update(self, new_tensor: torch.Tensor) -> None:
-        new_state = QuantizedState(new_tensor, self.group_size)
-        self.quantized_data.copy_(new_state.quantized_data)
-        self.scale.copy_(new_state.scale)
-        self.zero_point.copy_(new_state.zero_point)
-        self.shape = new_state.shape
+        quantized, scale, zero_point = self._quantize(new_tensor, self.group_size)
+        self.quantized_data.copy_(self._pack(quantized))
+        self.scale.copy_(scale)
+        self.zero_point.copy_(zero_point)
+        self.shape = new_tensor.shape
+
+    def update_and_error(self, new_tensor: torch.Tensor) -> torch.Tensor:
+        quantized, scale, zero_point = self._quantize(new_tensor, self.group_size)
+        reconstructed = (
+            quantized.float() * scale.unsqueeze(1) + zero_point.unsqueeze(1)
+        ).flatten()[: new_tensor.numel()]
+        self.quantized_data.copy_(self._pack(quantized))
+        self.scale.copy_(scale)
+        self.zero_point.copy_(zero_point)
+        self.shape = new_tensor.shape
+        return new_tensor - reconstructed.view(new_tensor.shape)
 
     def memory_usage(self) -> int:
         return (
@@ -426,14 +447,12 @@ class FourBitAdamW(_PortableFourBitOptimizer, optim.Optimizer):
                 )
                 p.data.addcdiv_(exp_avg, denom, value=-step_size)
                 if self.compensate_quant_error:
-                    exp_avg_q.update(exp_avg)
-                    exp_avg_sq_q.update(exp_avg_sq)
                     error_dtype = self._error_dtype(p.data)
-                    state["exp_avg_error"] = (exp_avg - exp_avg_q.dequantize()).to(
+                    state["exp_avg_error"] = exp_avg_q.update_and_error(exp_avg).to(
                         error_dtype
                     )
-                    state["exp_avg_sq_error"] = (
-                        exp_avg_sq - exp_avg_sq_q.dequantize()
+                    state["exp_avg_sq_error"] = exp_avg_sq_q.update_and_error(
+                        exp_avg_sq
                     ).to(error_dtype)
                 else:
                     exp_avg_q.update(exp_avg)
@@ -545,9 +564,8 @@ class FourBitSGD(_PortableFourBitOptimizer, optim.Optimizer):
                     grad = buf
                 p.data.add_(grad, alpha=-group["lr"])
                 if self.compensate_quant_error:
-                    momentum_buffer_q.update(buf)
-                    param_state["momentum_error"] = (
-                        buf - momentum_buffer_q.dequantize()
+                    param_state["momentum_error"] = momentum_buffer_q.update_and_error(
+                        buf
                     ).to(
                         self._error_dtype(p.data)
                     )

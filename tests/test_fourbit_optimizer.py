@@ -78,6 +78,16 @@ def test_four_bit_adamw_reuses_persistent_quantized_state_buffers():
     assert state.quantized_data.data_ptr() == data_ptr
 
 
+def test_quantized_state_update_returns_error_without_redecode():
+    original = torch.randn(256)
+    updated = torch.randn(256)
+    state = QuantizedState(original, group_size=128)
+
+    error = state.update_and_error(updated)
+
+    torch.testing.assert_close(error, updated - state.dequantize())
+
+
 class SimpleModel(nn.Module):
 
     def __init__(self, input_dim=10, hidden_dim=20, output_dim=5):
