@@ -588,6 +588,25 @@ def test_checkpoint_resume_replays_to_consumed_data_position():
     assert resumed_seen == ["c"]
 
 
+def test_checkpoint_replay_resume_rejects_insufficient_finite_data_window():
+    restored = TrainEngine(
+        config=ParaScaleConfig(training_backend="fsdp"),
+        training_backend=_BackendSpecificCheckpoint("fsdp"),
+    )
+    restored.state.initialized = True
+    restored.state.data_state = {
+        "resume_mode": "replay_skip",
+        "consumed_micro_batches": 2,
+    }
+
+    with pytest.raises(ValueError, match="requires 4 micro-batches"):
+        restored.fit(
+            [{"sample_id": "a"}, {"sample_id": "b"}, {"sample_id": "c"}],
+            max_steps=2,
+            step_fn=lambda _batch: None,
+        )
+
+
 def test_checkpoint_resume_restores_stateful_dataloader_without_replay():
     class StatefulLoader:
         def __init__(self, batches):

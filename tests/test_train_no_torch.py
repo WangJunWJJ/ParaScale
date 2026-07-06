@@ -6,6 +6,48 @@
 import pytest
 
 
+def test_replay_resume_expands_only_component_training_window():
+    from parascale.checkpoint import CheckpointManifest
+    from parascale.runtime.orchestrator import _resume_component_config
+
+    config = {
+        "training": {"max_steps": 2, "workload": "synthetic_regression"},
+        "data": {"batch_size": 4},
+    }
+    manifest = CheckpointManifest(
+        step=3,
+        data_state={
+            "resume_mode": "replay_skip",
+            "consumed_micro_batches": 3,
+        },
+    )
+
+    component_config = _resume_component_config(config, manifest, max_steps=2)
+
+    assert component_config is not config
+    assert component_config["training"]["max_steps"] == 5
+    assert config["training"]["max_steps"] == 2
+
+
+def test_stateful_resume_keeps_original_component_training_window():
+    from parascale.checkpoint import CheckpointManifest
+    from parascale.runtime.orchestrator import _resume_component_config
+
+    config = {"training": {"max_steps": 2}}
+    manifest = CheckpointManifest(
+        step=3,
+        data_state={
+            "resume_mode": "state_dict",
+            "consumed_micro_batches": 3,
+            "state": {"cursor": 3},
+        },
+    )
+
+    component_config = _resume_component_config(config, manifest, max_steps=2)
+
+    assert component_config is config
+
+
 def test_cuda_stream_prefetcher_moves_nested_batches_without_torch():
     from parascale.runtime.training.prefetch import (
         CudaStreamPrefetchIterator,
@@ -792,12 +834,14 @@ def test_accumulation_controller_rejects_step_fn_without_accumulation_protocol()
         raise AssertionError("step_fn with accumulation must fail fast")
 
 
-def test_train_engine_exposes_checkpoint_collective_rank_and_barrier():
+def test_train_engine_exposes_checkpoint_collective_rank_and_barrier(monkeypatch):
     from parascale.core import MockCollectiveBackend
     from parascale.runtime.training import TrainEngine
 
     collective = MockCollectiveBackend(initialized=True, world_size=2, rank=1)
     engine = TrainEngine(config=object(), collective=collective)
+    monkeypatch.setattr(engine, "_initialized_torch_distributed", lambda: None)
+    monkeypatch.delenv("RANK", raising=False)
 
     assert engine._distributed_rank() == 1
     assert engine._distributed_world_size() == 2

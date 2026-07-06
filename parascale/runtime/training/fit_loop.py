@@ -108,6 +108,13 @@ class FitLoopRunner:
         if self.engine._backend_name() == "deepspeed":
             accumulation_steps = 1
         required = int(max_steps) * accumulation_steps
+        state = getattr(self.engine, "state", None)
+        data_state = dict(getattr(state, "data_state", {}) or {})
+        if str(data_state.get("resume_mode", "")) == "replay_skip":
+            required += max(
+                0,
+                int(data_state.get("consumed_micro_batches", 0) or 0),
+            )
         if int(available) < required:
             raise ValueError(
                 "Training window requires "
