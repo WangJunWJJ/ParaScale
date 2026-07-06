@@ -420,6 +420,245 @@ def test_train_engine_delegates_backend_specific_checkpoints_without_torch():
         assert restored.metadata["backend_state_loaded"] is True
 
 
+def test_checkpoint_resume_passes_manifest_fsdp_state_dict_type():
+    class Backend:
+        name = "fsdp"
+
+        def __init__(self):
+            self.loaded = None
+
+        def load_checkpoint(self, _manager, step=None, **kwargs):
+            self.loaded = {"step": step, **kwargs}
+            return {}
+
+    root = Path(tempfile.gettempdir()) / "parascale-test-runs" / "manifest_format"
+    manager = CheckpointManager(str(root))
+    payload = manager.payload_path(5, "rank-00000/fsdp_state.pt")
+    payload.parent.mkdir(parents=True, exist_ok=True)
+    payload.write_bytes(b"sharded-state")
+    manager.write_manifest(
+        CheckpointManifest(
+            step=5,
+            backend="fsdp",
+            files=[
+                {
+                    "path": "rank-00000/fsdp_state.pt",
+                    "role": "fsdp_state",
+                    "state_dict_type": "sharded",
+                    "rank": 0,
+                }
+            ],
+            metadata={"rank_count": 1},
+        )
+    )
+    backend = Backend()
+    train = TrainEngine(
+        config=ParaScaleConfig(
+            training_backend="fsdp",
+            fsdp_state_dict_type="full",
+        ),
+        training_backend=backend,
+    )
+
+    train.load_checkpoint(manager, 5)
+
+    assert backend.loaded == {"step": 5, "state_dict_type": "sharded"}
+
+
+def test_fsdp_load_checkpoint_uses_manifest_format_for_payload_path(
+    monkeypatch,
+):
+    import parascale.runtime.backends.fsdp as fsdp_module
+    from parascale.runtime.backends.fsdp import FSDPTrainingBackend
+
+    root = Path(tempfile.gettempdir()) / "parascale-test-runs" / "fsdp_load_path"
+    manager = CheckpointManager(str(root))
+    payload_path = manager.payload_path(3, "rank-00001/fsdp_state.pt")
+    payload_path.parent.mkdir(parents=True, exist_ok=True)
+    payload_path.write_bytes(b"payload")
+    loaded_paths = []
+
+    class TorchStub:
+        @staticmethod
+        def load(path, **_kwargs):
+            loaded_paths.append(path)
+            return {"backend_state": {}, "client_state": {}}
+
+    backend = FSDPTrainingBackend(
+        config=ParaScaleConfig(
+            training_backend="fsdp",
+            fsdp_state_dict_type="full",
+        ),
+        local_rank=1,
+    )
+    backend._rank = lambda: 1
+    monkeypatch.setattr(fsdp_module, "_require_torch", lambda: TorchStub())
+
+    backend.load_checkpoint(manager, step=3, state_dict_type="sharded")
+
+    assert loaded_paths == [payload_path]
+
+
+def test_fsdp_load_state_dict_uses_saved_format_context(monkeypatch):
+    from contextlib import contextmanager
+
+    from parascale.runtime.backends.fsdp import FSDPTrainingBackend
+
+    events = []
+
+    class Model:
+        def load_state_dict(self, state):
+            events.append(("load", state))
+
+    @contextmanager
+    def state_dict_context(state_type, *, rank0_only):
+        events.append(("enter", state_type, rank0_only))
+        yield
+        events.append(("exit", state_type, rank0_only))
+
+    backend = FSDPTrainingBackend(
+        model=Model(),
+        config=ParaScaleConfig(training_backend="fsdp"),
+    )
+    monkeypatch.setattr(
+        backend,
+        "_fsdp_state_dict_context",
+        state_dict_context,
+        raising=False,
+    )
+
+    backend.load_state_dict(
+        {
+            "model_state_dict": {"weight": "shard"},
+            "state_dict_type": "sharded",
+        }
+    )
+
+    assert events == [
+        ("enter", "sharded", False),
+        ("load", {"weight": "shard"}),
+        ("exit", "sharded", False),
+    ]
+
+
+def test_checkpoint_resume_replays_to_consumed_data_position():
+    root = Path(tempfile.gettempdir()) / "parascale-test-runs" / "data_replay_resume"
+    manager = CheckpointManager(str(root))
+    batches = [
+        {"sample_id": "a", "num_images": 2},
+        {"sample_id": "b", "num_images": 2},
+        {"sample_id": "c", "num_images": 2},
+    ]
+    backend = _BackendSpecificCheckpoint("fsdp")
+    train = TrainEngine(
+        config=ParaScaleConfig(training_backend="fsdp"),
+        training_backend=backend,
+    )
+    train.state.initialized = True
+    seen = []
+    train.fit(
+        batches,
+        max_steps=2,
+        step_fn=lambda batch: seen.append(batch["sample_id"]),
+        checkpoint_manager=manager,
+        checkpoint_interval=2,
+    )
+
+    manifest = manager.read_manifest(2)
+
+    assert seen == ["a", "b"]
+    assert manifest.consumed_samples == 4
+    assert manifest.data_state["consumed_micro_batches"] == 2
+    assert manifest.data_state["resume_mode"] == "replay_skip"
+
+    restored = TrainEngine(
+        config=ParaScaleConfig(training_backend="fsdp"),
+        training_backend=_BackendSpecificCheckpoint("fsdp"),
+    )
+    restored.state.initialized = True
+    restored.load_checkpoint(manager, 2)
+    resumed_seen = []
+    with pytest.warns(RuntimeWarning, match="replaying and skipping 2"):
+        restored.fit(
+            batches,
+            max_steps=1,
+            step_fn=lambda batch: resumed_seen.append(batch["sample_id"]),
+        )
+
+    assert resumed_seen == ["c"]
+
+
+def test_checkpoint_resume_restores_stateful_dataloader_without_replay():
+    class StatefulLoader:
+        def __init__(self, batches):
+            self.batches = list(batches)
+            self.cursor = 0
+            self.loaded_state = None
+
+        def __iter__(self):
+            while self.cursor < len(self.batches):
+                batch = self.batches[self.cursor]
+                self.cursor += 1
+                yield batch
+
+        def __len__(self):
+            return len(self.batches) - self.cursor
+
+        def state_dict(self):
+            return {"cursor": self.cursor}
+
+        def load_state_dict(self, state):
+            self.loaded_state = dict(state)
+            self.cursor = int(state["cursor"])
+
+    root = Path(tempfile.gettempdir()) / "parascale-test-runs" / "data_state_resume"
+    manager = CheckpointManager(str(root))
+    batches = [
+        {"sample_id": "a", "num_images": 1},
+        {"sample_id": "b", "num_images": 1},
+        {"sample_id": "c", "num_images": 1},
+    ]
+    loader = StatefulLoader(batches)
+    train = TrainEngine(
+        config=ParaScaleConfig(training_backend="fsdp"),
+        training_backend=_BackendSpecificCheckpoint("fsdp"),
+    )
+    train.state.initialized = True
+    train.fit(
+        loader,
+        max_steps=2,
+        step_fn=lambda _batch: None,
+        checkpoint_manager=manager,
+        checkpoint_interval=2,
+    )
+
+    manifest = manager.read_manifest(2)
+
+    assert manifest.data_state == {
+        "consumed_micro_batches": 2,
+        "resume_mode": "state_dict",
+        "state": {"cursor": 2},
+        "target": "dataloader",
+    }
+
+    restored_loader = StatefulLoader(batches)
+    restored = TrainEngine(
+        config=ParaScaleConfig(training_backend="fsdp"),
+        training_backend=_BackendSpecificCheckpoint("fsdp"),
+    )
+    restored.state.initialized = True
+    restored.load_checkpoint(manager, 2)
+    resumed_seen = []
+    restored.fit(
+        restored_loader,
+        max_steps=1,
+        step_fn=lambda batch: resumed_seen.append(batch["sample_id"]),
+    )
+
+    assert restored_loader.loaded_state == {"cursor": 2}
+    assert resumed_seen == ["c"]
+
+
 def test_checkpoint_manifest_round_trip():
     root = Path(tempfile.gettempdir()) / "parascale-test-runs" / "checkpoint_manifest"
     manager = CheckpointManager(str(root))
@@ -759,6 +998,102 @@ def test_checkpoint_controller_allows_nonzero_rank_fsdp_shard_without_manifest()
     assert result["skipped"] is True
     assert result["files"][0]["path"] == "rank-00001/fsdp_state.pt"
     assert engine.barrier_called is True
+
+
+def test_checkpoint_controller_full_fsdp_save_runs_on_nonzero_rank():
+    from parascale.runtime.training.checkpointing import CheckpointController
+
+    class State:
+        global_step = 7
+        last_metrics = {}
+
+    class Backend:
+        name = "fsdp"
+
+        def __init__(self):
+            self.saved = False
+
+        def save_checkpoint(self, _manager, step=None, client_state=None):
+            self.saved = True
+            return {
+                "files": [],
+                "metadata": {"fsdp_state_dict_type": "full"},
+            }
+
+    class Engine:
+        def __init__(self):
+            self.state = State()
+            self.training_backend = Backend()
+            self.config = ParaScaleConfig(
+                training_backend="fsdp",
+                fsdp_state_dict_type="full",
+            )
+            self.barrier_called = False
+
+        def _distributed_rank(self):
+            return 1
+
+        def _distributed_world_size(self):
+            return 2
+
+        def _distributed_barrier(self):
+            self.barrier_called = True
+
+        def plan(self):
+            raise AssertionError("nonzero rank must not write a manifest")
+
+    class Manager:
+        def payload_path(self, *_args):
+            return Path(tempfile.gettempdir()) / "unused.pt"
+
+        def write_manifest(self, _manifest):
+            raise AssertionError("nonzero rank must not write a manifest")
+
+    engine = Engine()
+
+    result = CheckpointController(engine).save(Manager())
+
+    assert engine.training_backend.saved is True
+    assert result["skipped"] is True
+    assert result["reason"] == (
+        "backend checkpoint written; manifest is written by rank 0"
+    )
+    assert engine.barrier_called is True
+
+
+def test_fsdp_full_checkpoint_nonzero_rank_participates_without_writing(
+    monkeypatch,
+):
+    import parascale.runtime.backends.fsdp as fsdp_module
+    from parascale.runtime.backends.fsdp import FSDPTrainingBackend
+
+    saved_paths = []
+
+    class TorchStub:
+        @staticmethod
+        def save(_payload, path):
+            saved_paths.append(path)
+
+    backend = FSDPTrainingBackend(
+        config=ParaScaleConfig(
+            training_backend="fsdp",
+            fsdp_state_dict_type="full",
+        ),
+        local_rank=1,
+    )
+    backend.state_dict = lambda: {"backend": "fsdp"}
+    backend._rank = lambda: 1
+    monkeypatch.setattr(fsdp_module, "_require_torch", lambda: TorchStub())
+
+    result = backend.save_checkpoint(
+        CheckpointManager(str(Path(tempfile.gettempdir()) / "fsdp-rank1-no-write")),
+        step=3,
+        client_state={"global_step": 3},
+    )
+
+    assert saved_paths == []
+    assert result["files"] == []
+    assert result["metadata"]["rank"] == 1
 
 
 def test_checkpoint_controller_rank0_manifest_lists_expected_fsdp_shards():

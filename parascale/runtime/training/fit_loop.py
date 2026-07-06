@@ -34,7 +34,13 @@ class FitLoopRunner:
         self._validate_dataloader_window(dataloader, max_steps=max_steps)
         self.engine.precision.setup_scaler()
         self.engine.memory.reset_peak_memory_stats()
-        iterator = self.engine._maybe_cuda_prefetch_iterator(iter(dataloader))
+        data_resume = getattr(self.engine, "data_resume", None)
+        source_iterator = (
+            data_resume.prepare_iterator(dataloader)
+            if data_resume is not None
+            else iter(dataloader)
+        )
+        iterator = self.engine._maybe_cuda_prefetch_iterator(source_iterator)
         index = 0
         while True:
             if max_steps is not None and index >= max_steps:
@@ -71,6 +77,8 @@ class FitLoopRunner:
                 )
             self.engine._add_end_to_end_metrics(metrics, batch, dataloader_wait_seconds)
             self.engine.memory.add_peak_memory_metrics(metrics)
+            if data_resume is not None:
+                data_resume.record_consumption(metrics)
             self.engine.record_step(metrics)
             if checkpoint_manager is not None and checkpoint_interval:
                 if self.engine.state.global_step % int(checkpoint_interval) == 0:

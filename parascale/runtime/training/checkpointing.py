@@ -43,7 +43,9 @@ class CheckpointController:
         shard_mode = bool(
             backend_name == "fsdp" and state_dict_type in {"sharded", "local"}
         )
-        all_rank_backend_save = backend_name == "deepspeed"
+        all_rank_backend_save = backend_name == "deepspeed" or (
+            backend_name == "fsdp" and state_dict_type == "full"
+        )
         if rank != 0 and not shard_mode and not all_rank_backend_save:
             self._barrier()
             return {
@@ -101,11 +103,17 @@ class CheckpointController:
             }
         if shard_mode and rank == 0:
             self._add_expected_fsdp_shards(files, world_size, state_dict_type)
+        data_resume = getattr(self.engine, "data_resume", None)
+        data_state = data_resume.capture() if data_resume is not None else {}
         manifest = CheckpointManifest(
             step=checkpoint_step,
             global_step=self.engine.state.global_step,
+            consumed_samples=int(
+                getattr(self.engine.state, "consumed_samples", 0) or 0
+            ),
             backend=backend_name,
             parallel_plan=self.engine.plan().to_dict(),
+            data_state=data_state,
             files=files,
             metadata={
                 "last_metrics": dict(self.engine.state.last_metrics),
@@ -170,6 +178,7 @@ class CheckpointController:
             backend_state_loaded = self._load_backend_specific_checkpoint(
                 checkpoint_manager,
                 manifest,
+                backend_specific_entry,
                 scheduler,
             )
         elif backend_entry is not None and self.engine.training_backend is not None:
@@ -182,6 +191,9 @@ class CheckpointController:
 
         self.engine.state.global_step = int(manifest.global_step or manifest.step)
         self.engine.state.last_metrics = dict(manifest.metadata.get("last_metrics", {}))
+        data_resume = getattr(self.engine, "data_resume", None)
+        if data_resume is not None:
+            data_resume.restore_manifest(manifest)
         manifest.metadata["backend_state_loaded"] = backend_state_loaded
         if self.engine.training_backend is not None:
             if hasattr(self.engine.training_backend, "optimizer_state_loaded"):
@@ -324,11 +336,22 @@ class CheckpointController:
         self,
         checkpoint_manager: Any,
         manifest: Any,
+        backend_entry: Dict[str, Any],
         scheduler: Any,
     ) -> bool:
+        state_dict_type = backend_entry.get("state_dict_type")
+        if state_dict_type is None:
+            state_dict_type = manifest.metadata.get(
+                "state_dict_type",
+                manifest.metadata.get("fsdp_state_dict_type"),
+            )
+        load_kwargs = {}
+        if state_dict_type is not None:
+            load_kwargs["state_dict_type"] = str(state_dict_type)
         client_state = self.engine.training_backend.load_checkpoint(
             checkpoint_manager,
             step=manifest.step,
+            **load_kwargs,
         )
         scheduler_state = client_state.get("scheduler_state_dict")
         if scheduler is not None and scheduler_state is not None:
