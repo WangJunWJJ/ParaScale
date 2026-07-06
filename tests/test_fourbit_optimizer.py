@@ -47,6 +47,20 @@ def test_four_bit_optimizer_state_dict_uses_portable_tensor_tree():
     assert state["parascale_optimizer"]["state_schema_version"] == 1
 
 
+def test_quantized_state_pack_and_unpack_do_not_use_python_range(monkeypatch):
+    import parascale.optimizers.optimizers as optimizer_module
+
+    def forbidden_range(*_args, **_kwargs):
+        raise AssertionError("4-bit pack/unpack must be vectorized")
+
+    monkeypatch.setattr(optimizer_module, "range", forbidden_range, raising=False)
+
+    state = optimizer_module.QuantizedState(torch.randn(256), group_size=128)
+    restored = state.dequantize()
+
+    assert restored.shape == (256,)
+
+
 class SimpleModel(nn.Module):
 
     def __init__(self, input_dim=10, hidden_dim=20, output_dim=5):

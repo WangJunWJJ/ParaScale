@@ -46,24 +46,18 @@ class QuantizedState:
             .clamp(0, 15)
             .to(torch.uint8)
         )
-        self.quantized_data = torch.zeros(
-            num_groups * (group_size // 2), dtype=torch.uint8, device=tensor.device
-        )
-        for i in range(group_size // 2):
-            self.quantized_data[i :: group_size // 2] = (
-                quantized[:, 2 * i] << 4 | quantized[:, 2 * i + 1]
-            )
+        self.quantized_data = (
+            quantized[:, 0::2] << 4 | quantized[:, 1::2]
+        ).reshape(-1)
 
     def dequantize(self) -> torch.Tensor:
         num_groups = len(self.scale)
-        high_4bit = self.quantized_data >> 4 & 15
-        low_4bit = self.quantized_data & 15
-        quantized = torch.zeros(
-            num_groups, self.group_size, dtype=torch.float32, device=self.device
-        )
-        for i in range(self.group_size // 2):
-            quantized[:, 2 * i] = high_4bit[i :: self.group_size // 2].float()
-            quantized[:, 2 * i + 1] = low_4bit[i :: self.group_size // 2].float()
+        packed = self.quantized_data.view(num_groups, self.group_size // 2)
+        high_4bit = packed >> 4 & 15
+        low_4bit = packed & 15
+        quantized = torch.stack((high_4bit, low_4bit), dim=-1).reshape(
+            num_groups, self.group_size
+        ).float()
         dequantized = quantized * self.scale.unsqueeze(1) + self.zero_point.unsqueeze(1)
         flat_result = dequantized.flatten()[: torch.prod(torch.tensor(self.shape))]
         return flat_result.view(self.shape)
