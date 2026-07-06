@@ -105,6 +105,10 @@ class CheckpointController:
             self._add_expected_fsdp_shards(files, world_size, state_dict_type)
         data_resume = getattr(self.engine, "data_resume", None)
         data_state = data_resume.capture() if data_resume is not None else {}
+        optimizer = getattr(self.engine.training_backend, "optimizer", None)
+        optimizer_metadata = dict(
+            getattr(optimizer, "_parascale_optimizer_metadata", {}) or {}
+        )
         manifest = CheckpointManifest(
             step=checkpoint_step,
             global_step=self.engine.state.global_step,
@@ -123,6 +127,8 @@ class CheckpointController:
                 "rank": rank,
                 "world_size": world_size,
                 "rank_count": world_size,
+                "optimizer": optimizer_metadata,
+                "distributed_backend": self._distributed_backend(),
                 "shard_count": (
                     world_size
                     if shard_mode or (all_rank_backend_save and backend_state_written)
@@ -155,6 +161,7 @@ class CheckpointController:
 
         manifest = checkpoint_manager.read_manifest(step)
         self._validate_before_resume(checkpoint_manager, manifest)
+        self._validate_optimizer_metadata(manifest, optimizer)
         backend_state_loaded = False
         if model is not None or optimizer is not None:
             self.engine.training_backend = create_runtime_training_backend(
@@ -205,6 +212,37 @@ class CheckpointController:
                     getattr(self.engine.training_backend, "optimizer_state_error")
                 )
         return manifest
+
+    @staticmethod
+    def _validate_optimizer_metadata(manifest: Any, optimizer: Any) -> None:
+        saved = dict(manifest.metadata.get("optimizer", {}) or {})
+        current = dict(
+            getattr(optimizer, "_parascale_optimizer_metadata", {}) or {}
+        )
+        if not saved or not current:
+            return
+        for key in (
+            "type",
+            "state_schema_version",
+            "group_size",
+            "compensate_quant_error",
+            "error_compensation_dtype",
+        ):
+            if saved.get(key) != current.get(key):
+                raise ValueError(
+                    "checkpoint optimizer metadata mismatch for "
+                    f"{key}: saved={saved.get(key)!r}, current={current.get(key)!r}"
+                )
+
+    @staticmethod
+    def _distributed_backend() -> str | None:
+        try:
+            import torch.distributed as dist
+        except Exception:
+            return None
+        if not dist.is_available() or not dist.is_initialized():
+            return None
+        return str(dist.get_backend())
 
     def _validate_before_resume(
         self,

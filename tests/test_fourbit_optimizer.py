@@ -17,6 +17,36 @@ import torch.nn as nn
 from parascale.optimizers import FourBitAdamW, FourBitSGD, QuantizedState
 
 
+def _assert_tensor_state_tree(value):
+    if torch.is_tensor(value) or value is None or isinstance(
+        value, (bool, int, float, str)
+    ):
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _assert_tensor_state_tree(key)
+            _assert_tensor_state_tree(item)
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            _assert_tensor_state_tree(item)
+        return
+    raise AssertionError(f"non-portable optimizer state value: {type(value)!r}")
+
+
+def test_four_bit_optimizer_state_dict_uses_portable_tensor_tree():
+    model = nn.Linear(4, 2)
+    optimizer = FourBitAdamW(model.parameters(), lr=0.01)
+    loss = model(torch.ones(2, 4)).sum()
+    loss.backward()
+    optimizer.step()
+
+    state = optimizer.state_dict()
+
+    _assert_tensor_state_tree(state)
+    assert state["parascale_optimizer"]["state_schema_version"] == 1
+
+
 class SimpleModel(nn.Module):
 
     def __init__(self, input_dim=10, hidden_dim=20, output_dim=5):

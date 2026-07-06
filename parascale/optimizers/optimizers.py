@@ -96,6 +96,88 @@ class QuantizedState:
         self.device = device
         return self
 
+    def state_dict(self) -> Dict[str, Any]:
+        return {
+            "__quantized_state__": 1,
+            "shape": list(self.shape),
+            "group_size": int(self.group_size),
+            "quantized_data": self.quantized_data,
+            "scale": self.scale,
+            "zero_point": self.zero_point,
+            "is_sparse": bool(getattr(self, "is_sparse", False)),
+        }
+
+    @classmethod
+    def from_state_dict(
+        cls, state: Dict[str, Any], device: torch.device
+    ) -> "QuantizedState":
+        restored = cls.__new__(cls)
+        restored.shape = torch.Size(state["shape"])
+        restored.group_size = int(state["group_size"])
+        restored.device = device
+        restored.quantized_data = state["quantized_data"].to(device)
+        restored.scale = state["scale"].to(device)
+        restored.zero_point = state["zero_point"].to(device)
+        if bool(state.get("is_sparse", False)):
+            restored.is_sparse = True
+        return restored
+
+
+def _portable_state(value: Any) -> Any:
+    if isinstance(value, QuantizedState):
+        return value.state_dict()
+    if isinstance(value, dict):
+        return {key: _portable_state(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_portable_state(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_portable_state(item) for item in value)
+    return value
+
+
+def _restore_portable_state(value: Any, device: torch.device) -> Any:
+    if isinstance(value, dict) and value.get("__quantized_state__") == 1:
+        return QuantizedState.from_state_dict(value, device)
+    if isinstance(value, dict):
+        return {
+            key: _restore_portable_state(item, device) for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_restore_portable_state(item, device) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_restore_portable_state(item, device) for item in value)
+    return value
+
+
+class _PortableFourBitOptimizer:
+    optimizer_type = "four_bit"
+
+    def state_dict(self) -> Dict[str, Any]:
+        state = super().state_dict()
+        state["state"] = _portable_state(state["state"])
+        state["parascale_optimizer"] = {
+            "type": self.optimizer_type,
+            "state_schema_version": 1,
+            "group_size": int(self.group_size),
+            "compensate_quant_error": bool(self.compensate_quant_error),
+            "error_compensation_dtype": self.error_compensation_dtype,
+        }
+        return state
+
+    def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
+        state = dict(state_dict)
+        metadata = dict(state.pop("parascale_optimizer", {}) or {})
+        version = int(metadata.get("state_schema_version", 1) or 1)
+        if version != 1:
+            raise ValueError(f"unsupported 4-bit optimizer state schema: {version}")
+        device = next(
+            parameter.device
+            for group in self.param_groups
+            for parameter in group["params"]
+        )
+        state["state"] = _restore_portable_state(state.get("state", {}), device)
+        super().load_state_dict(state)
+
 
 class ZeroOptimizer:
 
@@ -273,7 +355,9 @@ class AdamW(optim.AdamW):
         )
 
 
-class FourBitAdamW(optim.Optimizer):
+class FourBitAdamW(_PortableFourBitOptimizer, optim.Optimizer):
+
+    optimizer_type = "four_bit_adamw"
 
     def __init__(
         self,
@@ -394,7 +478,9 @@ class FourBitAdamW(optim.Optimizer):
         print(f"  saving: {stats['savings_percent']:.1f}%")
 
 
-class FourBitSGD(optim.Optimizer):
+class FourBitSGD(_PortableFourBitOptimizer, optim.Optimizer):
+
+    optimizer_type = "four_bit_sgd"
 
     def __init__(
         self,

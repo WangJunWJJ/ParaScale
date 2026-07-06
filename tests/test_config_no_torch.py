@@ -3,6 +3,70 @@
 # @Author : Wang Jun
 # @Email: wj_xd@foxmail.com
 
+import pytest
+
+
+def test_optimizer_spec_defaults_to_adamw_without_torch():
+    from parascale.optimizers.spec import OptimizerSpec
+
+    spec = OptimizerSpec.from_config({"optimizer": {"lr": 0.002}})
+
+    assert spec.type == "adamw"
+    assert spec.lr == 0.002
+
+
+@pytest.mark.parametrize("optimizer_type", ["four_bit_adamw", "four_bit_sgd"])
+def test_optimizer_spec_accepts_configured_four_bit_types(optimizer_type):
+    from parascale.optimizers.spec import OptimizerSpec
+
+    spec = OptimizerSpec.from_config(
+        {
+            "optimizer": {
+                "type": optimizer_type,
+                "lr": 0.01,
+                "group_size": 64,
+                "compensate_quant_error": True,
+                "error_compensation_dtype": "fp32",
+            }
+        }
+    )
+
+    assert spec.type == optimizer_type
+    assert spec.group_size == 64
+    assert spec.to_metadata()["state_schema_version"] == 1
+
+
+def test_optimizer_spec_rejects_fields_for_another_optimizer_type():
+    from parascale.optimizers.spec import OptimizerSpec
+
+    with pytest.raises(ValueError, match="momentum.*four_bit_adamw"):
+        OptimizerSpec.from_config(
+            {"optimizer": {"type": "four_bit_adamw", "momentum": 0.9}}
+        )
+
+
+@pytest.mark.parametrize("backend", ["fsdp", "deepspeed"])
+def test_four_bit_optimizer_spec_rejects_sharded_backends(backend):
+    from parascale.optimizers.spec import OptimizerSpec
+
+    spec = OptimizerSpec.from_config(
+        {"optimizer": {"type": "four_bit_adamw"}}
+    )
+
+    with pytest.raises(ValueError, match=backend):
+        spec.validate_backend(backend, zero_stage=0)
+
+
+def test_four_bit_optimizer_spec_rejects_native_zero_stage_one():
+    from parascale.optimizers.spec import OptimizerSpec
+
+    spec = OptimizerSpec.from_config(
+        {"optimizer": {"type": "four_bit_sgd"}}
+    )
+
+    with pytest.raises(ValueError, match="zero_stage=1"):
+        spec.validate_backend("native_ddp", zero_stage=1)
+
 
 
 def test_backend_config_roundtrip_without_torch():

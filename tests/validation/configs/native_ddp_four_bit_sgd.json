@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "parascale": {
+    "training_backend": "native_ddp",
+    "precision": "fp32",
+    "checkpoint_save_interval": 1
+  },
+  "model": {
+    "type": "tiny_mlp",
+    "input_dim": 4,
+    "hidden_dim": 8,
+    "output_dim": 2
+  },
+  "data": {
+    "type": "tensor_random",
+    "batch_size": 2
+  },
+  "optimizer": {
+    "type": "four_bit_sgd",
+    "lr": 0.01,
+    "momentum": 0.9,
+    "group_size": 128,
+    "compensate_quant_error": true,
+    "error_compensation_dtype": "fp32"
+  },
+  "model_profile": {
+    "total_params": 10000,
+    "total_memory": 40000,
+    "num_layers": 2,
+    "model_type": "mlp"
+  },
+  "hardware_profile": {
+    "num_gpus": 2,
+    "gpus_per_node": 2,
+    "num_nodes": 1,
+    "gpu_memory": 1000000000,
+    "available_memory": 900000000
+  },
+  "distributed": {
+    "nnodes": 1,
+    "nproc_per_node": 2,
+    "master_addr": "127.0.0.1",
+    "master_port": 29500
+  },
+  "training": {
+    "workload": "torch_tiny_mlp",
+    "max_steps": 2,
+    "checkpoint_dir": "./runs/native_ddp_four_bit_sgd",
+    "checkpoint_interval": 1
+  }
+}
