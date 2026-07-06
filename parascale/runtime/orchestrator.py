@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import time
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict
 
@@ -38,6 +39,22 @@ from parascale.workloads.capability import capability_level_for_scope, describe_
 def _section(data: Dict[str, Any], name: str) -> Dict[str, Any]:
     value = data.get(name, {})
     return value if isinstance(value, dict) else {}
+
+
+def _resume_component_config(
+    config_data: Dict[str, Any], manifest: Any, *, max_steps: int
+) -> Dict[str, Any]:
+    """Expand only the workload build window for replay-based data resume."""
+    data_state = dict(getattr(manifest, "data_state", {}) or {})
+    if str(data_state.get("resume_mode", "")) != "replay_skip":
+        return config_data
+    consumed = max(0, int(data_state.get("consumed_micro_batches", 0) or 0))
+    if consumed == 0:
+        return config_data
+    component_config = deepcopy(config_data)
+    component_training = component_config.setdefault("training", {})
+    component_training["max_steps"] = consumed + max(0, int(max_steps))
+    return component_config
 
 
 def run_train_from_config(
@@ -96,17 +113,25 @@ def run_train_from_config(
         training.get("checkpoint_interval", parascale_config.checkpoint_save_interval)
         or max_steps
     )
+    manager = CheckpointManager(checkpoint_dir)
+    if resume_step is None and training.get("resume_step") is not None:
+        resume_step = int(training["resume_step"])
+    resume_manifest = (
+        manager.read_manifest(int(resume_step)) if resume_step is not None else None
+    )
+    component_config = (
+        _resume_component_config(config_data, resume_manifest, max_steps=max_steps)
+        if resume_manifest is not None
+        else config_data
+    )
     flags = workload_capability.payload_flags()
-    model, optimizer, dataloader, loss_fn = build_training_components(config_data)
+    model, optimizer, dataloader, loss_fn = build_training_components(component_config)
     runtime_status = "synthetic" if flags["synthetic"] else "real_local"
     engine = TrainEngine(
         config=parascale_config,
         model_profile=_section(config_data, "model_profile"),
         hardware_profile=_section(config_data, "hardware_profile"),
     )
-    manager = CheckpointManager(checkpoint_dir)
-    if resume_step is None and training.get("resume_step") is not None:
-        resume_step = int(training["resume_step"])
     resumed_from = None
     if resume_step is not None:
         manifest = engine.load_checkpoint(
