@@ -1,0 +1,75 @@
+{
+  "mode": "direct_pytorch_comparison",
+  "suite_id": "direct_pytorch_clip_comparison",
+  "hardware": "dual RTX 4090D 24GB",
+  "image": "parascale-ci:cu121-torch24",
+  "input_dir": "runs/benchmarks/direct_pytorch_clip_comparison",
+  "passed": true,
+  "missing": [],
+  "runs": [
+    {
+      "label": "parascale_native_ddp",
+      "stack": "ParaScale",
+      "backend": "native_ddp",
+      "throughput": 134.1078797461074,
+      "throughput_metric": "stable_end_to_end_image_text_pairs_per_second",
+      "loss": 2.123793247767857,
+      "global_step": 80,
+      "peak_memory_bytes": 3729204736.0,
+      "dataloader_wait_ms": 0.5189249932300299,
+      "path": "runs/benchmarks/direct_pytorch_clip_comparison/parascale_native_ddp.json"
+    },
+    {
+      "label": "parascale_fsdp",
+      "stack": "ParaScale",
+      "backend": "fsdp",
+      "throughput": 88.81068052833353,
+      "throughput_metric": "stable_end_to_end_image_text_pairs_per_second",
+      "loss": 2.1133928571428573,
+      "global_step": 80,
+      "peak_memory_bytes": 2137924096.0,
+      "dataloader_wait_ms": 0.46636699698865414,
+      "path": "runs/benchmarks/direct_pytorch_clip_comparison/parascale_fsdp.json"
+    },
+    {
+      "label": "torch_ddp",
+      "stack": "Direct PyTorch",
+      "backend": "torch_ddp",
+      "throughput": 80.48533196043476,
+      "throughput_metric": "stable_end_to_end_image_text_pairs_per_second",
+      "loss": 2.1250244140624996,
+      "global_step": 80,
+      "peak_memory_bytes": 3720549376.0,
+      "dataloader_wait_ms": 3.0534270852513146,
+      "path": "runs/benchmarks/direct_pytorch_clip_comparison/torch_ddp.json"
+    },
+    {
+      "label": "torch_fsdp",
+      "stack": "Direct PyTorch",
+      "backend": "torch_fsdp",
+      "throughput": 65.58090337787736,
+      "throughput_metric": "stable_end_to_end_image_text_pairs_per_second",
+      "loss": 2.1234688895089286,
+      "global_step": 80,
+      "peak_memory_bytes": 3044925440.0,
+      "dataloader_wait_ms": 3.193593485151983,
+      "path": "runs/benchmarks/direct_pytorch_clip_comparison/torch_fsdp.json"
+    }
+  ],
+  "comparisons": [
+    {
+      "direct": "torch_ddp",
+      "parascale": "parascale_native_ddp",
+      "direct_throughput": 80.48533196043476,
+      "parascale_throughput": 134.1078797461074,
+      "parascale_vs_direct": 1.6662400027377977
+    },
+    {
+      "direct": "torch_fsdp",
+      "parascale": "parascale_fsdp",
+      "direct_throughput": 65.58090337787736,
+      "parascale_throughput": 88.81068052833353,
+      "parascale_vs_direct": 1.3542155712099013
+    }
+  ]
+}

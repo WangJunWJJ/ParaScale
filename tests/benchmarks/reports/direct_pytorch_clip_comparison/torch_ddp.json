@@ -1,0 +1,57 @@
+{
+  "mode": "direct_pytorch_baseline",
+  "benchmark_type": "clip_contrastive_train",
+  "runtime_status": "real_local",
+  "capability_level": "direct_pytorch_clip_synthetic",
+  "backend": "torch_ddp",
+  "metrics": {
+    "loss": 2.1250244140624996,
+    "batch_size": 8,
+    "global_batch_size": 16,
+    "step_time_seconds": 0.1958511170130805,
+    "images_per_second": 81.7994761826433,
+    "image_text_pairs_per_second": 81.7994761826433,
+    "end_to_end_images_per_second": 80.48533196043476,
+    "end_to_end_image_text_pairs_per_second": 80.48533196043476,
+    "stable_end_to_end_image_text_pairs_per_second": 80.48533196043476,
+    "steps_per_second": 5.030371055713453,
+    "dataloader_wait_ms": 3.0534270852513146,
+    "peak_memory_bytes": 3720549376.0
+  },
+  "train": {
+    "mode": "train",
+    "backend": "torch_ddp",
+    "global_step": 80,
+    "elapsed_seconds": 16.1526679739909,
+    "last_metrics": {
+      "loss": 2.1250244140624996,
+      "batch_size": 8,
+      "global_batch_size": 16,
+      "step_time_seconds": 0.1958511170130805,
+      "images_per_second": 81.7994761826433,
+      "image_text_pairs_per_second": 81.7994761826433,
+      "end_to_end_images_per_second": 80.48533196043476,
+      "end_to_end_image_text_pairs_per_second": 80.48533196043476,
+      "stable_end_to_end_image_text_pairs_per_second": 80.48533196043476,
+      "steps_per_second": 5.030371055713453,
+      "dataloader_wait_ms": 3.0534270852513146,
+      "peak_memory_bytes": 3720549376.0
+    },
+    "world_size": 2,
+    "precision": "bf16_autocast",
+    "workload": "clip_contrastive",
+    "data_type": "synthetic_clip"
+  },
+  "task": {
+    "workload": "clip_contrastive",
+    "objective": "image_text_contrastive"
+  },
+  "model": {
+    "type": "clip_medium",
+    "image_size": 224,
+    "patch_size": 16,
+    "embed_dim": 768,
+    "vision_layers": 12,
+    "text_layers": 6
+  }
+}
