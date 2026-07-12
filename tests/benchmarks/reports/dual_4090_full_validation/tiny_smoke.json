@@ -1,0 +1,1213 @@
+{
+  "config": "configs/server_tiny_torch.json",
+  "started_at_unix": 1783840852.77031,
+  "steps": {
+    "doctor": {
+      "ok": true,
+      "elapsed_seconds": 0.12906226099585183,
+      "result": {
+        "mode": "doctor",
+        "runtime_status": "diagnostic",
+        "python": {
+          "version": "3.10.12",
+          "implementation": "CPython",
+          "executable": "/usr/bin/python3",
+          "platform": "Linux-6.8.0-124-generic-x86_64-with-glibc2.35"
+        },
+        "dependencies": {
+          "torch": true,
+          "torch_npu": false,
+          "deepspeed": true,
+          "yaml": true
+        },
+        "torch_runtime": {
+          "available": true,
+          "version": "2.4.0+cu121",
+          "cuda_available": true,
+          "cuda_version": "12.1",
+          "cuda_device_count": 2,
+          "cuda_devices": [
+            {
+              "index": 0,
+              "name": "NVIDIA GeForce RTX 4090 D",
+              "total_memory": 25250627584,
+              "capability": [
+                8,
+                9
+              ]
+            },
+            {
+              "index": 1,
+              "name": "NVIDIA GeForce RTX 4090 D",
+              "total_memory": 25250627584,
+              "capability": [
+                8,
+                9
+              ]
+            }
+          ],
+          "bf16_supported": true
+        },
+        "distributed_runtime": {
+          "available": true,
+          "initialized": false,
+          "recommended_backends": {
+            "gloo": true,
+            "nccl": true,
+            "hccl": false
+          }
+        },
+        "ascend_runtime": {
+          "available": false,
+          "reason": "torch_npu is not installed"
+        },
+        "device_backends": [
+          {
+            "name": "cpu",
+            "accelerator": "cpu",
+            "communication": "gloo",
+            "available": true,
+            "supports_bf16": false,
+            "supports_flash_attention": false
+          },
+          {
+            "name": "nvidia",
+            "accelerator": "cuda",
+            "communication": "nccl",
+            "available": true,
+            "supports_bf16": true,
+            "supports_flash_attention": true
+          },
+          {
+            "name": "ascend",
+            "accelerator": "npu",
+            "communication": "hccl",
+            "available": false,
+            "supports_bf16": false,
+            "supports_flash_attention": false
+          }
+        ],
+        "rank_env": {
+          "MASTER_ADDR": "127.0.0.1"
+        },
+        "notes": [
+          "Hardware-dependent training and serving paths require matching torch, distributed, CUDA/NPU, and launcher support.",
+          "Mock and synthetic CLI paths are explicit diagnostics, not production readiness signals."
+        ]
+      }
+    },
+    "plan": {
+      "ok": true,
+      "elapsed_seconds": 0.00024174898862838745,
+      "result": {
+        "mode": "plan",
+        "runtime_status": "plan_only",
+        "runtime_context": {
+          "mode": "plan",
+          "rank": 0,
+          "local_rank": 0,
+          "world_size": 1,
+          "is_distributed": false,
+          "workload": {
+            "task_type": "tensor_random",
+            "model_family": "unknown",
+            "workload": "torch_tiny_mlp",
+            "target_scale": "local",
+            "optimize_for": "balanced",
+            "modalities": []
+          },
+          "strategy_plan": {
+            "backend": "native",
+            "dp_size": 1,
+            "tp_size": 1,
+            "pp_size": 1,
+            "strategy_type": "single",
+            "zero_stage": 0,
+            "zero_offload": false,
+            "precision": "fp32",
+            "fsdp_state_dict_type": "full",
+            "ddp_comm_hook": "none",
+            "ddp_gradient_as_bucket_view": true,
+            "ddp_static_graph": false,
+            "activation_checkpointing": false,
+            "batch_policy": "sample",
+            "max_tokens_per_batch": null,
+            "checkpoint_policy": "rank0_file",
+            "estimated_memory_per_gpu": 180000,
+            "estimated_total_training_memory": 180000,
+            "reasons": [
+              "Using user-requested backend: native."
+            ],
+            "warnings": [],
+            "topology": {},
+            "communication_plan": {
+              "backend": "native",
+              "ddp_hook": "none",
+              "bucket_cap_mb": null,
+              "use_no_sync": false,
+              "adapter_only_sync": false,
+              "overlap_h2d": false,
+              "reasons": [
+                "No communication hook selected without scenario-specific benchmark evidence."
+              ],
+              "evidence": {
+                "precision": "fp32",
+                "task_type": "generic",
+                "model_family": "unknown",
+                "gradient_accumulation_steps": 1,
+                "trainable_ratio": null,
+                "dataloader_wait_ms": 0.0
+              }
+            }
+          },
+          "topology": {},
+          "model_profile": {
+            "total_params": 10000,
+            "total_memory": 40000,
+            "num_layers": 2,
+            "model_type": "mlp"
+          },
+          "hardware_profile": {
+            "num_gpus": 1,
+            "gpus_per_node": 1,
+            "gpu_memory": 1000000000,
+            "available_memory": 900000000
+          },
+          "budgets": {
+            "batch_size": 32,
+            "max_tokens_per_batch": null,
+            "max_patch_tokens_per_batch": null,
+            "gradient_accumulation_steps": 1
+          }
+        },
+        "launch_plan": {
+          "launcher": "local",
+          "command": [
+            "python",
+            "-m",
+            "parascale.cli",
+            "train",
+            "--config",
+            "config.yaml"
+          ],
+          "world_size": 1,
+          "nproc_per_node": 1,
+          "nnodes": 1,
+          "node_rank": 0,
+          "master_addr": null,
+          "master_port": null,
+          "env": {
+            "PYTHONUNBUFFERED": "1",
+            "PARASCALE_TASK_TYPE": "tensor_random"
+          },
+          "reasons": [
+            "task=tensor_random",
+            "backend=native",
+            "target_scale=local",
+            "single-process native path"
+          ],
+          "warnings": []
+        },
+        "benchmark_plan": {
+          "compare_backends": [
+            "native"
+          ],
+          "primary_metrics": [
+            "step_time_ms",
+            "dataloader_wait_ms",
+            "checkpoint_time_ms",
+            "samples_per_second",
+            "images_per_second",
+            "image_text_pairs_per_second",
+            "tokens_per_second",
+            "patch_tokens_per_second",
+            "end_to_end_images_per_second",
+            "end_to_end_image_text_pairs_per_second",
+            "peak_memory_bytes",
+            "allocated_memory_bytes",
+            "pipeline_shard_read_ms",
+            "pipeline_tar_open_ms",
+            "pipeline_sample_decode_ms",
+            "pipeline_sample_build_ms",
+            "pipeline_collate_ms",
+            "pipeline_image_decode_ms",
+            "pipeline_prompt_template_ms",
+            "pipeline_processor_ms",
+            "pipeline_image_processor_ms",
+            "pipeline_tokenizer_ms",
+            "pipeline_sample_tensor_build_ms",
+            "pipeline_label_build_ms",
+            "pipeline_processor_unaccounted_ms",
+            "pipeline_host_to_device_ms",
+            "pipeline_cuda_prefetch_h2d_ms",
+            "pipeline_cuda_prefetch_wait_ms",
+            "pipeline_cache_hit",
+            "pipeline_cache_hit_count",
+            "pipeline_cache_sample_count"
+          ],
+          "scenarios": [
+            {
+              "name": "baseline_train_smoke",
+              "goal_layer": "layer1_not_worse_than_baselines",
+              "task_type": "tensor_random",
+              "backend": "native",
+              "metrics": [
+                "step_time_ms",
+                "dataloader_wait_ms",
+                "checkpoint_time_ms",
+                "samples_per_second",
+                "images_per_second",
+                "image_text_pairs_per_second",
+                "tokens_per_second",
+                "patch_tokens_per_second",
+                "end_to_end_images_per_second",
+                "end_to_end_image_text_pairs_per_second",
+                "peak_memory_bytes",
+                "allocated_memory_bytes",
+                "pipeline_shard_read_ms",
+                "pipeline_tar_open_ms",
+                "pipeline_sample_decode_ms",
+                "pipeline_sample_build_ms",
+                "pipeline_collate_ms",
+                "pipeline_image_decode_ms",
+                "pipeline_prompt_template_ms",
+                "pipeline_processor_ms",
+                "pipeline_image_processor_ms",
+                "pipeline_tokenizer_ms",
+                "pipeline_sample_tensor_build_ms",
+                "pipeline_label_build_ms",
+                "pipeline_processor_unaccounted_ms",
+                "pipeline_host_to_device_ms",
+                "pipeline_cuda_prefetch_h2d_ms",
+                "pipeline_cuda_prefetch_wait_ms",
+                "pipeline_cache_hit",
+                "pipeline_cache_hit_count",
+                "pipeline_cache_sample_count"
+              ],
+              "acceptance": {
+                "must_checkpoint": true,
+                "must_resume": true
+              },
+              "notes": [
+                "Establish native/FSDP/DeepSpeed parity before claiming performance wins."
+              ]
+            },
+            {
+              "name": "train_checkpoint_serve_loop",
+              "goal_layer": "layer3_system_loop_advantage",
+              "task_type": "tensor_random",
+              "backend": "native",
+              "metrics": [
+                "checkpoint_time_ms",
+                "restore_time_ms",
+                "serve_latency_ms",
+                "serve_throughput"
+              ],
+              "acceptance": {
+                "mock_serving_allowed": false
+              },
+              "notes": [
+                "Validates that training artifacts are directly consumable by serving runtime."
+              ]
+            }
+          ]
+        },
+        "parallel_plan": {
+          "backend": "native",
+          "world_size": 1,
+          "dimensions": {
+            "data": {
+              "name": "data",
+              "size": 1,
+              "backend": "runtime",
+              "placement": "auto"
+            },
+            "tensor": {
+              "name": "tensor",
+              "size": 1,
+              "backend": "runtime",
+              "placement": "homogeneous_first"
+            },
+            "pipeline": {
+              "name": "pipeline",
+              "size": 1,
+              "backend": "runtime",
+              "placement": "auto"
+            },
+            "sequence": {
+              "name": "sequence",
+              "size": 1,
+              "backend": "runtime",
+              "placement": "auto"
+            },
+            "expert": {
+              "name": "expert",
+              "size": 1,
+              "backend": "runtime",
+              "placement": "auto"
+            }
+          },
+          "sharding": "none",
+          "reasons": [
+            "parallelism is declarative; execution is delegated to the selected runtime backend"
+          ],
+          "warnings": []
+        },
+        "strategy_plan": {
+          "backend": "native",
+          "dp_size": 1,
+          "tp_size": 1,
+          "pp_size": 1,
+          "strategy_type": "single",
+          "zero_stage": 0,
+          "zero_offload": false,
+          "precision": "fp32",
+          "fsdp_state_dict_type": "full",
+          "ddp_comm_hook": "none",
+          "ddp_gradient_as_bucket_view": true,
+          "ddp_static_graph": false,
+          "activation_checkpointing": false,
+          "batch_policy": "sample",
+          "max_tokens_per_batch": null,
+          "checkpoint_policy": "rank0_file",
+          "estimated_memory_per_gpu": 180000,
+          "estimated_total_training_memory": 180000,
+          "reasons": [
+            "Using user-requested backend: native."
+          ],
+          "warnings": [],
+          "topology": {},
+          "communication_plan": {
+            "backend": "native",
+            "ddp_hook": "none",
+            "bucket_cap_mb": null,
+            "use_no_sync": false,
+            "adapter_only_sync": false,
+            "overlap_h2d": false,
+            "reasons": [
+              "No communication hook selected without scenario-specific benchmark evidence."
+            ],
+            "evidence": {
+              "precision": "fp32",
+              "task_type": "generic",
+              "model_family": "unknown",
+              "gradient_accumulation_steps": 1,
+              "trainable_ratio": null,
+              "dataloader_wait_ms": 0.0
+            }
+          }
+        },
+        "communication_plan": {
+          "backend": "native",
+          "ddp_hook": "none",
+          "bucket_cap_mb": null,
+          "use_no_sync": false,
+          "adapter_only_sync": false,
+          "overlap_h2d": false,
+          "reasons": [
+            "No communication hook selected without scenario-specific benchmark evidence."
+          ],
+          "evidence": {
+            "precision": "fp32",
+            "task_type": "generic",
+            "model_family": "unknown",
+            "gradient_accumulation_steps": 1,
+            "trainable_ratio": null,
+            "dataloader_wait_ms": 0.0
+          }
+        },
+        "dataloader_plan": {
+          "batch_sampler": "sample",
+          "batch_size": 32,
+          "max_tokens_per_batch": null,
+          "max_patch_tokens_per_batch": null,
+          "task_type": "generic",
+          "num_workers": 4,
+          "pin_memory": true,
+          "prefetch_factor": 2,
+          "persistent_workers": true,
+          "drop_last": false,
+          "seed": 42
+        },
+        "resolved_config": {
+          "runtime": {
+            "dry_run": true,
+            "world_size": 1
+          },
+          "backend": {
+            "training_backend": "native",
+            "zero_stage": 0,
+            "zero_offload": false,
+            "precision": "fp32",
+            "deepspeed_config": {}
+          },
+          "workload": {
+            "name": "torch_tiny_mlp",
+            "task_type": "generic"
+          },
+          "data": {
+            "type": "tensor_random",
+            "batch_size": 2,
+            "input_dim": 4,
+            "output_dim": 2
+          },
+          "training": {
+            "batch_size": 32,
+            "gradient_accumulation_steps": 1,
+            "learning_rate": 0.001
+          },
+          "optimizer": {
+            "type": "adamw",
+            "lr": 0.001
+          },
+          "hardware": {
+            "num_gpus": 1,
+            "gpus_per_node": 1,
+            "gpu_memory": 1000000000,
+            "available_memory": 900000000
+          },
+          "fields": {
+            "backend.precision": {
+              "path": "backend.precision",
+              "value": "fp32",
+              "source": "user config",
+              "overridden_by": [
+                "user config"
+              ],
+              "history": [
+                {
+                  "path": "backend.precision",
+                  "value": "fp32",
+                  "source": "built-in defaults",
+                  "priority": 0,
+                  "reason": null
+                },
+                {
+                  "path": "backend.precision",
+                  "value": "fp32",
+                  "source": "user config",
+                  "priority": 40,
+                  "reason": null
+                }
+              ],
+              "reason": null
+            },
+            "backend.training_backend": {
+              "path": "backend.training_backend",
+              "value": "native",
+              "source": "user config",
+              "overridden_by": [
+                "user config"
+              ],
+              "history": [
+                {
+                  "path": "backend.training_backend",
+                  "value": "native",
+                  "source": "built-in defaults",
+                  "priority": 0,
+                  "reason": null
+                },
+                {
+                  "path": "backend.training_backend",
+                  "value": "native",
+                  "source": "user config",
+                  "priority": 40,
+                  "reason": null
+                }
+              ],
+              "reason": null
+            },
+            "backend.zero_offload": {
+              "path": "backend.zero_offload",
+              "value": false,
+              "source": "built-in defaults",
+              "overridden_by": [],
+              "history": [
+                {
+                  "path": "backend.zero_offload",
+                  "value": false,
+                  "source": "built-in defaults",
+                  "priority": 0,
+                  "reason": null
+                }
+              ],
+              "reason": null
+            },
+            "backend.zero_stage": {
+              "path": "backend.zero_stage",
+              "value": 0,
+              "source": "built-in defaults",
+              "overridden_by": [],
+              "history": [
+                {
+                  "path": "backend.zero_stage",
+                  "value": 0,
+                  "source": "built-in defaults",
+                  "priority": 0,
+                  "reason": null
+                }
+              ],
+              "reason": null
+            },
+            "training.batch_size": {
+              "path": "training.batch_size",
+              "value": 32,
+              "source": "built-in defaults",
+              "overridden_by": [],
+              "history": [
+                {
+                  "path": "training.batch_size",
+                  "value": 32,
+                  "source": "built-in defaults",
+                  "priority": 0,
+                  "reason": null
+                }
+              ],
+              "reason": null
+            },
+            "training.gradient_accumulation_steps": {
+              "path": "training.gradient_accumulation_steps",
+              "value": 1,
+              "source": "built-in defaults",
+              "overridden_by": [],
+              "history": [
+                {
+                  "path": "training.gradient_accumulation_steps",
+                  "value": 1,
+                  "source": "built-in defaults",
+                  "priority": 0,
+                  "reason": null
+                }
+              ],
+              "reason": null
+            },
+            "training.learning_rate": {
+              "path": "training.learning_rate",
+              "value": 0.001,
+              "source": "user config",
+              "overridden_by": [
+                "user config"
+              ],
+              "history": [
+                {
+                  "path": "training.learning_rate",
+                  "value": 0.001,
+                  "source": "built-in defaults",
+                  "priority": 0,
+                  "reason": null
+                },
+                {
+                  "path": "training.learning_rate",
+                  "value": 0.001,
+                  "source": "user config",
+                  "priority": 40,
+                  "reason": null
+                }
+              ],
+              "reason": null
+            }
+          },
+          "warnings": [],
+          "errors": []
+        },
+        "explain": {
+          "selected_backend": "native",
+          "strategy_type": "single",
+          "communication_plan": {
+            "backend": "native",
+            "ddp_hook": "none",
+            "bucket_cap_mb": null,
+            "use_no_sync": false,
+            "adapter_only_sync": false,
+            "overlap_h2d": false,
+            "reasons": [
+              "No communication hook selected without scenario-specific benchmark evidence."
+            ],
+            "evidence": {
+              "precision": "fp32",
+              "task_type": "generic",
+              "model_family": "unknown",
+              "gradient_accumulation_steps": 1,
+              "trainable_ratio": null,
+              "dataloader_wait_ms": 0.0
+            }
+          },
+          "static_reasons": [
+            "Using user-requested backend: native."
+          ],
+          "static_warnings": [],
+          "runtime_decisions": [],
+          "recommended_config_updates": {},
+          "summary": "Using user-requested backend: native."
+        }
+      }
+    },
+    "train": {
+      "ok": true,
+      "elapsed_seconds": 0.39854211200145073,
+      "result": {
+        "mode": "train",
+        "dry_run": false,
+        "runtime_status": "real_local",
+        "capability_level": "local_native_real_torch",
+        "synthetic": false,
+        "vision_synthetic": false,
+        "clip_contrastive": false,
+        "vlm_lora": false,
+        "mock": false,
+        "workload": "torch_tiny_mlp",
+        "data_type": "tensor_random",
+        "backend": "native",
+        "optimizer": {
+          "type": "adamw",
+          "state_schema_version": 1,
+          "group_size": null,
+          "compensate_quant_error": null,
+          "error_compensation_dtype": null,
+          "error_compensation_mode": null,
+          "trainable_params": 58
+        },
+        "global_step": 2,
+        "last_metrics": {
+          "loss": 0.850346565246582,
+          "dataloader_wait_ms": 0.021535000996664166,
+          "peak_memory_bytes": 18096128,
+          "allocated_memory_bytes": 17045504
+        },
+        "metrics_history": [
+          {
+            "loss": 0.16705282032489777,
+            "dataloader_wait_ms": 0.06061699241399765,
+            "peak_memory_bytes": 17051648,
+            "allocated_memory_bytes": 17045504
+          },
+          {
+            "loss": 0.850346565246582,
+            "dataloader_wait_ms": 0.021535000996664166,
+            "peak_memory_bytes": 18096128,
+            "allocated_memory_bytes": 17045504
+          }
+        ],
+        "train_device": "cuda:0",
+        "elapsed_seconds": 0.14715399898705073,
+        "steps_per_second": 13.591203866474578,
+        "checkpoint": "runs/server_tiny_torch/step-00000002/manifest.json",
+        "checkpoint_validation": {
+          "ok": true,
+          "checked_files": 1,
+          "checked_directories": 0,
+          "missing": [],
+          "checksum_mismatches": [],
+          "size_mismatches": [],
+          "errors": []
+        },
+        "resumed_from": null,
+        "strategy_plan": {
+          "backend": "native",
+          "dp_size": 1,
+          "tp_size": 1,
+          "pp_size": 1,
+          "strategy_type": "single",
+          "zero_stage": 0,
+          "zero_offload": false,
+          "precision": "fp32",
+          "fsdp_state_dict_type": "full",
+          "ddp_comm_hook": "none",
+          "ddp_gradient_as_bucket_view": true,
+          "ddp_static_graph": false,
+          "activation_checkpointing": false,
+          "batch_policy": "sample",
+          "max_tokens_per_batch": null,
+          "checkpoint_policy": "rank0_file",
+          "estimated_memory_per_gpu": 180000,
+          "estimated_total_training_memory": 180000,
+          "reasons": [
+            "Using user-requested backend: native."
+          ],
+          "warnings": [],
+          "topology": {},
+          "communication_plan": {
+            "backend": "native",
+            "ddp_hook": "none",
+            "bucket_cap_mb": null,
+            "use_no_sync": false,
+            "adapter_only_sync": false,
+            "overlap_h2d": false,
+            "reasons": [
+              "No communication hook selected without scenario-specific benchmark evidence."
+            ],
+            "evidence": {
+              "precision": "fp32",
+              "task_type": "generic",
+              "model_family": "unknown",
+              "gradient_accumulation_steps": 1,
+              "trainable_ratio": null,
+              "dataloader_wait_ms": 0.0
+            }
+          }
+        },
+        "config_artifacts": {
+          "run_dir": null,
+          "resolved_config": null,
+          "deepspeed_final_config": null
+        }
+      }
+    },
+    "checkpoint_validate": {
+      "ok": true,
+      "elapsed_seconds": 7.324000762309879e-05,
+      "result": {
+        "mode": "checkpoint_validate",
+        "runtime_status": "diagnostic",
+        "checkpoint": "runs/server_tiny_torch/step-00000002/manifest.json",
+        "manifest": {
+          "format": "parascale_manifest_v1",
+          "schema_version": 2,
+          "step": 2,
+          "global_step": 2,
+          "consumed_samples": 0,
+          "consumed_tokens": 0,
+          "backend": "native",
+          "parallel_plan": {
+            "backend": "native",
+            "dp_size": 1,
+            "tp_size": 1,
+            "pp_size": 1,
+            "strategy_type": "single",
+            "zero_stage": 0,
+            "zero_offload": false,
+            "precision": "fp32",
+            "fsdp_state_dict_type": "full",
+            "ddp_comm_hook": "none",
+            "ddp_gradient_as_bucket_view": true,
+            "ddp_static_graph": false,
+            "activation_checkpointing": false,
+            "batch_policy": "sample",
+            "max_tokens_per_batch": null,
+            "checkpoint_policy": "rank0_file",
+            "estimated_memory_per_gpu": 180000,
+            "estimated_total_training_memory": 180000,
+            "reasons": [
+              "Using user-requested backend: native."
+            ],
+            "warnings": [],
+            "topology": {},
+            "communication_plan": {
+              "backend": "native",
+              "ddp_hook": "none",
+              "bucket_cap_mb": null,
+              "use_no_sync": false,
+              "adapter_only_sync": false,
+              "overlap_h2d": false,
+              "reasons": [
+                "No communication hook selected without scenario-specific benchmark evidence."
+              ],
+              "evidence": {
+                "precision": "fp32",
+                "task_type": "generic",
+                "model_family": "unknown",
+                "gradient_accumulation_steps": 1,
+                "trainable_ratio": null,
+                "dataloader_wait_ms": 0.0
+              }
+            }
+          },
+          "rng_state": {},
+          "data_state": {
+            "consumed_micro_batches": 2,
+            "resume_mode": "replay_skip"
+          },
+          "files": [
+            {
+              "path": "backend_state.pt",
+              "role": "backend_state",
+              "format": "torch",
+              "entry_type": "file",
+              "size_bytes": 12199,
+              "sha256": "c476de13a8b4bb8b2bf383a11f33d12dfbb3a499fc5dd071e5c5158b4cf5b254"
+            }
+          ],
+          "shards": [],
+          "metadata": {
+            "last_metrics": {
+              "loss": 0.850346565246582,
+              "dataloader_wait_ms": 0.021535000996664166,
+              "peak_memory_bytes": 18096128,
+              "allocated_memory_bytes": 17045504
+            },
+            "backend_state_written": true,
+            "backend_specific_checkpoint": false,
+            "rank": 0,
+            "world_size": 1,
+            "rank_count": 1,
+            "optimizer": {
+              "type": "adamw",
+              "state_schema_version": 1,
+              "group_size": null,
+              "compensate_quant_error": null,
+              "error_compensation_dtype": null,
+              "error_compensation_mode": null,
+              "trainable_params": 58
+            },
+            "distributed_backend": null,
+            "shard_count": 1,
+            "state_dict_type": "portable",
+            "checkpoint_write_policy": "rank0_manifest",
+            "scheduler_state_written": false
+          }
+        },
+        "validation": {
+          "ok": true,
+          "checked_files": 1,
+          "checked_directories": 0,
+          "missing": [],
+          "checksum_mismatches": [],
+          "size_mismatches": [],
+          "errors": []
+        }
+      }
+    },
+    "resume": {
+      "ok": true,
+      "elapsed_seconds": 0.005449966993182898,
+      "result": {
+        "mode": "train",
+        "dry_run": false,
+        "runtime_status": "real_local",
+        "capability_level": "local_native_real_torch",
+        "synthetic": false,
+        "vision_synthetic": false,
+        "clip_contrastive": false,
+        "vlm_lora": false,
+        "mock": false,
+        "workload": "torch_tiny_mlp",
+        "data_type": "tensor_random",
+        "backend": "native",
+        "optimizer": {
+          "type": "adamw",
+          "state_schema_version": 1,
+          "group_size": null,
+          "compensate_quant_error": null,
+          "error_compensation_dtype": null,
+          "error_compensation_mode": null,
+          "trainable_params": 58
+        },
+        "global_step": 4,
+        "last_metrics": {
+          "loss": 0.9118404984474182,
+          "dataloader_wait_ms": 0.016709993360564113,
+          "peak_memory_bytes": 18102272,
+          "allocated_memory_bytes": 17051648
+        },
+        "metrics_history": [
+          {
+            "loss": 0.8553656339645386,
+            "dataloader_wait_ms": 0.003188004484400153,
+            "peak_memory_bytes": 18102272,
+            "allocated_memory_bytes": 17051648
+          },
+          {
+            "loss": 0.9118404984474182,
+            "dataloader_wait_ms": 0.016709993360564113,
+            "peak_memory_bytes": 18102272,
+            "allocated_memory_bytes": 17051648
+          }
+        ],
+        "train_device": "cuda:0",
+        "elapsed_seconds": 0.002760671006399207,
+        "steps_per_second": 724.461551327203,
+        "checkpoint": "runs/server_tiny_torch/step-00000004/manifest.json",
+        "checkpoint_validation": {
+          "ok": true,
+          "checked_files": 1,
+          "checked_directories": 0,
+          "missing": [],
+          "checksum_mismatches": [],
+          "size_mismatches": [],
+          "errors": []
+        },
+        "resumed_from": {
+          "format": "parascale_manifest_v1",
+          "schema_version": 2,
+          "step": 2,
+          "global_step": 2,
+          "consumed_samples": 0,
+          "consumed_tokens": 0,
+          "backend": "native",
+          "parallel_plan": {
+            "backend": "native",
+            "dp_size": 1,
+            "tp_size": 1,
+            "pp_size": 1,
+            "strategy_type": "single",
+            "zero_stage": 0,
+            "zero_offload": false,
+            "precision": "fp32",
+            "fsdp_state_dict_type": "full",
+            "ddp_comm_hook": "none",
+            "ddp_gradient_as_bucket_view": true,
+            "ddp_static_graph": false,
+            "activation_checkpointing": false,
+            "batch_policy": "sample",
+            "max_tokens_per_batch": null,
+            "checkpoint_policy": "rank0_file",
+            "estimated_memory_per_gpu": 180000,
+            "estimated_total_training_memory": 180000,
+            "reasons": [
+              "Using user-requested backend: native."
+            ],
+            "warnings": [],
+            "topology": {},
+            "communication_plan": {
+              "backend": "native",
+              "ddp_hook": "none",
+              "bucket_cap_mb": null,
+              "use_no_sync": false,
+              "adapter_only_sync": false,
+              "overlap_h2d": false,
+              "reasons": [
+                "No communication hook selected without scenario-specific benchmark evidence."
+              ],
+              "evidence": {
+                "precision": "fp32",
+                "task_type": "generic",
+                "model_family": "unknown",
+                "gradient_accumulation_steps": 1,
+                "trainable_ratio": null,
+                "dataloader_wait_ms": 0.0
+              }
+            }
+          },
+          "rng_state": {},
+          "data_state": {
+            "consumed_micro_batches": 2,
+            "resume_mode": "replay_skip"
+          },
+          "files": [
+            {
+              "path": "backend_state.pt",
+              "role": "backend_state",
+              "format": "torch",
+              "entry_type": "file",
+              "size_bytes": 12199,
+              "sha256": "c476de13a8b4bb8b2bf383a11f33d12dfbb3a499fc5dd071e5c5158b4cf5b254"
+            }
+          ],
+          "shards": [],
+          "metadata": {
+            "last_metrics": {
+              "loss": 0.850346565246582,
+              "dataloader_wait_ms": 0.021535000996664166,
+              "peak_memory_bytes": 18096128,
+              "allocated_memory_bytes": 17045504
+            },
+            "backend_state_written": true,
+            "backend_specific_checkpoint": false,
+            "rank": 0,
+            "world_size": 1,
+            "rank_count": 1,
+            "optimizer": {
+              "type": "adamw",
+              "state_schema_version": 1,
+              "group_size": null,
+              "compensate_quant_error": null,
+              "error_compensation_dtype": null,
+              "error_compensation_mode": null,
+              "trainable_params": 58
+            },
+            "distributed_backend": null,
+            "shard_count": 1,
+            "state_dict_type": "portable",
+            "checkpoint_write_policy": "rank0_manifest",
+            "scheduler_state_written": false,
+            "backend_state_loaded": true
+          }
+        },
+        "strategy_plan": {
+          "backend": "native",
+          "dp_size": 1,
+          "tp_size": 1,
+          "pp_size": 1,
+          "strategy_type": "single",
+          "zero_stage": 0,
+          "zero_offload": false,
+          "precision": "fp32",
+          "fsdp_state_dict_type": "full",
+          "ddp_comm_hook": "none",
+          "ddp_gradient_as_bucket_view": true,
+          "ddp_static_graph": false,
+          "activation_checkpointing": false,
+          "batch_policy": "sample",
+          "max_tokens_per_batch": null,
+          "checkpoint_policy": "rank0_file",
+          "estimated_memory_per_gpu": 180000,
+          "estimated_total_training_memory": 180000,
+          "reasons": [
+            "Using user-requested backend: native."
+          ],
+          "warnings": [],
+          "topology": {},
+          "communication_plan": {
+            "backend": "native",
+            "ddp_hook": "none",
+            "bucket_cap_mb": null,
+            "use_no_sync": false,
+            "adapter_only_sync": false,
+            "overlap_h2d": false,
+            "reasons": [
+              "No communication hook selected without scenario-specific benchmark evidence."
+            ],
+            "evidence": {
+              "precision": "fp32",
+              "task_type": "generic",
+              "model_family": "unknown",
+              "gradient_accumulation_steps": 1,
+              "trainable_ratio": null,
+              "dataloader_wait_ms": 0.0
+            }
+          }
+        },
+        "config_artifacts": {
+          "run_dir": null,
+          "resolved_config": null,
+          "deepspeed_final_config": null
+        }
+      }
+    },
+    "serve": {
+      "ok": true,
+      "elapsed_seconds": 0.001371460995869711,
+      "result": {
+        "mode": "serve",
+        "dry_run": false,
+        "runtime_status": "real_local",
+        "capability_level": "local_tiny_torch_checkpoint",
+        "mock": false,
+        "checkpoint": "runs/server_tiny_torch/step-00000002/manifest.json",
+        "checkpoint_validation": {
+          "ok": true,
+          "checked_files": 1,
+          "checked_directories": 0,
+          "missing": [],
+          "checksum_mismatches": [],
+          "size_mismatches": [],
+          "errors": []
+        },
+        "manifest": {
+          "format": "parascale_manifest_v1",
+          "schema_version": 2,
+          "step": 2,
+          "global_step": 2,
+          "consumed_samples": 0,
+          "consumed_tokens": 0,
+          "backend": "native",
+          "parallel_plan": {
+            "backend": "native",
+            "dp_size": 1,
+            "tp_size": 1,
+            "pp_size": 1,
+            "strategy_type": "single",
+            "zero_stage": 0,
+            "zero_offload": false,
+            "precision": "fp32",
+            "fsdp_state_dict_type": "full",
+            "ddp_comm_hook": "none",
+            "ddp_gradient_as_bucket_view": true,
+            "ddp_static_graph": false,
+            "activation_checkpointing": false,
+            "batch_policy": "sample",
+            "max_tokens_per_batch": null,
+            "checkpoint_policy": "rank0_file",
+            "estimated_memory_per_gpu": 180000,
+            "estimated_total_training_memory": 180000,
+            "reasons": [
+              "Using user-requested backend: native."
+            ],
+            "warnings": [],
+            "topology": {},
+            "communication_plan": {
+              "backend": "native",
+              "ddp_hook": "none",
+              "bucket_cap_mb": null,
+              "use_no_sync": false,
+              "adapter_only_sync": false,
+              "overlap_h2d": false,
+              "reasons": [
+                "No communication hook selected without scenario-specific benchmark evidence."
+              ],
+              "evidence": {
+                "precision": "fp32",
+                "task_type": "generic",
+                "model_family": "unknown",
+                "gradient_accumulation_steps": 1,
+                "trainable_ratio": null,
+                "dataloader_wait_ms": 0.0
+              }
+            }
+          },
+          "rng_state": {},
+          "data_state": {
+            "consumed_micro_batches": 2,
+            "resume_mode": "replay_skip"
+          },
+          "files": [
+            {
+              "path": "backend_state.pt",
+              "role": "backend_state",
+              "format": "torch",
+              "entry_type": "file",
+              "size_bytes": 12199,
+              "sha256": "c476de13a8b4bb8b2bf383a11f33d12dfbb3a499fc5dd071e5c5158b4cf5b254"
+            }
+          ],
+          "shards": [],
+          "metadata": {
+            "last_metrics": {
+              "loss": 0.850346565246582,
+              "dataloader_wait_ms": 0.021535000996664166,
+              "peak_memory_bytes": 18096128,
+              "allocated_memory_bytes": 17045504
+            },
+            "backend_state_written": true,
+            "backend_specific_checkpoint": false,
+            "rank": 0,
+            "world_size": 1,
+            "rank_count": 1,
+            "optimizer": {
+              "type": "adamw",
+              "state_schema_version": 1,
+              "group_size": null,
+              "compensate_quant_error": null,
+              "error_compensation_dtype": null,
+              "error_compensation_mode": null,
+              "trainable_params": 58
+            },
+            "distributed_backend": null,
+            "shard_count": 1,
+            "state_dict_type": "portable",
+            "checkpoint_write_policy": "rank0_manifest",
+            "scheduler_state_written": false
+          }
+        },
+        "result": {
+          "requests": [
+            [
+              1.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          "outputs": [
+            [
+              0.4991471469402313,
+              -0.05872730910778046
+            ]
+          ],
+          "mode": "model"
+        }
+      }
+    }
+  },
+  "finished_at_unix": 1783840853.305059
+}

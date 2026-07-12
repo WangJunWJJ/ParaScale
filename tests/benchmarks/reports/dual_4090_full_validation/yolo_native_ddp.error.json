@@ -1,0 +1,6 @@
+{
+  "backend": "yolo_native_ddp",
+  "status": "error",
+  "returncode": 0,
+  "command": "torchrun --standalone --nproc_per_node=2 -m parascale.cli benchmark --config /tmp/parascale_yolo_native_ddp.json"
+}
