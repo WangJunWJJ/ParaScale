@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from .clip import ClipContrastiveSpec, build_clip_contrastive_components
 from .datacomp import _iter_datacomp_tar_entries, _looks_like_supported_image
+from .ground_dino import GroundDinoSpec, build_ground_dino_components
 from .registry import (
     build_optimizer_for_model,
     build_training_components,
@@ -22,6 +23,7 @@ from .yolo import YoloWorldSpec, build_yolo_world_components
 
 __all__ = [
     "ClipContrastiveSpec",
+    "GroundDinoSpec",
     "TinyTorchWorkloadSpec",
     "VisionSyntheticSpec",
     "VlmLoraSpec",
@@ -29,6 +31,7 @@ __all__ = [
     "_iter_datacomp_tar_entries",
     "_looks_like_supported_image",
     "build_clip_contrastive_components",
+    "build_ground_dino_components",
     "build_optimizer_for_model",
     "build_serving_model_from_checkpoint",
     "build_tiny_torch_components",
