@@ -160,6 +160,50 @@ class TrainingRunConfig:
         return data
 
 
+_CONFIG_SECTION_TYPES = {
+    "workload": WorkloadConfig,
+    "parallel": ParallelConfig,
+    "backend": BackendConfig,
+    "data": DataPipelineConfig,
+    "training": TrainingRunConfig,
+}
+
+
+def flat_config_fields_by_section() -> Dict[str, tuple[str, ...]]:
+    """Return the canonical mapping from layered sections to flat config fields."""
+
+    return {
+        section: tuple(config_type().to_dict().keys())
+        for section, config_type in _CONFIG_SECTION_TYPES.items()
+    }
+
+
+def flat_config_field_names() -> tuple[str, ...]:
+    """Return every flat config field owned by a layered config section."""
+
+    fields: list[str] = []
+    for section_fields in flat_config_fields_by_section().values():
+        fields.extend(section_fields)
+    return tuple(fields)
+
+
+def _copy_config_value(value: Any) -> Any:
+    if isinstance(value, list):
+        return [list(item) if isinstance(item, list) else item for item in value]
+    if isinstance(value, dict):
+        return dict(value)
+    return value
+
+
+def _section_kwargs_from_config(
+    config: "ParaScaleConfig", section: str
+) -> Dict[str, Any]:
+    return {
+        field_name: _copy_config_value(getattr(config, field_name))
+        for field_name in flat_config_fields_by_section()[section]
+    }
+
+
 @dataclass
 class LayeredParaScaleConfig:
     workload: WorkloadConfig = field(default_factory=WorkloadConfig)
@@ -198,99 +242,12 @@ class LayeredParaScaleConfig:
     @classmethod
     def from_config(cls, config: "ParaScaleConfig") -> "LayeredParaScaleConfig":
         return cls(
-            workload=WorkloadConfig(
-                task_type=config.task_type,
-                model_family=config.model_family,
-                target_scale=config.target_scale,
-                optimize_for=config.optimize_for,
-            ),
-            parallel=ParallelConfig(
-                data_parallel_size=config.data_parallel_size,
-                model_parallel_size=config.model_parallel_size,
-                tensor_parallel_size=config.tensor_parallel_size,
-                tensor_parallel_mode=config.tensor_parallel_mode,
-                pipeline_parallel_size=config.pipeline_parallel_size,
-                pipeline_parallel_chunks=config.pipeline_parallel_chunks,
-                max_tensor_parallel_size=config.max_tensor_parallel_size,
-                max_pipeline_parallel_size=config.max_pipeline_parallel_size,
-            ),
-            backend=BackendConfig(
-                training_backend=config.training_backend,
-                zero_optimization=config.zero_optimization,
-                zero_stage=config.zero_stage,
-                zero_offload=config.zero_offload,
-                fsdp_sharding_strategy=config.fsdp_sharding_strategy,
-                fsdp_cpu_offload=config.fsdp_cpu_offload,
-                fsdp_auto_wrap=config.fsdp_auto_wrap,
-                fsdp_min_num_params=config.fsdp_min_num_params,
-                fsdp_state_dict_type=config.fsdp_state_dict_type,
-                fsdp_use_orig_params=config.fsdp_use_orig_params,
-                fsdp_activation_checkpointing_policy=(
-                    config.fsdp_activation_checkpointing_policy
-                ),
-                fsdp_checkpoint_module_classes=list(
-                    config.fsdp_checkpoint_module_classes
-                ),
-                ddp_find_unused_parameters=config.ddp_find_unused_parameters,
-                ddp_gradient_as_bucket_view=config.ddp_gradient_as_bucket_view,
-                ddp_static_graph=config.ddp_static_graph,
-                ddp_comm_hook=config.ddp_comm_hook,
-                deepspeed_config=(
-                    dict(config.deepspeed_config)
-                    if config.deepspeed_config is not None
-                    else None
-                ),
-            ),
-            data=DataPipelineConfig(
-                batching_strategy=config.batching_strategy,
-                max_tokens_per_batch=config.max_tokens_per_batch,
-                max_patch_tokens_per_batch=config.max_patch_tokens_per_batch,
-                resolution_buckets=[
-                    list(bucket) for bucket in config.resolution_buckets
-                ],
-                dataloader_num_workers=config.dataloader_num_workers,
-                dataloader_pin_memory=config.dataloader_pin_memory,
-                dataloader_prefetch_factor=config.dataloader_prefetch_factor,
-                dataloader_persistent_workers=config.dataloader_persistent_workers,
-                dataloader_drop_last=config.dataloader_drop_last,
-                dataset_local_cache_dir=config.dataset_local_cache_dir,
-                tensor_cache=config.tensor_cache,
-                tensor_cache_dir=config.tensor_cache_dir,
-                device_prefetch=config.device_prefetch,
-                prefetch_device=config.prefetch_device,
-                cuda_prefetch=config.cuda_prefetch,
-                cuda_prefetch_device=config.cuda_prefetch_device,
-                tuner_dataloader_wait_threshold_ms=(
-                    config.tuner_dataloader_wait_threshold_ms
-                ),
-                preprocess_in_workers=config.preprocess_in_workers,
-                pipeline_cache=config.pipeline_cache,
-                pipeline_cache_dir=config.pipeline_cache_dir,
-                pipeline_cache_max_entries=config.pipeline_cache_max_entries,
-                pipeline_cache_max_bytes=config.pipeline_cache_max_bytes,
-                pipeline_cache_ttl_seconds=config.pipeline_cache_ttl_seconds,
-                prompt_template_cache=config.prompt_template_cache,
-                prompt_template_cache_dir=config.prompt_template_cache_dir,
-            ),
+            workload=WorkloadConfig(**_section_kwargs_from_config(config, "workload")),
+            parallel=ParallelConfig(**_section_kwargs_from_config(config, "parallel")),
+            backend=BackendConfig(**_section_kwargs_from_config(config, "backend")),
+            data=DataPipelineConfig(**_section_kwargs_from_config(config, "data")),
             training=TrainingRunConfig(
-                strategy_memory_margin=config.strategy_memory_margin,
-                enable_activation_checkpointing=(
-                    config.enable_activation_checkpointing
-                ),
-                batch_size=config.batch_size,
-                gradient_accumulation_steps=config.gradient_accumulation_steps,
-                learning_rate=config.learning_rate,
-                precision=config.precision,
-                grad_clip_norm=config.grad_clip_norm,
-                log_interval=config.log_interval,
-                label_keys=list(config.label_keys),
-                seed=config.seed,
-                checkpoint_save_path=config.checkpoint_save_path,
-                checkpoint_save_interval=config.checkpoint_save_interval,
-                adapter_only_checkpoint=config.adapter_only_checkpoint,
-                allow_world_size_change_on_resume=(
-                    config.allow_world_size_change_on_resume
-                ),
+                **_section_kwargs_from_config(config, "training")
             ),
             quantization=config.quantization,
         )
@@ -571,83 +528,22 @@ class ParaScaleConfig:
         return self.to_layered().to_dict()
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
-            "task_type": self.task_type,
-            "model_family": self.model_family,
-            "target_scale": self.target_scale,
-            "optimize_for": self.optimize_for,
-            "data_parallel_size": self.data_parallel_size,
-            "model_parallel_size": self.model_parallel_size,
-            "tensor_parallel_size": self.tensor_parallel_size,
-            "tensor_parallel_mode": self.tensor_parallel_mode,
-            "pipeline_parallel_size": self.pipeline_parallel_size,
-            "pipeline_parallel_chunks": self.pipeline_parallel_chunks,
-            "zero_optimization": self.zero_optimization,
-            "zero_stage": self.zero_stage,
-            "zero_offload": self.zero_offload,
-            "training_backend": self.training_backend,
-            "fsdp_sharding_strategy": self.fsdp_sharding_strategy,
-            "fsdp_cpu_offload": self.fsdp_cpu_offload,
-            "fsdp_auto_wrap": self.fsdp_auto_wrap,
-            "fsdp_min_num_params": self.fsdp_min_num_params,
-            "fsdp_state_dict_type": self.fsdp_state_dict_type,
-            "fsdp_use_orig_params": self.fsdp_use_orig_params,
-            "fsdp_activation_checkpointing_policy": (
-                self.fsdp_activation_checkpointing_policy
-            ),
-            "fsdp_checkpoint_module_classes": list(self.fsdp_checkpoint_module_classes),
-            "ddp_find_unused_parameters": self.ddp_find_unused_parameters,
-            "ddp_gradient_as_bucket_view": self.ddp_gradient_as_bucket_view,
-            "ddp_static_graph": self.ddp_static_graph,
-            "ddp_comm_hook": self.ddp_comm_hook,
-            "deepspeed_config": self.deepspeed_config,
-            "strategy_memory_margin": self.strategy_memory_margin,
-            "max_tensor_parallel_size": self.max_tensor_parallel_size,
-            "max_pipeline_parallel_size": self.max_pipeline_parallel_size,
-            "enable_activation_checkpointing": self.enable_activation_checkpointing,
-            "batch_size": self.batch_size,
-            "gradient_accumulation_steps": self.gradient_accumulation_steps,
-            "learning_rate": self.learning_rate,
-            "precision": self.precision,
-            "grad_clip_norm": self.grad_clip_norm,
-            "log_interval": self.log_interval,
-            "label_keys": list(self.label_keys),
-            "batching_strategy": self.batching_strategy,
-            "max_tokens_per_batch": self.max_tokens_per_batch,
-            "max_patch_tokens_per_batch": self.max_patch_tokens_per_batch,
-            "resolution_buckets": [list(bucket) for bucket in self.resolution_buckets],
-            "dataloader_num_workers": self.dataloader_num_workers,
-            "dataloader_pin_memory": self.dataloader_pin_memory,
-            "dataloader_prefetch_factor": self.dataloader_prefetch_factor,
-            "dataloader_persistent_workers": self.dataloader_persistent_workers,
-            "dataloader_drop_last": self.dataloader_drop_last,
-            "dataset_local_cache_dir": self.dataset_local_cache_dir,
-            "tensor_cache": self.tensor_cache,
-            "tensor_cache_dir": self.tensor_cache_dir,
-            "device_prefetch": self.device_prefetch,
-            "prefetch_device": self.prefetch_device,
-            "cuda_prefetch": self.cuda_prefetch,
-            "cuda_prefetch_device": self.cuda_prefetch_device,
-            "tuner_dataloader_wait_threshold_ms": (
-                self.tuner_dataloader_wait_threshold_ms
-            ),
-            "preprocess_in_workers": self.preprocess_in_workers,
-            "pipeline_cache": self.pipeline_cache,
-            "pipeline_cache_dir": self.pipeline_cache_dir,
-            "pipeline_cache_max_entries": self.pipeline_cache_max_entries,
-            "pipeline_cache_max_bytes": self.pipeline_cache_max_bytes,
-            "pipeline_cache_ttl_seconds": self.pipeline_cache_ttl_seconds,
-            "prompt_template_cache": self.prompt_template_cache,
-            "prompt_template_cache_dir": self.prompt_template_cache_dir,
-            "seed": self.seed,
-            "checkpoint_save_path": self.checkpoint_save_path,
-            "checkpoint_save_interval": self.checkpoint_save_interval,
-            "adapter_only_checkpoint": self.adapter_only_checkpoint,
-            "allow_world_size_change_on_resume": (
-                self.allow_world_size_change_on_resume
-            ),
-            "quantization": self.quantization.to_dict(),
+        data = {
+            field_name: _copy_config_value(getattr(self, field_name))
+            for field_name in flat_config_field_names()
         }
+        data["resolution_buckets"] = [
+            list(bucket) for bucket in self.resolution_buckets
+        ]
+        data["label_keys"] = list(self.label_keys)
+        data["fsdp_checkpoint_module_classes"] = list(
+            self.fsdp_checkpoint_module_classes
+        )
+        data["deepspeed_config"] = (
+            dict(self.deepspeed_config) if self.deepspeed_config is not None else None
+        )
+        data["quantization"] = self.quantization.to_dict()
+        return data
 
     @classmethod
     def from_dict(cls, config_dict: Dict[str, Any]) -> "ParaScaleConfig":
@@ -664,7 +560,7 @@ class ParaScaleConfig:
 
     @classmethod
     def from_layered_dict(cls, config_dict: Dict[str, Any]) -> "ParaScaleConfig":
-        layered_keys = ["workload", "parallel", "backend", "data", "training"]
+        layered_keys = list(_CONFIG_SECTION_TYPES)
         flat: Dict[str, Any] = {}
         for key in layered_keys:
             section = config_dict.get(key, {})
