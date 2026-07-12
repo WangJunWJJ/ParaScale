@@ -67,12 +67,12 @@ def test_checkpoint_optimizer_metadata_mismatch_fails_before_load():
 
 
 def test_distributed_topology_rejects_world_size_mismatch(monkeypatch):
-    from parascale.runtime.orchestrator import _validate_distributed_topology
+    from parascale.runtime.lifecycle import validate_distributed_topology
 
     monkeypatch.setenv("WORLD_SIZE", "4")
 
     with pytest.raises(ValueError, match="WORLD_SIZE=4.*nnodes=2.*nproc_per_node=1"):
-        _validate_distributed_topology(
+        validate_distributed_topology(
             {"distributed": {"nnodes": 2, "nproc_per_node": 1}}
         )
 

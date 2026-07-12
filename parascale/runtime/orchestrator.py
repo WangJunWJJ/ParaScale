@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import os
 import time
 from copy import deepcopy
 from pathlib import Path
@@ -22,11 +21,14 @@ from parascale.configuration import (
 from parascale.optimizers.spec import OptimizerSpec
 from parascale.reporting.aggregation import aggregate_stable_metrics
 from parascale.reporting.benchmark import benchmark_result_from_train_payload
-from parascale.runtime.backends.devices import (
-    npu_is_available,
-    set_current_device,
-)
 from parascale.runtime.inference.engine import InferenceEngine
+from parascale.runtime.lifecycle import (
+    distributed_rank,
+    initialize_distributed_for_backend,
+    is_distributed_launch,
+    model_device,
+    validate_distributed_topology,
+)
 from parascale.runtime.training import TrainEngine
 from parascale.strategy import build_strategy_plan
 from parascale.workloads import (
@@ -89,7 +91,7 @@ def run_train_from_config(
     }:
         raise ValueError(f"unsupported CLI training backend: {requested_backend}")
     if requested_backend == "auto":
-        if _is_distributed_launch():
+        if is_distributed_launch():
             strategy_plan = build_strategy_plan(
                 _section(config_data, "model_profile"),
                 _section(config_data, "hardware_profile"),
@@ -103,15 +105,15 @@ def run_train_from_config(
         "fsdp",
         "deepspeed",
     }
-    if distributed_requested and not _is_distributed_launch():
+    if distributed_requested and not is_distributed_launch():
         raise ValueError(
             f"CLI backend '{parascale_config.training_backend}' requires a "
             "distributed launcher. Use torchrun/deepspeed launcher, or set "
             "parascale.training_backend=native for local smoke."
         )
     if distributed_requested:
-        _validate_distributed_topology(config_data)
-        _initialize_distributed_for_cli(parascale_config.training_backend)
+        validate_distributed_topology(config_data)
+        initialize_distributed_for_backend(parascale_config.training_backend)
 
     optimizer_spec = OptimizerSpec.from_config(config_data)
     optimizer_spec.validate_backend(
@@ -146,7 +148,7 @@ def run_train_from_config(
     )
     component_config = _rank_component_config(
         component_config,
-        rank=_distributed_rank(),
+        rank=distributed_rank(),
         distributed=distributed_requested,
     )
     flags = workload_capability.payload_flags()
@@ -210,7 +212,7 @@ def run_train_from_config(
         "global_step": state.global_step,
         "last_metrics": dict(state.last_metrics),
         "metrics_history": list(state.metrics_history),
-        "train_device": _model_device(model),
+        "train_device": model_device(model),
         "elapsed_seconds": elapsed,
         "steps_per_second": max_steps / elapsed,
         "checkpoint": str(final_manifest_path) if final_manifest_path else None,
@@ -292,79 +294,8 @@ def _apply_strategy_plan_to_config(config: ParaScaleConfig, plan: Any) -> None:
         config.ddp_static_graph = plan.ddp_static_graph
 
 
-def _is_distributed_launch() -> bool:
-    return int(os.environ.get("WORLD_SIZE", "1") or 1) > 1
-
-
-def _validate_distributed_topology(config_data: Dict[str, Any]) -> None:
-    distributed = _section(config_data, "distributed")
-    if not distributed:
-        return
-    nnodes = max(1, int(distributed.get("nnodes", 1) or 1))
-    nproc = max(1, int(distributed.get("nproc_per_node", 1) or 1))
-    world_size = int(os.environ.get("WORLD_SIZE", str(nnodes * nproc)) or 1)
-    expected = nnodes * nproc
-    if world_size != expected:
-        raise ValueError(
-            "distributed topology mismatch: "
-            f"WORLD_SIZE={world_size}, nnodes={nnodes}, "
-            f"nproc_per_node={nproc}, expected={expected}"
-        )
-
-
 def _capability_level_for_scope(base_level: str, config_data: Dict[str, Any]) -> str:
     return capability_level_for_scope(base_level, config_data)
-
-
-def _initialize_distributed_for_cli(backend: str) -> None:
-    try:
-        import torch
-        import torch.distributed as dist
-    except Exception as exc:
-        raise ImportError(
-            f"CLI backend '{backend}' requires torch and torch.distributed."
-        ) from exc
-
-    local_rank = int(os.environ.get("LOCAL_RANK", "0") or 0)
-    set_current_device(torch, local_rank=local_rank)
-    if not dist.is_available():
-        raise RuntimeError("torch.distributed is not available in this PyTorch build.")
-    if not dist.is_initialized():
-        dist_backend = _distributed_backend_for_torch(torch)
-        dist.init_process_group(backend=dist_backend)
-
-
-def _destroy_distributed_for_cli() -> None:
-    try:
-        import torch.distributed as dist
-    except Exception:
-        return
-    if dist.is_available() and dist.is_initialized():
-        dist.destroy_process_group()
-
-
-def _distributed_backend_for_torch(torch: Any) -> str:
-    if torch.cuda.is_available():
-        return "nccl"
-    if npu_is_available(torch):
-        return "hccl"
-    return "gloo"
-
-
-def _distributed_rank() -> int:
-    return int(os.environ.get("RANK", "0") or 0)
-
-
-def _model_device(model: Any) -> str:
-    parameters = getattr(model, "parameters", None)
-    if not callable(parameters):
-        return "unknown"
-    try:
-        return str(next(parameters()).device)
-    except StopIteration:
-        return "unknown"
-    except Exception:
-        return "unknown"
 
 
 def run_serve_from_config(

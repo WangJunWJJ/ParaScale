@@ -17,9 +17,7 @@ from parascale.configuration import resolve_config, write_config_artifacts
 from parascale.runtime import build_benchmark_plan, build_runtime_context
 from parascale.runtime.backends.devices import set_current_device
 from parascale.runtime.inference import InferenceRunner
-from parascale.runtime.orchestrator import (
-    _destroy_distributed_for_cli,
-)
+from parascale.runtime.lifecycle import destroy_distributed_runtime
 from parascale.runtime.orchestrator import (
     run_benchmark_from_config as _run_benchmark_from_config,
 )
@@ -201,7 +199,7 @@ def cmd_train(args: argparse.Namespace) -> int:
             payload.setdefault("config_artifacts", config_artifacts)
             emit_json(payload, args.output)
         finally:
-            _destroy_distributed_for_cli()
+            destroy_distributed_runtime()
         return 0
     payload = build_train_dry_run_payload(config_data)
     payload["config_artifacts"] = config_artifacts
@@ -241,7 +239,7 @@ def cmd_benchmark(args: argparse.Namespace) -> int:
         try:
             payload = run_benchmark_from_config(config_data)
         finally:
-            _destroy_distributed_for_cli()
+            destroy_distributed_runtime()
     else:
         payload = build_benchmark_dry_run_payload(config_data)
     payload.setdefault("config_artifacts", config_artifacts)
