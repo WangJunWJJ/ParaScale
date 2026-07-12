@@ -12,7 +12,7 @@ from typing import Any, Dict, Iterable, List
 
 from parascale.data import MultiModalCollator
 from parascale.data.vision import estimate_patch_tokens
-from parascale.runtime.specs import ClipContrastiveSpec
+from parascale.workloads.specs import ClipContrastiveSpec
 
 from .common import (
     _patchify,

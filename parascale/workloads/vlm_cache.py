@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Mapping, Sequence
 
-from parascale.runtime.specs import VlmLoraSpec
+from parascale.workloads.specs import VlmLoraSpec
 
 from .common import _require_pil_image
 

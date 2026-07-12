@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict
 
-from parascale.runtime.specs import TinyTorchWorkloadSpec
+from parascale.workloads.specs import TinyTorchWorkloadSpec
 
 from .common import _require_torch, _section
 from .tiny import build_tiny_torch_components

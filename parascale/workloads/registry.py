@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from parascale.runtime.specs import (
+from parascale.workloads.specs import (
     ClipContrastiveSpec,
     GroundDinoSpec,
     TinyTorchWorkloadSpec,

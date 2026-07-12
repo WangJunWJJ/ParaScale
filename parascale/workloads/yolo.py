@@ -21,7 +21,7 @@ from parascale.data.vision.preprocessor import (
     VisionSample,
     VisionTransformConfig,
 )
-from parascale.runtime.specs import YoloWorldSpec
+from parascale.workloads.specs import YoloWorldSpec
 from parascale.workloads.adapters.yolo import (
     YoloDetectionTargetAdapter,
     YoloOfficialBatchAdapter,

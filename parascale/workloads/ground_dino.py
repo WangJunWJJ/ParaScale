@@ -18,7 +18,7 @@ from parascale.data.vision.preprocessor import (
     VisionSample,
     VisionTransformConfig,
 )
-from parascale.runtime.specs import GroundDinoSpec
+from parascale.workloads.specs import GroundDinoSpec
 from parascale.workloads.adapters.ground_dino import (
     GroundDinoBatchAdapter,
     GroundDinoPhraseTargetAdapter,

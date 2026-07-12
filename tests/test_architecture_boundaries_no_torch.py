@@ -334,3 +334,14 @@ def test_production_code_does_not_import_deprecated_facades():
             violations.append(str(path))
 
     assert violations == []
+
+
+def test_workload_modules_do_not_import_runtime_specs():
+    violations = []
+    forbidden = "parascale.runtime.specs"
+    for path in Path("parascale/workloads").rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        if forbidden in source:
+            violations.append(str(path))
+
+    assert violations == []
