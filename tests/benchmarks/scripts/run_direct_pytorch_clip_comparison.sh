@@ -6,7 +6,7 @@ OUTPUT_DIR=${OUTPUT_DIR:-runs/benchmarks/direct_pytorch_clip_comparison}
 REPORT_PATH=${REPORT_PATH:-tests/benchmarks/reports/direct_pytorch_clip_comparison.md}
 SUITE_ID=${SUITE_ID:-direct_pytorch_clip_comparison}
 IMAGE_NAME=${IMAGE_NAME:-parascale-ci:cu121-torch24}
-SCENARIOS=${SCENARIOS:-parascale_native_ddp parascale_fsdp torch_ddp torch_fsdp}
+SCENARIOS=${SCENARIOS:-parascale_native_ddp parascale_fsdp parascale_deepspeed torch_ddp torch_fsdp}
 CLEAN_OUTPUT=${CLEAN_OUTPUT:-1}
 
 mkdir -p "${ROOT_DIR}/${OUTPUT_DIR}" "${ROOT_DIR}/tests/benchmarks/reports"
@@ -62,11 +62,12 @@ run_json() {
   if "$@" --output "${output}" >"${log}" 2>&1; then
     rm -f "${OUTPUT_DIR}/${name}.error.json"
     return 0
+  else
+    local code=$?
+    tail -n 80 "${log}" || true
+    write_error "${name}" "${code}" "$@"
+    return 0
   fi
-  local code=$?
-  tail -n 80 "${log}" || true
-  write_error "${name}" "${code}" "$@"
-  return 0
 }
 
 write_parascale_config() {
@@ -82,6 +83,7 @@ base = Path("tests/benchmarks/configs")
 config_name = {
     "native_ddp": "benchmark_datacomp_medium_native_ddp_b8_bf16_hook.json",
     "fsdp": "benchmark_datacomp_medium_fsdp_b8.json",
+    "deepspeed": "benchmark_datacomp_medium_deepspeed_b8.json",
 }[backend]
 cfg = json.loads((base / config_name).read_text(encoding="utf-8"))
 cfg.setdefault("data", {})["type"] = "synthetic_clip"
@@ -113,6 +115,12 @@ if has_scenario parascale_fsdp; then
     -m parascale.cli benchmark --config /tmp/parascale_direct_compare_fsdp.json
 fi
 
+if has_scenario parascale_deepspeed; then
+  write_parascale_config deepspeed /tmp/parascale_direct_compare_deepspeed.json
+  run_json parascale_deepspeed deepspeed --num_gpus=2 --module parascale.cli benchmark \
+    --config /tmp/parascale_direct_compare_deepspeed.json
+fi
+
 if has_scenario torch_ddp; then
   run_json torch_ddp torchrun --standalone --nproc_per_node=2 \
     tests/benchmarks/scripts/run_direct_pytorch_clip_baseline.py \
@@ -123,6 +131,12 @@ if has_scenario torch_fsdp; then
   run_json torch_fsdp torchrun --standalone --nproc_per_node=2 \
     tests/benchmarks/scripts/run_direct_pytorch_clip_baseline.py \
     --backend fsdp --steps 80 --warmup-steps 10 --batch-size 8
+fi
+
+if has_scenario deepspeed; then
+  run_json deepspeed deepspeed --num_gpus=2 \
+    tests/benchmarks/scripts/run_direct_pytorch_clip_baseline.py \
+    --backend deepspeed --steps 80 --warmup-steps 10 --batch-size 8
 fi
 
 python3 tests/benchmarks/tools/summarize_direct_pytorch_comparison.py \

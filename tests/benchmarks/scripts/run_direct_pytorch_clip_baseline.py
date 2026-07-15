@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 
-"""Run a direct PyTorch DDP/FSDP CLIP-style training baseline.
+"""Run a direct PyTorch/DeepSpeed CLIP-style training baseline.
 
 This script intentionally avoids ParaScale runtime imports. It is used to
-compare ParaScale benchmark results against plain torch.distributed training
-under the same synthetic CLIP-medium task shape.
+compare ParaScale benchmark results against plain torch.distributed or
+DeepSpeed training under the same synthetic CLIP-medium task shape.
 """
 
 from __future__ import annotations
@@ -83,7 +83,11 @@ class ClipMedium(nn.Module):
 
     def forward(self, pixel_values: torch.Tensor, input_ids: torch.Tensor) -> torch.Tensor:
         batch_size = pixel_values.shape[0]
-        image_tokens = self.patch_embed(pixel_values).flatten(2).transpose(1, 2)
+        image_tokens = (
+            self.patch_embed(pixel_values.to(dtype=self.patch_embed.weight.dtype))
+            .flatten(2)
+            .transpose(1, 2)
+        )
         cls = self.image_cls.expand(batch_size, -1, -1)
         image_tokens = torch.cat([cls, image_tokens], dim=1)
         image_tokens = image_tokens + self.image_pos[:, : image_tokens.shape[1], :]
@@ -104,11 +108,15 @@ class ClipMedium(nn.Module):
         )
 
 
-def _distributed_context() -> Tuple[int, int, int]:
+def _distributed_context(
+    local_rank_arg: int | None = None,
+    *,
+    init_process_group: bool = True,
+) -> Tuple[int, int, int]:
     rank = int(os.environ.get("RANK", "0") or 0)
     world_size = int(os.environ.get("WORLD_SIZE", "1") or 1)
-    local_rank = int(os.environ.get("LOCAL_RANK", "0") or 0)
-    if world_size > 1 and not dist.is_initialized():
+    local_rank = int(os.environ.get("LOCAL_RANK", local_rank_arg or 0) or 0)
+    if init_process_group and world_size > 1 and not dist.is_initialized():
         dist.init_process_group(backend="nccl")
     return rank, world_size, local_rank
 
@@ -145,6 +153,24 @@ def _wrap_model(model: nn.Module, backend: str, device: torch.device) -> nn.Modu
             device_id=device,
         )
     raise ValueError(f"Unsupported backend: {backend}")
+
+
+def _deepspeed_config(args: argparse.Namespace) -> Dict[str, Any]:
+    return {
+        "train_micro_batch_size_per_gpu": args.batch_size,
+        "gradient_accumulation_steps": 1,
+        "steps_per_print": 0,
+        "bf16": {"enabled": True},
+        "zero_optimization": {
+            "stage": 2,
+            "allgather_partitions": True,
+            "allgather_bucket_size": 200000000,
+            "overlap_comm": False,
+            "reduce_scatter": True,
+            "reduce_bucket_size": 200000000,
+            "contiguous_gradients": True,
+        },
+    }
 
 
 def _make_batch(
@@ -186,7 +212,10 @@ def _mean(values: Iterable[float]) -> float:
 
 
 def run(args: argparse.Namespace) -> Dict[str, Any]:
-    rank, world_size, local_rank = _distributed_context()
+    rank, world_size, local_rank = _distributed_context(
+        args.local_rank,
+        init_process_group=args.backend != "deepspeed",
+    )
     torch.cuda.set_device(local_rank)
     device = torch.device("cuda", local_rank)
     torch.manual_seed(args.seed)
@@ -204,8 +233,19 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
         mlp_ratio=args.mlp_ratio,
         temperature=args.temperature,
     )
-    wrapped = _wrap_model(model, args.backend, device)
-    optimizer = torch.optim.AdamW(wrapped.parameters(), lr=args.lr)
+    if args.backend == "deepspeed":
+        import deepspeed
+
+        optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr)
+        wrapped, optimizer, _, _ = deepspeed.initialize(
+            model=model.to(device),
+            model_parameters=model.parameters(),
+            optimizer=optimizer,
+            config=_deepspeed_config(args),
+        )
+    else:
+        wrapped = _wrap_model(model, args.backend, device)
+        optimizer = torch.optim.AdamW(wrapped.parameters(), lr=args.lr)
 
     step_times = []
     end_to_end_times = []
@@ -229,12 +269,19 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
         if device.type == "cuda":
             torch.cuda.synchronize(device)
         step_start = time.perf_counter()
-        optimizer.zero_grad(set_to_none=True)
-        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+        if args.backend == "deepspeed":
+            wrapped.zero_grad()
             logits = wrapped(batch["pixel_values"], batch["input_ids"])
             loss = _loss(logits, batch["labels"])
-        loss.backward()
-        optimizer.step()
+            wrapped.backward(loss)
+            wrapped.step()
+        else:
+            optimizer.zero_grad(set_to_none=True)
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                logits = wrapped(batch["pixel_values"], batch["input_ids"])
+                loss = _loss(logits, batch["labels"])
+            loss.backward()
+            optimizer.step()
         if device.type == "cuda":
             torch.cuda.synchronize(device)
         elapsed = time.perf_counter() - step_start
@@ -298,11 +345,11 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
         "benchmark_type": "clip_contrastive_train",
         "runtime_status": "real_local",
         "capability_level": "direct_pytorch_clip_synthetic",
-        "backend": f"torch_{args.backend}",
+        "backend": f"direct_{args.backend}",
         "metrics": metrics,
         "train": {
             "mode": "train",
-            "backend": f"torch_{args.backend}",
+            "backend": f"direct_{args.backend}",
             "global_step": args.steps,
             "elapsed_seconds": total_elapsed,
             "last_metrics": metrics,
@@ -336,8 +383,9 @@ def run(args: argparse.Namespace) -> Dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--backend", choices=("ddp", "fsdp"), required=True)
+    parser.add_argument("--backend", choices=("ddp", "fsdp", "deepspeed"), required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--local_rank", "--local-rank", type=int, default=None)
     parser.add_argument("--steps", type=int, default=80)
     parser.add_argument("--warmup-steps", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=8)

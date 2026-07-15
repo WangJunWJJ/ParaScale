@@ -51,6 +51,18 @@ def test_direct_pytorch_comparison_reports_ratios(tmp_path):
         throughput=80.0,
         loss=2.3,
     )
+    _write_payload(
+        tmp_path / "parascale_deepspeed.json",
+        backend="deepspeed",
+        throughput=95.0,
+        loss=2.4,
+    )
+    _write_payload(
+        tmp_path / "deepspeed.json",
+        backend="direct_deepspeed",
+        throughput=76.0,
+        loss=2.5,
+    )
 
     report = build_report(
         tmp_path,
@@ -67,3 +79,10 @@ def test_direct_pytorch_comparison_reports_ratios(tmp_path):
     }
     assert ratios["parascale_native_ddp"] == 1.2
     assert ratios["parascale_fsdp"] == 1.125
+    assert ratios["parascale_deepspeed"] == 1.25
+    deepspeed_ratios = {
+        item["baseline"]: item["deepspeed_vs_baseline"]
+        for item in report["deepspeed_comparisons"]
+    }
+    assert deepspeed_ratios["parascale_native_ddp"] == 95.0 / 120.0
+    assert deepspeed_ratios["torch_ddp"] == 0.95

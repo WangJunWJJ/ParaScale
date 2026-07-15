@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-"""Compare ParaScale CLIP benchmark results with direct PyTorch baselines."""
+"""Compare ParaScale CLIP benchmark results with direct distributed baselines."""
 
 from __future__ import annotations
 
@@ -73,6 +73,7 @@ def _row(path: Path, label: str, stack: str) -> Dict[str, Any]:
         "label": label,
         "stack": stack,
         "backend": str(backend),
+        "ok": True,
         "throughput": throughput,
         "throughput_metric": _metric_name(metrics, THROUGHPUT_KEYS),
         "loss": _loss(payload),
@@ -80,6 +81,25 @@ def _row(path: Path, label: str, stack: str) -> Dict[str, Any]:
         "peak_memory_bytes": _metric(metrics, ("peak_memory_bytes",)),
         "dataloader_wait_ms": _metric(metrics, ("dataloader_wait_ms",)),
         "path": str(path),
+    }
+
+
+def _error_row(path: Path, label: str, stack: str) -> Dict[str, Any]:
+    payload = _read_json(path)
+    return {
+        "label": label,
+        "stack": stack,
+        "backend": str(payload.get("backend") or label),
+        "ok": False,
+        "throughput": 0.0,
+        "throughput_metric": None,
+        "loss": None,
+        "global_step": None,
+        "peak_memory_bytes": 0.0,
+        "dataloader_wait_ms": 0.0,
+        "path": str(path),
+        "error_status": payload.get("status"),
+        "returncode": payload.get("returncode"),
     }
 
 
@@ -91,27 +111,50 @@ def build_report(
     image: str,
 ) -> Dict[str, Any]:
     mapping = [
-        ("parascale_native_ddp", "ParaScale", input_dir / "parascale_native_ddp.json"),
-        ("parascale_fsdp", "ParaScale", input_dir / "parascale_fsdp.json"),
-        ("torch_ddp", "Direct PyTorch", input_dir / "torch_ddp.json"),
-        ("torch_fsdp", "Direct PyTorch", input_dir / "torch_fsdp.json"),
+        (
+            "parascale_native_ddp",
+            "ParaScale",
+            input_dir / "parascale_native_ddp.json",
+            True,
+        ),
+        ("parascale_fsdp", "ParaScale", input_dir / "parascale_fsdp.json", True),
+        (
+            "parascale_deepspeed",
+            "ParaScale",
+            input_dir / "parascale_deepspeed.json",
+            True,
+        ),
+        ("torch_ddp", "Direct PyTorch", input_dir / "torch_ddp.json", True),
+        ("torch_fsdp", "Direct PyTorch", input_dir / "torch_fsdp.json", True),
+        ("deepspeed", "Direct DeepSpeed", input_dir / "deepspeed.json", False),
     ]
     rows: List[Dict[str, Any]] = []
     missing: List[str] = []
-    for label, stack, path in mapping:
+    required_labels = set()
+    for label, stack, path, required in mapping:
+        if required:
+            required_labels.add(label)
         if path.exists():
             rows.append(_row(path, label, stack))
-        else:
+        elif path.with_suffix(".error.json").exists():
+            rows.append(_error_row(path.with_suffix(".error.json"), label, stack))
+        elif required:
             missing.append(str(path))
     by_label = {row["label"]: row for row in rows}
     comparisons = []
     for direct, parascale in (
         ("torch_ddp", "parascale_native_ddp"),
         ("torch_fsdp", "parascale_fsdp"),
+        ("deepspeed", "parascale_deepspeed"),
     ):
         direct_row = by_label.get(direct)
         parascale_row = by_label.get(parascale)
-        if not direct_row or not parascale_row:
+        if (
+            not direct_row
+            or not parascale_row
+            or not direct_row.get("ok")
+            or not parascale_row.get("ok")
+        ):
             continue
         direct_t = float(direct_row.get("throughput") or 0.0)
         parascale_t = float(parascale_row.get("throughput") or 0.0)
@@ -126,22 +169,53 @@ def build_report(
                 ),
             }
         )
+    deepspeed_comparisons = []
+    deepspeed_row = by_label.get("parascale_deepspeed")
+    if deepspeed_row and deepspeed_row.get("ok"):
+        deepspeed_t = float(deepspeed_row.get("throughput") or 0.0)
+        for baseline in (
+            "parascale_native_ddp",
+            "parascale_fsdp",
+            "torch_ddp",
+            "torch_fsdp",
+        ):
+            baseline_row = by_label.get(baseline)
+            if not baseline_row or not baseline_row.get("ok"):
+                continue
+            baseline_t = float(baseline_row.get("throughput") or 0.0)
+            deepspeed_comparisons.append(
+                {
+                    "deepspeed": "parascale_deepspeed",
+                    "baseline": baseline,
+                    "deepspeed_throughput": deepspeed_t,
+                    "baseline_throughput": baseline_t,
+                    "deepspeed_vs_baseline": (
+                        deepspeed_t / baseline_t if baseline_t > 0 else None
+                    ),
+                }
+            )
     return {
-        "mode": "direct_pytorch_comparison",
+        "mode": "direct_distributed_comparison",
         "suite_id": suite_id,
         "hardware": hardware,
         "image": image,
         "input_dir": str(input_dir),
-        "passed": not missing and all(row["throughput"] > 0 for row in rows),
+        "passed": not missing
+        and all(
+            row["throughput"] > 0
+            for row in rows
+            if row["label"] in required_labels
+        ),
         "missing": missing,
         "runs": rows,
         "comparisons": comparisons,
+        "deepspeed_comparisons": deepspeed_comparisons,
     }
 
 
 def write_markdown(report: Dict[str, Any], path: Path) -> None:
     lines = [
-        "# Direct PyTorch vs ParaScale CLIP Comparison",
+        "# Direct Distributed Baselines vs ParaScale CLIP Comparison",
         "",
         f"- Suite: `{report['suite_id']}`",
         f"- Hardware: {report['hardware']}",
@@ -151,15 +225,16 @@ def write_markdown(report: Dict[str, Any], path: Path) -> None:
         "",
         "## Runs",
         "",
-        "| Label | Stack | Backend | Step | Throughput | Metric | Loss | Peak memory GB | Dataloader wait ms |",
-        "| --- | --- | --- | ---: | ---: | --- | ---: | ---: | ---: |",
+        "| Label | Stack | Backend | OK | Step | Throughput | Metric | Loss | Peak memory GB | Dataloader wait ms |",
+        "| --- | --- | --- | --- | ---: | ---: | --- | ---: | ---: | ---: |",
     ]
     for row in report["runs"]:
         lines.append(
-            "| {label} | {stack} | {backend} | {step} | {throughput:.3f} | {metric} | {loss} | {memory:.3f} | {wait:.3f} |".format(
+            "| {label} | {stack} | {backend} | {ok} | {step} | {throughput:.3f} | {metric} | {loss} | {memory:.3f} | {wait:.3f} |".format(
                 label=row["label"],
                 stack=row["stack"],
                 backend=row["backend"],
+                ok=row.get("ok"),
                 step=row.get("global_step") or 0,
                 throughput=float(row.get("throughput") or 0.0),
                 metric=row.get("throughput_metric") or "n/a",
@@ -175,9 +250,29 @@ def write_markdown(report: Dict[str, Any], path: Path) -> None:
     lines.extend(
         [
             "",
+            "## DeepSpeed Backend Comparisons",
+            "",
+            "| DeepSpeed backend | Baseline | DeepSpeed throughput | Baseline throughput | Ratio |",
+            "| --- | --- | ---: | ---: | ---: |",
+        ]
+    )
+    for item in report["deepspeed_comparisons"]:
+        ratio = item.get("deepspeed_vs_baseline")
+        lines.append(
+            "| {deepspeed} | {baseline} | {deepspeed_t:.3f} | {baseline_t:.3f} | {ratio} |".format(
+                deepspeed=item["deepspeed"],
+                baseline=item["baseline"],
+                deepspeed_t=float(item.get("deepspeed_throughput") or 0.0),
+                baseline_t=float(item.get("baseline_throughput") or 0.0),
+                ratio=f"{float(ratio):.4f}x" if ratio is not None else "n/a",
+            )
+        )
+    lines.extend(
+        [
+            "",
             "## Comparisons",
             "",
-            "| ParaScale | Direct PyTorch | ParaScale throughput | Direct throughput | Ratio |",
+            "| ParaScale | Direct baseline | ParaScale throughput | Direct throughput | Ratio |",
             "| --- | --- | ---: | ---: | ---: |",
         ]
     )

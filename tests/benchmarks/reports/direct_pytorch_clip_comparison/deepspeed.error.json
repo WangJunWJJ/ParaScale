@@ -1,0 +1,8 @@
+{
+  "backend": "deepspeed",
+  "status": "error",
+  "returncode": 134,
+  "command": "deepspeed --num_gpus=2 tests/benchmarks/scripts/run_direct_pytorch_clip_baseline.py --backend deepspeed --steps 80 --warmup-steps 10 --batch-size 8",
+  "error": "Direct DeepSpeed baseline aborted after NCCL ALLREDUCE watchdog timeout.",
+  "timeout_ms": 600000
+}
