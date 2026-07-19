@@ -1,0 +1,16 @@
+{
+  "mode": "ascend_validation_summary",
+  "suite_id": "ascend_validation",
+  "hardware": "Ascend 910B4",
+  "image": "quay.io/ascend/llamafactory:latest-npu-a2",
+  "input_dir": "tests\\benchmarks\\reports\\ascend_validation",
+  "passed": false,
+  "blocked": true,
+  "blocked_reason": "SSH authentication failed for user1@47.107.62.29:30303: Permission denied (publickey,password).",
+  "missing": [
+    "doctor",
+    "tiny_hccl",
+    "tiny_single"
+  ],
+  "runs": []
+}
