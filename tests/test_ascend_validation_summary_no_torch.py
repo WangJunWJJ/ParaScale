@@ -64,3 +64,35 @@ def test_ascend_validation_summary_can_mark_access_blocked(tmp_path):
     assert report["passed"] is False
     assert report["blocked"] is True
     assert report["blocked_reason"] == "ssh password required"
+
+
+def test_ascend_validation_summary_reads_top_level_train_payload(tmp_path):
+    payload = {
+        "mode": "train",
+        "backend": "ascend_native",
+        "global_step": 5,
+        "steps_per_second": 2.5,
+        "last_metrics": {"loss": 0.125},
+    }
+    (tmp_path / "tiny_single.json").write_text(
+        json.dumps(payload), encoding="utf-8"
+    )
+    doctor = {
+        "mode": "doctor",
+        "dependencies": {"torch_npu": True},
+        "ascend_runtime": {"available": True, "device_count": 2},
+        "diagnostics": {"ok": True},
+    }
+    (tmp_path / "doctor.json").write_text(json.dumps(doctor), encoding="utf-8")
+    _write_payload(tmp_path / "tiny_hccl.json", backend="native_ddp", throughput=18.0)
+
+    report = build_report(
+        tmp_path,
+        suite_id="unit_ascend",
+        hardware="Ascend 910B4",
+        image="ascend-image",
+    )
+
+    runs = {run["run_id"]: run for run in report["runs"]}
+    assert runs["tiny_single"]["throughput"] == 2.5
+    assert runs["tiny_single"]["loss"] == 0.125

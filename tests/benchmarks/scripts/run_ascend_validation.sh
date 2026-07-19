@@ -107,7 +107,7 @@ if has_scenario tiny_single; then
 fi
 
 if has_scenario tiny_hccl; then
-  run_no_output tiny_hccl torchrun --standalone \
+  run_json tiny_hccl torchrun --standalone \
     --nproc_per_node="${NPROC_PER_NODE}" \
     -m parascale.cli train \
     --config examples/ascend/example_002_tiny_native_ddp_hccl/config.json

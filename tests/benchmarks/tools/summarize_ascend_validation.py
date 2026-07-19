@@ -47,7 +47,10 @@ def _loss(payload: Dict[str, Any]) -> float | None:
     metrics = payload.get("metrics", {})
     train = payload.get("train", {})
     last_metrics = train.get("last_metrics", {}) if isinstance(train, dict) else {}
-    for source in (metrics, last_metrics):
+    top_last_metrics = payload.get("last_metrics", {})
+    if not isinstance(top_last_metrics, dict):
+        top_last_metrics = {}
+    for source in (metrics, last_metrics, top_last_metrics, payload):
         for key in ("loss", "stable_loss", "last_loss"):
             if key in source:
                 try:
@@ -72,6 +75,17 @@ def _record(path: Path) -> Dict[str, Any]:
     metrics = payload.get("metrics", {})
     if not isinstance(metrics, dict):
         metrics = {}
+    last_metrics = train.get("last_metrics", {})
+    if not isinstance(last_metrics, dict):
+        last_metrics = {}
+    top_last_metrics = payload.get("last_metrics", {})
+    if not isinstance(top_last_metrics, dict):
+        top_last_metrics = {}
+    merged_metrics = {**top_last_metrics, **last_metrics, **metrics}
+    if train.get("steps_per_second") is not None:
+        merged_metrics.setdefault("steps_per_second", train.get("steps_per_second"))
+    if payload.get("steps_per_second") is not None:
+        merged_metrics.setdefault("steps_per_second", payload.get("steps_per_second"))
     is_error = path.name.endswith(".error.json") or payload.get("status") == "error"
     return {
         "run_id": _run_id(path),
@@ -83,7 +97,7 @@ def _record(path: Path) -> Dict[str, Any]:
         "runtime_status": payload.get("runtime_status"),
         "backend": train.get("backend") or payload.get("backend"),
         "global_step": train.get("global_step", payload.get("global_step")),
-        "throughput": _metric(metrics, THROUGHPUT_KEYS),
+        "throughput": _metric(merged_metrics, THROUGHPUT_KEYS),
         "loss": _loss(payload),
         "npu_available": payload.get("ascend_runtime", {}).get("available"),
         "npu_device_count": payload.get("ascend_runtime", {}).get("device_count"),

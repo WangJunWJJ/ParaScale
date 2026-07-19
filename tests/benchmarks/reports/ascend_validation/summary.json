@@ -3,14 +3,59 @@
   "suite_id": "ascend_validation",
   "hardware": "Ascend 910B4",
   "image": "quay.io/ascend/llamafactory:latest-npu-a2",
-  "input_dir": "tests\\benchmarks\\reports\\ascend_validation",
-  "passed": false,
-  "blocked": true,
-  "blocked_reason": "SSH authentication failed for user1@47.107.62.29:30303: Permission denied (publickey,password).",
-  "missing": [
-    "doctor",
-    "tiny_hccl",
-    "tiny_single"
-  ],
-  "runs": []
+  "input_dir": "runs/benchmarks/ascend_validation",
+  "passed": true,
+  "blocked": false,
+  "blocked_reason": null,
+  "missing": [],
+  "runs": [
+    {
+      "run_id": "doctor",
+      "ok": true,
+      "status": "ok",
+      "mode": "doctor",
+      "runtime_status": "diagnostic",
+      "backend": null,
+      "global_step": null,
+      "throughput": 0.0,
+      "loss": null,
+      "npu_available": true,
+      "npu_device_count": 2,
+      "torch_npu": true,
+      "returncode": null,
+      "path": "runs/benchmarks/ascend_validation/doctor.json"
+    },
+    {
+      "run_id": "tiny_hccl",
+      "ok": true,
+      "status": "ok",
+      "mode": "train",
+      "runtime_status": "synthetic",
+      "backend": "native_ddp",
+      "global_step": 5,
+      "throughput": 1.6699681481995232,
+      "loss": 1.4159079790115356,
+      "npu_available": null,
+      "npu_device_count": null,
+      "torch_npu": null,
+      "returncode": null,
+      "path": "runs/benchmarks/ascend_validation/tiny_hccl.json"
+    },
+    {
+      "run_id": "tiny_single",
+      "ok": true,
+      "status": "ok",
+      "mode": "train",
+      "runtime_status": "synthetic",
+      "backend": "ascend_native",
+      "global_step": 5,
+      "throughput": 2.2670740317062794,
+      "loss": 0.6300873756408691,
+      "npu_available": null,
+      "npu_device_count": null,
+      "torch_npu": null,
+      "returncode": null,
+      "path": "runs/benchmarks/ascend_validation/tiny_single.json"
+    }
+  ]
 }
