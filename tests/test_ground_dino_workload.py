@@ -3,15 +3,15 @@
 # @Author : Wang Jun
 # @Email: wj_xd@foxmail.com
 
-from types import SimpleNamespace
 import json
+from types import SimpleNamespace
 
 import pytest
 
+from parascale.workloads.registry import build_training_components
+
 torch = pytest.importorskip("torch")
 Image = pytest.importorskip("PIL.Image")
-
-from parascale.workloads.registry import build_training_components
 
 
 class _TinyGroundDino(torch.nn.Module):
