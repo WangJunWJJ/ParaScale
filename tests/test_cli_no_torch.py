@@ -297,7 +297,7 @@ def test_cli_auto_backend_uses_native_for_local_smoke(monkeypatch):
     def fail(_config):
         raise ImportError("Torch runtime factory workloads require PyTorch.")
 
-    monkeypatch.setattr("parascale.runtime.orchestrator.build_training_components", fail)
+    monkeypatch.setattr("parascale.runtime.train_runner.build_training_components", fail)
     with pytest.raises(ImportError, match="Torch runtime factory"):
         run_train_from_config(config)
 
@@ -328,7 +328,7 @@ def test_cli_real_train_requires_torch_for_synthetic_workload(monkeypatch):
         raise ImportError("Torch runtime factory workloads require PyTorch.")
 
     monkeypatch.setattr(
-        "parascale.runtime.orchestrator.build_training_components",
+        "parascale.runtime.train_runner.build_training_components",
         fail,
     )
     with pytest.raises(ImportError, match="require PyTorch"):

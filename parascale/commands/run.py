@@ -16,15 +16,15 @@ from parascale.commands.plan import build_plan_payload, section
 from parascale.configuration import resolve_config, write_config_artifacts
 from parascale.runtime import build_benchmark_plan, build_runtime_context
 from parascale.runtime.backends.devices import set_current_device
-from parascale.runtime.inference import InferenceRunner
-from parascale.runtime.lifecycle import destroy_distributed_runtime
-from parascale.runtime.orchestrator import (
+from parascale.runtime.benchmark_runner import (
     run_benchmark_from_config as _run_benchmark_from_config,
 )
-from parascale.runtime.orchestrator import (
+from parascale.runtime.inference import InferenceRunner
+from parascale.runtime.lifecycle import destroy_distributed_runtime
+from parascale.runtime.serve_runner import (
     run_serve_from_config as _run_serve_from_config,
 )
-from parascale.runtime.orchestrator import (
+from parascale.runtime.train_runner import (
     run_train_from_config as _run_train_from_config,
 )
 from parascale.workloads.inference import build_inference_components

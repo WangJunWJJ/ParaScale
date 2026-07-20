@@ -367,18 +367,38 @@ def test_workload_specs_are_split_by_scenario_modules():
         assert getattr(module, class_name).__name__ == class_name
 
 
-def test_commands_do_not_import_private_orchestrator_symbols():
+def test_commands_do_not_import_private_runtime_runner_symbols():
     violations = []
     for path in Path("parascale/commands").rglob("*.py"):
         source = path.read_text(encoding="utf-8")
-        if "from parascale.runtime.orchestrator import (" not in source:
-            continue
-        block = source.split("from parascale.runtime.orchestrator import (", 1)[1]
-        block = block.split(")", 1)[0]
-        if any(line.strip().startswith("_") for line in block.splitlines()):
-            violations.append(str(path))
+        for module in (
+            "parascale.runtime.train_runner",
+            "parascale.runtime.serve_runner",
+            "parascale.runtime.benchmark_runner",
+        ):
+            token = f"from {module} import ("
+            if token not in source:
+                continue
+            block = source.split(token, 1)[1].split(")", 1)[0]
+            if any(line.strip().startswith("_") for line in block.splitlines()):
+                violations.append(str(path))
 
     assert violations == []
+
+
+def test_runtime_runners_are_split_by_execution_mode():
+    assert not Path("parascale/runtime/orchestrator.py").exists()
+
+    expected = {
+        "parascale.runtime.train_runner": "run_train_from_config",
+        "parascale.runtime.serve_runner": "run_serve_from_config",
+        "parascale.runtime.benchmark_runner": "run_benchmark_from_config",
+    }
+    for module_name, function_name in expected.items():
+        assert hasattr(import_module(module_name), function_name)
+
+    command_source = Path("parascale/commands/run.py").read_text(encoding="utf-8")
+    assert "parascale.runtime.orchestrator" not in command_source
 
 
 def test_cli_delegates_command_parser_registration():

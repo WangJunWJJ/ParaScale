@@ -612,10 +612,10 @@ def test_benchmark_aggregation_includes_stable_loss_window():
     assert metrics["stable_max_loss"] == 2.0
 
 
-def test_orchestrator_does_not_own_workload_capability_or_aggregation_without_torch():
+def test_train_runner_does_not_own_workload_capability_or_aggregation_without_torch():
     from pathlib import Path
 
-    source = Path("parascale/runtime/orchestrator.py").read_text(encoding="utf-8")
+    source = Path("parascale/runtime/train_runner.py").read_text(encoding="utf-8")
 
     assert "workload_flags" not in source
     assert "capability_level_for_training" not in source
@@ -627,14 +627,14 @@ def test_orchestrator_does_not_own_workload_capability_or_aggregation_without_to
 def test_synthetic_regression_is_built_through_workload_registry_without_torch():
     from pathlib import Path
 
-    orchestrator_source = Path("parascale/runtime/orchestrator.py").read_text(
+    train_runner_source = Path("parascale/runtime/train_runner.py").read_text(
         encoding="utf-8"
     )
     command_source = Path("parascale/commands/run.py").read_text(encoding="utf-8")
 
-    assert "build_synthetic_regression_components" not in orchestrator_source
-    assert "SyntheticRegressionSpec" not in orchestrator_source
-    assert 'if flags["synthetic"]:' not in orchestrator_source
+    assert "build_synthetic_regression_components" not in train_runner_source
+    assert "SyntheticRegressionSpec" not in train_runner_source
+    assert 'if flags["synthetic"]:' not in train_runner_source
     assert "build_synthetic_regression_components" not in command_source
 
 

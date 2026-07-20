@@ -8,7 +8,7 @@ import pytest
 
 def test_replay_resume_expands_only_component_training_window():
     from parascale.checkpoint import CheckpointManifest
-    from parascale.runtime.orchestrator import _resume_component_config
+    from parascale.runtime.train_runner import _resume_component_config
 
     config = {
         "training": {"max_steps": 2, "workload": "synthetic_regression"},
@@ -31,7 +31,7 @@ def test_replay_resume_expands_only_component_training_window():
 
 def test_stateful_resume_keeps_original_component_training_window():
     from parascale.checkpoint import CheckpointManifest
-    from parascale.runtime.orchestrator import _resume_component_config
+    from parascale.runtime.train_runner import _resume_component_config
 
     config = {"training": {"max_steps": 2}}
     manifest = CheckpointManifest(
@@ -78,7 +78,7 @@ def test_distributed_topology_rejects_world_size_mismatch(monkeypatch):
 
 
 def test_distributed_component_config_uses_rank_specific_data_seed():
-    from parascale.runtime.orchestrator import _rank_component_config
+    from parascale.runtime.train_runner import _rank_component_config
 
     config = {"training": {"seed": 42}}
 
@@ -230,7 +230,7 @@ def test_accumulated_pipeline_cache_hit_supports_partial_hits_without_torch():
 
 
 def test_multinode_capability_level_is_marked_as_smoke_without_torch():
-    from parascale.runtime.orchestrator import _capability_level_for_scope
+    from parascale.runtime.train_runner import _capability_level_for_scope
 
     config_data = {
         "hardware_profile": {
@@ -949,7 +949,7 @@ def test_train_engine_initialize_rejects_invalid_launcher_rank(monkeypatch):
 
 
 def test_nonzero_rank_checkpoint_result_skips_manifest_validation():
-    from parascale.runtime.orchestrator import _validate_final_checkpoint_result
+    from parascale.runtime.train_runner import _validate_final_checkpoint_result
 
     class Manager:
         def read_manifest_path(self, _path):

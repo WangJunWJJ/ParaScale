@@ -207,7 +207,7 @@ def test_config_artifact_writer_preserves_oom_retry_provenance():
 
 def test_runtime_artifacts_capture_auto_selected_backend():
     from parascale.config import ParaScaleConfig
-    from parascale.runtime.orchestrator import _write_runtime_config_artifacts
+    from parascale.runtime.runner_common import _write_runtime_config_artifacts
 
     run_dir = _tmp_case("runtime_auto_config")
     config_data = {
