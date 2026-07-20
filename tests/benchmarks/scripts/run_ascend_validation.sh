@@ -3,14 +3,16 @@ set -u
 
 ROOT_DIR=${ROOT_DIR:-/workspace}
 OUTPUT_DIR=${OUTPUT_DIR:-runs/benchmarks/ascend_validation}
-REPORT_PATH=${REPORT_PATH:-tests/benchmarks/reports/ascend_validation.md}
+SUMMARY_PATH=${SUMMARY_PATH:-tests/benchmarks/reports/ascend_validation/summary.json}
+REPORT_PATH=${REPORT_PATH:-${OUTPUT_DIR}/ascend_validation.md}
+UNIFIED_REPORT_PATH=${UNIFIED_REPORT_PATH:-tests/benchmarks/reports/BENCHMARK_REPORT.md}
 SUITE_ID=${SUITE_ID:-ascend_validation}
 IMAGE_NAME=${IMAGE_NAME:-quay.io/ascend/llamafactory:latest-npu-a2}
 SCENARIOS=${SCENARIOS:-doctor tiny_single tiny_hccl}
 CLEAN_OUTPUT=${CLEAN_OUTPUT:-1}
 NPROC_PER_NODE=${NPROC_PER_NODE:-2}
 
-mkdir -p "${ROOT_DIR}/${OUTPUT_DIR}" "${ROOT_DIR}/tests/benchmarks/reports"
+mkdir -p "${ROOT_DIR}/${OUTPUT_DIR}" "${ROOT_DIR}/$(dirname "${SUMMARY_PATH}")"
 cd "${ROOT_DIR}" || exit 1
 
 export MASTER_ADDR=${MASTER_ADDR:-127.0.0.1}
@@ -115,8 +117,12 @@ fi
 
 python3 tests/benchmarks/tools/summarize_ascend_validation.py \
   --input-dir "${OUTPUT_DIR}" \
-  --output "${OUTPUT_DIR}/summary.json" \
+  --output "${SUMMARY_PATH}" \
   --markdown "${REPORT_PATH}" \
   --suite-id "${SUITE_ID}" \
   --hardware "Ascend 910B4" \
   --image "${IMAGE_NAME}"
+
+python3 tests/benchmarks/tools/build_benchmark_report.py \
+  --report-root tests/benchmarks/reports \
+  --output "${UNIFIED_REPORT_PATH}"

@@ -1,6 +1,6 @@
 # ParaScale Benchmark Report
 
-This report is the review entrypoint for ParaScale benchmark evidence. Each section is generated from compact `summary.json` artifacts; detailed scenario reports remain linked for auditability.
+This report is the review entrypoint for ParaScale benchmark evidence. Each section is generated from compact `summary.json` artifacts; config snapshots remain linked where they are needed for auditability.
 
 ## How to Update
 
@@ -15,14 +15,14 @@ python tests/benchmarks/tools/build_benchmark_report.py --report-root tests/benc
 
 ## Overview
 
-| Suite | Status | Hardware | Image | Detail |
+| Suite | Status | Hardware | Image | Summary |
 | --- | --- | --- | --- | --- |
-| Dual 4090 full validation | passed | dual RTX 4090D 24GB | `mixed: parascale-ci/vlm/yolo/grounding` | [dual_4090_full_validation.md](dual_4090_full_validation.md) |
-| Direct PyTorch/DeepSpeed comparison | passed | dual RTX 4090D 24GB | `parascale-ci:cu121-torch24` | [direct_pytorch_clip_comparison.md](direct_pytorch_clip_comparison.md) |
-| Ascend functional validation | passed | Ascend 910B4 | `quay.io/ascend/llamafactory:latest-npu-a2` | [ascend_validation.md](ascend_validation.md) |
-| Ascend parallel matrix | passed | Ascend 910B4 | `quay.io/ascend/llamafactory:latest-npu-a2` | [ascend_parallel_matrix.md](ascend_parallel_matrix.md) |
-| Cross-hardware CLIP DataComp | passed | multiple | `n/a` | [cross_hardware_clip_datacomp.md](cross_hardware_clip_datacomp.md) |
-| RTX 4090 precision comparison | recorded | dual RTX 4090D 24GB | `parascale-ci:cu121-torch24` | [rtx4090_clip_precision_datacomp.md](rtx4090_clip_precision_datacomp.md) |
+| Dual 4090 full validation | passed | dual RTX 4090D 24GB | `mixed: parascale-ci/vlm/yolo/grounding` | [dual_4090_full_validation/summary.json](dual_4090_full_validation/summary.json) |
+| Direct PyTorch/DeepSpeed comparison | passed | dual RTX 4090D 24GB | `parascale-ci:cu121-torch24` | [direct_pytorch_clip_comparison/summary.json](direct_pytorch_clip_comparison/summary.json) |
+| Ascend functional validation | passed | Ascend 910B4 | `quay.io/ascend/llamafactory:latest-npu-a2` | [ascend_validation/summary.json](ascend_validation/summary.json) |
+| Ascend parallel matrix | passed | Ascend 910B4 | `quay.io/ascend/llamafactory:latest-npu-a2` | [ascend_parallel_matrix/summary.json](ascend_parallel_matrix/summary.json) |
+| Cross-hardware CLIP DataComp | passed | multiple | `n/a` | [cross_hardware_clip_datacomp/summary.json](cross_hardware_clip_datacomp/summary.json) |
+| RTX 4090 precision comparison | recorded | dual RTX 4090D 24GB | `parascale-ci:cu121-torch24` | [rtx4090_clip_precision_datacomp/summary.json](rtx4090_clip_precision_datacomp/summary.json) |
 
 ## Dual RTX 4090 Validation
 
@@ -86,11 +86,11 @@ python tests/benchmarks/tools/build_benchmark_report.py --report-root tests/benc
 
 ## Evidence Files
 
-| Suite | Summary | Detail report |
+| Suite | Summary | Config snapshots |
 | --- | --- | --- |
-| dual_4090 | [dual_4090_full_validation/summary.json](dual_4090_full_validation/summary.json) | [dual_4090_full_validation.md](dual_4090_full_validation.md) |
-| direct_pytorch | [direct_pytorch_clip_comparison/summary.json](direct_pytorch_clip_comparison/summary.json) | [direct_pytorch_clip_comparison.md](direct_pytorch_clip_comparison.md) |
-| ascend_validation | [ascend_validation/summary.json](ascend_validation/summary.json) | [ascend_validation.md](ascend_validation.md) |
-| ascend_matrix | [ascend_parallel_matrix/summary.json](ascend_parallel_matrix/summary.json) | [ascend_parallel_matrix.md](ascend_parallel_matrix.md) |
-| cross_hardware | [cross_hardware_clip_datacomp/summary.json](cross_hardware_clip_datacomp/summary.json) | [cross_hardware_clip_datacomp.md](cross_hardware_clip_datacomp.md) |
-| rtx4090_precision | [rtx4090_clip_precision_datacomp/summary.json](rtx4090_clip_precision_datacomp/summary.json) | [rtx4090_clip_precision_datacomp.md](rtx4090_clip_precision_datacomp.md) |
+| dual_4090 | [dual_4090_full_validation/summary.json](dual_4090_full_validation/summary.json) | n/a |
+| direct_pytorch | [direct_pytorch_clip_comparison/summary.json](direct_pytorch_clip_comparison/summary.json) | n/a |
+| ascend_validation | [ascend_validation/summary.json](ascend_validation/summary.json) | n/a |
+| ascend_matrix | [ascend_parallel_matrix/summary.json](ascend_parallel_matrix/summary.json) | n/a |
+| cross_hardware | [cross_hardware_clip_datacomp/summary.json](cross_hardware_clip_datacomp/summary.json) | [cross_hardware_clip_datacomp/ascend/ascend_clip_datacomp_native_ddp_fp32.config.json](cross_hardware_clip_datacomp/ascend/ascend_clip_datacomp_native_ddp_fp32.config.json), [cross_hardware_clip_datacomp/rtx4090/rtx4090_clip_datacomp_native_ddp_fp32.config.json](cross_hardware_clip_datacomp/rtx4090/rtx4090_clip_datacomp_native_ddp_fp32.config.json) |
+| rtx4090_precision | [rtx4090_clip_precision_datacomp/summary.json](rtx4090_clip_precision_datacomp/summary.json) | [rtx4090_clip_precision_datacomp/fp16/rtx4090_clip_datacomp_native_ddp_fp16.config.json](rtx4090_clip_precision_datacomp/fp16/rtx4090_clip_datacomp_native_ddp_fp16.config.json) |

@@ -3,7 +3,9 @@ set -u
 
 ROOT_DIR=${ROOT_DIR:-$(pwd)}
 OUTPUT_DIR=${OUTPUT_DIR:-runs/benchmarks/ascend_parallel_matrix}
-REPORT_PATH=${REPORT_PATH:-tests/benchmarks/reports/ascend_parallel_matrix.md}
+SUMMARY_PATH=${SUMMARY_PATH:-tests/benchmarks/reports/ascend_parallel_matrix/summary.json}
+REPORT_PATH=${REPORT_PATH:-${OUTPUT_DIR}/ascend_parallel_matrix.md}
+UNIFIED_REPORT_PATH=${UNIFIED_REPORT_PATH:-tests/benchmarks/reports/BENCHMARK_REPORT.md}
 SUITE_ID=${SUITE_ID:-ascend_parallel_matrix}
 IMAGE_NAME=${IMAGE_NAME:-quay.io/ascend/llamafactory:latest-npu-a2}
 SCENARIOS=${SCENARIOS:-single_docker_2card two_docker_1card two_docker_2card}
@@ -12,7 +14,7 @@ STEPS=${STEPS:-80}
 WARMUP_STEPS=${WARMUP_STEPS:-10}
 BATCH_SIZE=${BATCH_SIZE:-8}
 
-mkdir -p "${ROOT_DIR}/${OUTPUT_DIR}" "${ROOT_DIR}/tests/benchmarks/reports"
+mkdir -p "${ROOT_DIR}/${OUTPUT_DIR}" "${ROOT_DIR}/$(dirname "${SUMMARY_PATH}")"
 cd "${ROOT_DIR}" || exit 1
 
 export HCCL_CONNECT_TIMEOUT=${HCCL_CONNECT_TIMEOUT:-600}
@@ -224,7 +226,7 @@ fi
 
 python3 tests/benchmarks/tools/summarize_ascend_parallel_matrix.py \
   --input-dir "${OUTPUT_DIR}" \
-  --output "${OUTPUT_DIR}/summary.json" \
+  --output "${SUMMARY_PATH}" \
   --markdown "${REPORT_PATH}" \
   --suite-id "${SUITE_ID}" \
   --hardware "Ascend 910B4" \
@@ -232,3 +234,7 @@ python3 tests/benchmarks/tools/summarize_ascend_parallel_matrix.py \
   --steps "${STEPS}" \
   --warmup-steps "${WARMUP_STEPS}" \
   --batch-size "${BATCH_SIZE}"
+
+python3 tests/benchmarks/tools/build_benchmark_report.py \
+  --report-root tests/benchmarks/reports \
+  --output "${UNIFIED_REPORT_PATH}"

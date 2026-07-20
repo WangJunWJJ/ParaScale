@@ -7,13 +7,15 @@ SUITE_ID=${SUITE_ID:-dual_4090_full_validation}
 DATA_ROOT=${DATA_ROOT:-/dataset}
 MODEL_ROOT=${MODEL_ROOT:-/models}
 YOLO_MODEL_DIRS=${PARASCALE_MODEL_DIRS:-/yolo_models:/models}
-REPORT_PATH=${REPORT_PATH:-tests/benchmarks/reports/dual_4090_full_validation.md}
+SUMMARY_PATH=${SUMMARY_PATH:-tests/benchmarks/reports/dual_4090_full_validation/summary.json}
+REPORT_PATH=${REPORT_PATH:-${OUTPUT_DIR}/dual_4090_full_validation.md}
+UNIFIED_REPORT_PATH=${UNIFIED_REPORT_PATH:-tests/benchmarks/reports/BENCHMARK_REPORT.md}
 IMAGE_NAME=${IMAGE_NAME:-parascale-ci:cu121-torch24}
 SCENARIOS=${SCENARIOS:-local_tests tiny_smoke clip_native_ddp clip_fsdp clip_deepspeed vlm_native_ddp yolo_native_ddp yolo_native yolo_proxy_native ground_native}
 CLEAN_OUTPUT=${CLEAN_OUTPUT:-1}
 WRITE_SUMMARY=${WRITE_SUMMARY:-1}
 
-mkdir -p "${ROOT_DIR}/${OUTPUT_DIR}" "${ROOT_DIR}/tests/benchmarks/reports"
+mkdir -p "${ROOT_DIR}/${OUTPUT_DIR}" "${ROOT_DIR}/$(dirname "${SUMMARY_PATH}")"
 cd "${ROOT_DIR}" || exit 1
 
 export MASTER_ADDR=${MASTER_ADDR:-127.0.0.1}
@@ -240,9 +242,12 @@ fi
 if [ "${WRITE_SUMMARY}" = "1" ]; then
   python3 tests/benchmarks/tools/summarize_dual_4090_validation.py \
     --input-dir "${OUTPUT_DIR}" \
-    --output "${OUTPUT_DIR}/summary.json" \
+    --output "${SUMMARY_PATH}" \
     --markdown "${REPORT_PATH}" \
     --suite-id "${SUITE_ID}" \
     --hardware "dual RTX 4090D 24GB" \
     --image "${IMAGE_NAME}"
+  python3 tests/benchmarks/tools/build_benchmark_report.py \
+    --report-root tests/benchmarks/reports \
+    --output "${UNIFIED_REPORT_PATH}"
 fi

@@ -21,13 +21,20 @@ SUMMARY_FILES = {
     "rtx4090_precision": Path("rtx4090_clip_precision_datacomp/summary.json"),
 }
 
-DETAIL_LINKS = {
-    "dual_4090": "dual_4090_full_validation.md",
-    "direct_pytorch": "direct_pytorch_clip_comparison.md",
-    "ascend_validation": "ascend_validation.md",
-    "ascend_matrix": "ascend_parallel_matrix.md",
-    "cross_hardware": "cross_hardware_clip_datacomp.md",
-    "rtx4090_precision": "rtx4090_clip_precision_datacomp.md",
+CONFIG_FILES = {
+    "cross_hardware": (
+        Path(
+            "cross_hardware_clip_datacomp/ascend/ascend_clip_datacomp_native_ddp_fp32.config.json"
+        ),
+        Path(
+            "cross_hardware_clip_datacomp/rtx4090/rtx4090_clip_datacomp_native_ddp_fp32.config.json"
+        ),
+    ),
+    "rtx4090_precision": (
+        Path(
+            "rtx4090_clip_precision_datacomp/fp16/rtx4090_clip_datacomp_native_ddp_fp16.config.json"
+        ),
+    ),
 }
 
 
@@ -62,8 +69,8 @@ def build_report_markdown(
         "# ParaScale Benchmark Report",
         "",
         "This report is the review entrypoint for ParaScale benchmark evidence. "
-        "Each section is generated from compact `summary.json` artifacts; detailed "
-        "scenario reports remain linked for auditability.",
+        "Each section is generated from compact `summary.json` artifacts; config "
+        "snapshots remain linked where they are needed for auditability.",
         "",
         "## How to Update",
         "",
@@ -94,7 +101,7 @@ def _overview_table(summaries: Dict[str, Dict[str, Any]]) -> List[str]:
     lines = [
         "## Overview",
         "",
-        "| Suite | Status | Hardware | Image | Detail |",
+        "| Suite | Status | Hardware | Image | Summary |",
         "| --- | --- | --- | --- | --- |",
     ]
     labels = {
@@ -110,9 +117,9 @@ def _overview_table(summaries: Dict[str, Dict[str, Any]]) -> List[str]:
         status = _status(summary)
         hardware = summary.get("hardware") or _hardware_summary(summary)
         image = summary.get("image", "n/a")
-        detail = DETAIL_LINKS[name]
+        summary_link = _posix_path(SUMMARY_FILES[name])
         lines.append(
-            f"| {label} | {status} | {hardware} | `{image}` | [{detail}]({detail}) |"
+            f"| {label} | {status} | {hardware} | `{image}` | [{summary_link}]({summary_link}) |"
         )
     lines.append("")
     return lines
@@ -292,15 +299,18 @@ def _evidence_links(
     lines = [
         "## Evidence Files",
         "",
-        "| Suite | Summary | Detail report |",
+        "| Suite | Summary | Config snapshots |",
         "| --- | --- | --- |",
     ]
     for name, summary in summaries.items():
         summary_path = Path(summary.get("_summary_path", str(report_root / SUMMARY_FILES[name])))
-        detail = DETAIL_LINKS[name]
+        configs = ", ".join(
+            f"[{_posix_path(path)}]({_posix_path(path)})"
+            for path in CONFIG_FILES.get(name, ())
+        )
         summary_link = _posix_path(summary_path.relative_to(report_root))
         lines.append(
-            f"| {name} | [{summary_link}]({summary_link}) | [{detail}]({detail}) |"
+            f"| {name} | [{summary_link}]({summary_link}) | {configs or 'n/a'} |"
         )
     lines.append("")
     return lines

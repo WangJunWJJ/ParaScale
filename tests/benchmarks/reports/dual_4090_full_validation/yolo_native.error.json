@@ -1,6 +1,0 @@
-{
-  "backend": "yolo_native",
-  "status": "error",
-  "returncode": 0,
-  "command": "python3 -m parascale.cli benchmark --config /tmp/parascale_yolo_native.json"
-}
