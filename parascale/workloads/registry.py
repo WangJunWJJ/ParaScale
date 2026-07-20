@@ -21,9 +21,6 @@ from parascale.runtime.workloads import WorkloadRegistry
 from .clip import build_clip_contrastive_components
 from .common import _require_torch, _section
 from .optimizer import (
-    build_adamw_optimizer_for_model,
-)
-from .optimizer import (
     trainable_parameter_stats as trainable_parameter_stats,
 )
 from .tiny import build_tiny_torch_components
@@ -95,9 +92,6 @@ def _build_yolo_world_from_config(config_data: Dict[str, Any]):
 
 def build_optimizer_for_model(model: Any, config_data: Dict[str, Any]):
     _require_torch()
-    import torch.optim as optim
+    from parascale.optimizers import build_optimizer
 
-    optimizer = _section(config_data, "optimizer")
-    training = _section(config_data, "training")
-    lr = float(optimizer.get("lr", training.get("lr", 0.001)))
-    return build_adamw_optimizer_for_model(optim, model, lr=lr)
+    return build_optimizer(model, config_data)

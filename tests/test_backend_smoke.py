@@ -23,6 +23,27 @@ from parascale.runtime.backends import create_runtime_training_backend
 from parascale.runtime.training import TrainEngine
 
 
+@pytest.mark.parametrize(
+    ("optimizer_type", "expected_name"),
+    [
+        ("four_bit_adamw", "FourBitAdamW"),
+        ("four_bit_sgd", "FourBitSGD"),
+    ],
+)
+def test_configured_optimizer_factory_selects_four_bit_type(
+    optimizer_type, expected_name
+):
+    from parascale.workloads import build_optimizer_for_model
+
+    optimizer = build_optimizer_for_model(
+        nn.Linear(4, 2),
+        {"optimizer": {"type": optimizer_type, "lr": 0.01}},
+    )
+
+    assert optimizer.__class__.__name__ == expected_name
+    assert optimizer._parascale_optimizer_metadata["type"] == optimizer_type
+
+
 class TinyModel(nn.Module):
     def __init__(self):
         super().__init__()
@@ -418,7 +439,7 @@ def test_cli_native_tiny_torch_workload_runs_real_factory(tmp_path):
     assert payload["runtime_status"] == "real_local"
     assert payload["capability_level"] == "local_native_real_torch"
     assert payload["global_step"] == 2
-    assert payload["train_device"] in {"cpu", "cuda:0"}
+    assert payload["train_device"] in {"cpu", "cuda:0", "npu:0"}
     assert (Path(payload["checkpoint"]).parent / "backend_state.pt").is_file()
 
 

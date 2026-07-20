@@ -5,15 +5,9 @@
 
 """Optimizer compatibility and experimental quantized optimizer exports."""
 
-from .optimizers import AdamW, FourBitAdamW, FourBitSGD, QuantizedState, ZeroOptimizer
-from .zero import (
-    ExperimentalZeroOptimizer,
-    ZeroPlan,
-    ZeroStage,
-    build_zero_plan,
-    create_native_zero_redundancy_optimizer,
-    wrap_zero_optimizer,
-)
+from importlib import import_module
+
+from .spec import OptimizerSpec
 
 __all__ = [
     "ZeroOptimizer",
@@ -27,4 +21,33 @@ __all__ = [
     "FourBitAdamW",
     "FourBitSGD",
     "QuantizedState",
+    "OptimizerSpec",
+    "build_optimizer",
 ]
+
+
+_LEGACY_OPTIMIZERS = {
+    "AdamW",
+    "FourBitAdamW",
+    "FourBitSGD",
+    "QuantizedState",
+    "ZeroOptimizer",
+}
+_ZERO_EXPORTS = {
+    "ExperimentalZeroOptimizer",
+    "ZeroPlan",
+    "ZeroStage",
+    "build_zero_plan",
+    "create_native_zero_redundancy_optimizer",
+    "wrap_zero_optimizer",
+}
+
+
+def __getattr__(name):
+    if name == "build_optimizer":
+        return getattr(import_module(".factory", __name__), name)
+    if name in _LEGACY_OPTIMIZERS:
+        return getattr(import_module(".optimizers", __name__), name)
+    if name in _ZERO_EXPORTS:
+        return getattr(import_module(".zero", __name__), name)
+    raise AttributeError(name)

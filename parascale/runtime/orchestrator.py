@@ -19,6 +19,7 @@ from parascale.configuration import (
     config_artifact_overrides,
     write_config_artifacts,
 )
+from parascale.optimizers.spec import OptimizerSpec
 from parascale.reporting.aggregation import aggregate_stable_metrics
 from parascale.reporting.benchmark import benchmark_result_from_train_payload
 from parascale.runtime.backends.devices import (
@@ -54,6 +55,18 @@ def _resume_component_config(
     component_config = deepcopy(config_data)
     component_training = component_config.setdefault("training", {})
     component_training["max_steps"] = consumed + max(0, int(max_steps))
+    return component_config
+
+
+def _rank_component_config(
+    config_data: Dict[str, Any], *, rank: int, distributed: bool
+) -> Dict[str, Any]:
+    """Derive a deterministic rank-specific data seed for distributed input."""
+    if not distributed:
+        return config_data
+    component_config = deepcopy(config_data)
+    training = component_config.setdefault("training", {})
+    training["seed"] = int(training.get("seed", 42) or 42) + int(rank)
     return component_config
 
 
@@ -97,7 +110,14 @@ def run_train_from_config(
             "parascale.training_backend=native for local smoke."
         )
     if distributed_requested:
+        _validate_distributed_topology(config_data)
         _initialize_distributed_for_cli(parascale_config.training_backend)
+
+    optimizer_spec = OptimizerSpec.from_config(config_data)
+    optimizer_spec.validate_backend(
+        parascale_config.training_backend,
+        zero_stage=int(parascale_config.zero_stage or 0),
+    )
 
     config_artifacts = _write_runtime_config_artifacts(
         config_data,
@@ -124,8 +144,14 @@ def run_train_from_config(
         if resume_manifest is not None
         else config_data
     )
+    component_config = _rank_component_config(
+        component_config,
+        rank=_distributed_rank(),
+        distributed=distributed_requested,
+    )
     flags = workload_capability.payload_flags()
     model, optimizer, dataloader, loss_fn = build_training_components(component_config)
+    optimizer = build_optimizer_for_model(model, config_data)
     runtime_status = "synthetic" if flags["synthetic"] else "real_local"
     engine = TrainEngine(
         config=parascale_config,
@@ -178,6 +204,9 @@ def run_train_from_config(
         "workload": workload,
         "data_type": data_type,
         "backend": parascale_config.training_backend,
+        "optimizer": dict(
+            getattr(optimizer, "_parascale_optimizer_metadata", {}) or {}
+        ),
         "global_step": state.global_step,
         "last_metrics": dict(state.last_metrics),
         "metrics_history": list(state.metrics_history),
@@ -265,6 +294,22 @@ def _apply_strategy_plan_to_config(config: ParaScaleConfig, plan: Any) -> None:
 
 def _is_distributed_launch() -> bool:
     return int(os.environ.get("WORLD_SIZE", "1") or 1) > 1
+
+
+def _validate_distributed_topology(config_data: Dict[str, Any]) -> None:
+    distributed = _section(config_data, "distributed")
+    if not distributed:
+        return
+    nnodes = max(1, int(distributed.get("nnodes", 1) or 1))
+    nproc = max(1, int(distributed.get("nproc_per_node", 1) or 1))
+    world_size = int(os.environ.get("WORLD_SIZE", str(nnodes * nproc)) or 1)
+    expected = nnodes * nproc
+    if world_size != expected:
+        raise ValueError(
+            "distributed topology mismatch: "
+            f"WORLD_SIZE={world_size}, nnodes={nnodes}, "
+            f"nproc_per_node={nproc}, expected={expected}"
+        )
 
 
 def _capability_level_for_scope(base_level: str, config_data: Dict[str, Any]) -> str:

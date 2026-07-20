@@ -17,6 +17,91 @@ import torch.nn as nn
 from parascale.optimizers import FourBitAdamW, FourBitSGD, QuantizedState
 
 
+def _assert_tensor_state_tree(value):
+    if torch.is_tensor(value) or value is None or isinstance(
+        value, (bool, int, float, str)
+    ):
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            _assert_tensor_state_tree(key)
+            _assert_tensor_state_tree(item)
+        return
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            _assert_tensor_state_tree(item)
+        return
+    raise AssertionError(f"non-portable optimizer state value: {type(value)!r}")
+
+
+def test_four_bit_optimizer_state_dict_uses_portable_tensor_tree():
+    model = nn.Linear(4, 2)
+    optimizer = FourBitAdamW(model.parameters(), lr=0.01)
+    loss = model(torch.ones(2, 4)).sum()
+    loss.backward()
+    optimizer.step()
+
+    state = optimizer.state_dict()
+
+    _assert_tensor_state_tree(state)
+    assert state["parascale_optimizer"]["state_schema_version"] == 1
+
+
+def test_quantized_state_pack_and_unpack_do_not_use_python_range(monkeypatch):
+    import parascale.optimizers.optimizers as optimizer_module
+
+    def forbidden_range(*_args, **_kwargs):
+        raise AssertionError("4-bit pack/unpack must be vectorized")
+
+    monkeypatch.setattr(optimizer_module, "range", forbidden_range, raising=False)
+
+    state = optimizer_module.QuantizedState(torch.randn(256), group_size=128)
+    restored = state.dequantize()
+
+    assert restored.shape == (256,)
+
+
+def test_four_bit_adamw_reuses_persistent_quantized_state_buffers():
+    model = nn.Linear(4, 2)
+    optimizer = FourBitAdamW(model.parameters(), lr=0.01)
+    parameter = next(model.parameters())
+
+    model(torch.ones(2, 4)).sum().backward()
+    optimizer.step()
+    state = optimizer.state[parameter]["exp_avg"]
+    data_ptr = state.quantized_data.data_ptr()
+
+    model(torch.ones(2, 4)).sum().backward()
+    optimizer.step()
+
+    assert optimizer.state[parameter]["exp_avg"] is state
+    assert state.quantized_data.data_ptr() == data_ptr
+
+
+def test_quantized_state_update_returns_error_without_redecode():
+    original = torch.randn(256)
+    updated = torch.randn(256)
+    state = QuantizedState(original, group_size=128)
+
+    error = state.update_and_error(updated)
+
+    torch.testing.assert_close(error, updated - state.dequantize())
+
+
+def test_block_scaled_fp16_residual_preserves_tiny_second_moment_error():
+    torch.manual_seed(7)
+    updated = torch.rand(256) * 1e-7
+    state = QuantizedState(torch.zeros_like(updated), group_size=128)
+
+    normalized = state.update_and_normalized_error(updated).half()
+    restored_error = state.denormalize_error(normalized.float())
+    absolute_error = updated - state.dequantize()
+
+    assert torch.count_nonzero(absolute_error.half()) == 0
+    assert torch.count_nonzero(normalized) > 0
+    torch.testing.assert_close(restored_error, absolute_error, rtol=1e-3, atol=1e-12)
+
+
 class SimpleModel(nn.Module):
 
     def __init__(self, input_dim=10, hidden_dim=20, output_dim=5):

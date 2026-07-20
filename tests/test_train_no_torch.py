@@ -48,6 +48,46 @@ def test_stateful_resume_keeps_original_component_training_window():
     assert component_config is config
 
 
+def test_checkpoint_optimizer_metadata_mismatch_fails_before_load():
+    from parascale.runtime.training.checkpointing import CheckpointController
+
+    manifest = type(
+        "Manifest",
+        (),
+        {"metadata": {"optimizer": {"type": "four_bit_adamw"}}},
+    )()
+    optimizer = type(
+        "Optimizer",
+        (),
+        {"_parascale_optimizer_metadata": {"type": "four_bit_sgd"}},
+    )()
+
+    with pytest.raises(ValueError, match="optimizer metadata mismatch.*type"):
+        CheckpointController._validate_optimizer_metadata(manifest, optimizer)
+
+
+def test_distributed_topology_rejects_world_size_mismatch(monkeypatch):
+    from parascale.runtime.orchestrator import _validate_distributed_topology
+
+    monkeypatch.setenv("WORLD_SIZE", "4")
+
+    with pytest.raises(ValueError, match="WORLD_SIZE=4.*nnodes=2.*nproc_per_node=1"):
+        _validate_distributed_topology(
+            {"distributed": {"nnodes": 2, "nproc_per_node": 1}}
+        )
+
+
+def test_distributed_component_config_uses_rank_specific_data_seed():
+    from parascale.runtime.orchestrator import _rank_component_config
+
+    config = {"training": {"seed": 42}}
+
+    ranked = _rank_component_config(config, rank=3, distributed=True)
+
+    assert ranked["training"]["seed"] == 45
+    assert config["training"]["seed"] == 42
+
+
 def test_cuda_stream_prefetcher_moves_nested_batches_without_torch():
     from parascale.runtime.training.prefetch import (
         CudaStreamPrefetchIterator,
@@ -220,13 +260,13 @@ def test_ascend_backend_prepares_nested_batch_for_npu_without_torch():
             return self
 
     tensor = FakeTensor()
-    backend = AscendNativeTrainingBackend(local_rank=3)
+    backend = AscendNativeTrainingBackend(local_rank=1)
 
     batch = backend.prepare_batch({"input_ids": tensor, "labels": [FakeTensor()]})
 
-    assert batch["input_ids"].moved_to == "npu:3"
+    assert batch["input_ids"].moved_to == "npu:1"
     assert batch["input_ids"].non_blocking is True
-    assert batch["labels"][0].moved_to == "npu:3"
+    assert batch["labels"][0].moved_to == "npu:1"
 
 
 def test_training_backends_share_accelerator_batch_placement_without_torch(monkeypatch):

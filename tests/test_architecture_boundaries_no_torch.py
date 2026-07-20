@@ -96,8 +96,15 @@ def test_new_runtime_namespaces_expose_training_inference_and_reporting():
     assert hasattr(reporting, "build_backend_matrix_report")
 
 
-def test_ascend_native_backend_is_registered_but_fails_fast_without_npu():
+def test_ascend_native_backend_is_registered_but_fails_fast_without_npu(monkeypatch):
     backends = import_module("parascale.runtime.backends")
+    ascend_module = import_module("parascale.runtime.backends.ascend_native")
+    original_find_spec = ascend_module.importlib.util.find_spec
+    monkeypatch.setattr(
+        ascend_module.importlib.util,
+        "find_spec",
+        lambda name: None if name == "torch_npu" else original_find_spec(name),
+    )
     registry = backends.default_training_backend_registry()
 
     assert "ascend_native" in registry.factories

@@ -23,6 +23,15 @@ class QuantizedState:
         self.shape = tensor.shape
         self.group_size = group_size
         self.device = tensor.device
+        quantized, scale, zero_point = self._quantize(tensor, group_size)
+        self.scale = scale
+        self.zero_point = zero_point
+        self.quantized_data = self._pack(quantized)
+
+    @staticmethod
+    def _quantize(
+        tensor: torch.Tensor, group_size: int
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         flat_tensor = tensor.flatten()
         num_elements = flat_tensor.numel()
         num_groups = (num_elements + group_size - 1) // group_size
@@ -37,43 +46,64 @@ class QuantizedState:
         grouped = flat_tensor.view(num_groups, group_size)
         group_min = grouped.min(dim=1, keepdim=True)[0]
         group_max = grouped.max(dim=1, keepdim=True)[0]
-        self.scale = (group_max - group_min) / 15.0
-        self.scale = self.scale.squeeze(1)
-        self.zero_point = group_min.squeeze(1)
+        scale = ((group_max - group_min) / 15.0).squeeze(1)
+        zero_point = group_min.squeeze(1)
         quantized = (
             ((grouped - group_min) / (group_max - group_min + 1e-08) * 15)
             .round()
             .clamp(0, 15)
             .to(torch.uint8)
         )
-        self.quantized_data = torch.zeros(
-            num_groups * (group_size // 2), dtype=torch.uint8, device=tensor.device
-        )
-        for i in range(group_size // 2):
-            self.quantized_data[i :: group_size // 2] = (
-                quantized[:, 2 * i] << 4 | quantized[:, 2 * i + 1]
-            )
+        return quantized, scale, zero_point
+
+    @staticmethod
+    def _pack(quantized: torch.Tensor) -> torch.Tensor:
+        return (quantized[:, 0::2] << 4 | quantized[:, 1::2]).reshape(-1)
 
     def dequantize(self) -> torch.Tensor:
         num_groups = len(self.scale)
-        high_4bit = self.quantized_data >> 4 & 15
-        low_4bit = self.quantized_data & 15
-        quantized = torch.zeros(
-            num_groups, self.group_size, dtype=torch.float32, device=self.device
-        )
-        for i in range(self.group_size // 2):
-            quantized[:, 2 * i] = high_4bit[i :: self.group_size // 2].float()
-            quantized[:, 2 * i + 1] = low_4bit[i :: self.group_size // 2].float()
+        packed = self.quantized_data.view(num_groups, self.group_size // 2)
+        high_4bit = packed >> 4 & 15
+        low_4bit = packed & 15
+        quantized = torch.stack((high_4bit, low_4bit), dim=-1).reshape(
+            num_groups, self.group_size
+        ).float()
         dequantized = quantized * self.scale.unsqueeze(1) + self.zero_point.unsqueeze(1)
         flat_result = dequantized.flatten()[: torch.prod(torch.tensor(self.shape))]
         return flat_result.view(self.shape)
 
     def update(self, new_tensor: torch.Tensor) -> None:
-        new_state = QuantizedState(new_tensor, self.group_size)
-        self.quantized_data = new_state.quantized_data
-        self.scale = new_state.scale
-        self.zero_point = new_state.zero_point
-        self.shape = new_state.shape
+        quantized, scale, zero_point = self._quantize(new_tensor, self.group_size)
+        self.quantized_data.copy_(self._pack(quantized))
+        self.scale.copy_(scale)
+        self.zero_point.copy_(zero_point)
+        self.shape = new_tensor.shape
+
+    def update_and_error(self, new_tensor: torch.Tensor) -> torch.Tensor:
+        quantized, scale, zero_point = self._quantize(new_tensor, self.group_size)
+        reconstructed = (
+            quantized.float() * scale.unsqueeze(1) + zero_point.unsqueeze(1)
+        ).flatten()[: new_tensor.numel()]
+        self.quantized_data.copy_(self._pack(quantized))
+        self.scale.copy_(scale)
+        self.zero_point.copy_(zero_point)
+        self.shape = new_tensor.shape
+        return new_tensor - reconstructed.view(new_tensor.shape)
+
+    def update_and_normalized_error(self, new_tensor: torch.Tensor) -> torch.Tensor:
+        absolute_error = self.update_and_error(new_tensor)
+        scale = self._expanded_scale(new_tensor.dtype)
+        return torch.where(scale != 0, absolute_error / scale, absolute_error)
+
+    def denormalize_error(self, normalized_error: torch.Tensor) -> torch.Tensor:
+        return normalized_error * self._expanded_scale(normalized_error.dtype)
+
+    def _expanded_scale(self, dtype: torch.dtype) -> torch.Tensor:
+        return (
+            self.scale.to(dtype)
+            .repeat_interleave(self.group_size)[: math.prod(self.shape)]
+            .view(self.shape)
+        )
 
     def memory_usage(self) -> int:
         return (
@@ -95,6 +125,92 @@ class QuantizedState:
         self.zero_point = self.zero_point.to(device)
         self.device = device
         return self
+
+    def state_dict(self) -> Dict[str, Any]:
+        return {
+            "__quantized_state__": 1,
+            "shape": list(self.shape),
+            "group_size": int(self.group_size),
+            "quantized_data": self.quantized_data,
+            "scale": self.scale,
+            "zero_point": self.zero_point,
+            "is_sparse": bool(getattr(self, "is_sparse", False)),
+        }
+
+    @classmethod
+    def from_state_dict(
+        cls, state: Dict[str, Any], device: torch.device
+    ) -> "QuantizedState":
+        restored = cls.__new__(cls)
+        restored.shape = torch.Size(state["shape"])
+        restored.group_size = int(state["group_size"])
+        restored.device = device
+        restored.quantized_data = state["quantized_data"].to(device)
+        restored.scale = state["scale"].to(device)
+        restored.zero_point = state["zero_point"].to(device)
+        if bool(state.get("is_sparse", False)):
+            restored.is_sparse = True
+        return restored
+
+
+def _portable_state(value: Any) -> Any:
+    if isinstance(value, QuantizedState):
+        return value.state_dict()
+    if isinstance(value, dict):
+        return {key: _portable_state(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_portable_state(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_portable_state(item) for item in value)
+    return value
+
+
+def _restore_portable_state(value: Any, device: torch.device) -> Any:
+    if isinstance(value, dict) and value.get("__quantized_state__") == 1:
+        return QuantizedState.from_state_dict(value, device)
+    if isinstance(value, dict):
+        return {
+            key: _restore_portable_state(item, device) for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_restore_portable_state(item, device) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_restore_portable_state(item, device) for item in value)
+    return value
+
+
+class _PortableFourBitOptimizer:
+    optimizer_type = "four_bit"
+
+    def state_dict(self) -> Dict[str, Any]:
+        state = super().state_dict()
+        state["state"] = _portable_state(state["state"])
+        state["parascale_optimizer"] = {
+            "type": self.optimizer_type,
+            "state_schema_version": 1,
+            "group_size": int(self.group_size),
+            "compensate_quant_error": bool(self.compensate_quant_error),
+            "error_compensation_dtype": self.error_compensation_dtype,
+            "error_compensation_mode": self.error_compensation_mode,
+        }
+        return state
+
+    def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
+        state = dict(state_dict)
+        metadata = dict(state.pop("parascale_optimizer", {}) or {})
+        version = int(metadata.get("state_schema_version", 1) or 1)
+        if version != 1:
+            raise ValueError(f"unsupported 4-bit optimizer state schema: {version}")
+        self.error_compensation_mode = str(
+            metadata.get("error_compensation_mode", "absolute") or "absolute"
+        )
+        device = next(
+            parameter.device
+            for group in self.param_groups
+            for parameter in group["params"]
+        )
+        state["state"] = _restore_portable_state(state.get("state", {}), device)
+        super().load_state_dict(state)
 
 
 class ZeroOptimizer:
@@ -273,7 +389,9 @@ class AdamW(optim.AdamW):
         )
 
 
-class FourBitAdamW(optim.Optimizer):
+class FourBitAdamW(_PortableFourBitOptimizer, optim.Optimizer):
+
+    optimizer_type = "four_bit_adamw"
 
     def __init__(
         self,
@@ -285,6 +403,7 @@ class FourBitAdamW(optim.Optimizer):
         group_size: int = 128,
         compensate_quant_error: bool = True,
         error_compensation_dtype: Optional[str] = None,
+        error_compensation_mode: str = "absolute",
     ):
         if error_compensation_dtype not in (None, "fp16", "fp32"):
             raise ValueError("error_compensation_dtype must be None, 'fp16' or 'fp32'")
@@ -293,6 +412,7 @@ class FourBitAdamW(optim.Optimizer):
         self.group_size = group_size
         self.compensate_quant_error = compensate_quant_error
         self.error_compensation_dtype = error_compensation_dtype
+        self.error_compensation_mode = error_compensation_mode
 
     def _error_dtype(self, tensor: torch.Tensor) -> torch.dtype:
         if self.error_compensation_dtype == "fp16":
@@ -300,6 +420,23 @@ class FourBitAdamW(optim.Optimizer):
         if self.error_compensation_dtype == "fp32":
             return torch.float32
         return tensor.dtype
+
+    def _restore_error(
+        self, state: QuantizedState, error: torch.Tensor, dtype: torch.dtype
+    ) -> torch.Tensor:
+        restored = error.to(dtype)
+        if self.error_compensation_mode == "block_scaled":
+            restored = state.denormalize_error(restored)
+        return restored
+
+    def _capture_error(
+        self, state: QuantizedState, tensor: torch.Tensor
+    ) -> torch.Tensor:
+        if self.error_compensation_mode == "block_scaled":
+            error = state.update_and_normalized_error(tensor)
+        else:
+            error = state.update_and_error(tensor)
+        return error.to(self._error_dtype(tensor))
 
     def step(self, closure=None):
         loss = None
@@ -332,9 +469,13 @@ class FourBitAdamW(optim.Optimizer):
                 exp_avg = exp_avg_q.dequantize()
                 exp_avg_sq = exp_avg_sq_q.dequantize()
                 if self.compensate_quant_error:
-                    exp_avg = exp_avg + state["exp_avg_error"].to(exp_avg.dtype)
-                    exp_avg_sq = exp_avg_sq + state["exp_avg_sq_error"].to(
-                        exp_avg_sq.dtype
+                    exp_avg = exp_avg + self._restore_error(
+                        exp_avg_q, state["exp_avg_error"], exp_avg.dtype
+                    )
+                    exp_avg_sq = exp_avg_sq + self._restore_error(
+                        exp_avg_sq_q,
+                        state["exp_avg_sq_error"],
+                        exp_avg_sq.dtype,
                     )
                 if group["weight_decay"] != 0:
                     p.data.mul_(1 - group["lr"] * group["weight_decay"])
@@ -348,20 +489,13 @@ class FourBitAdamW(optim.Optimizer):
                 )
                 p.data.addcdiv_(exp_avg, denom, value=-step_size)
                 if self.compensate_quant_error:
-                    new_exp_avg_q = QuantizedState(exp_avg, self.group_size)
-                    new_exp_avg_sq_q = QuantizedState(exp_avg_sq, self.group_size)
-                    error_dtype = self._error_dtype(p.data)
-                    state["exp_avg_error"] = (exp_avg - new_exp_avg_q.dequantize()).to(
-                        error_dtype
+                    state["exp_avg_error"] = self._capture_error(exp_avg_q, exp_avg)
+                    state["exp_avg_sq_error"] = self._capture_error(
+                        exp_avg_sq_q, exp_avg_sq
                     )
-                    state["exp_avg_sq_error"] = (
-                        exp_avg_sq - new_exp_avg_sq_q.dequantize()
-                    ).to(error_dtype)
-                    state["exp_avg"] = new_exp_avg_q
-                    state["exp_avg_sq"] = new_exp_avg_sq_q
                 else:
-                    state["exp_avg"] = QuantizedState(exp_avg, self.group_size)
-                    state["exp_avg_sq"] = QuantizedState(exp_avg_sq, self.group_size)
+                    exp_avg_q.update(exp_avg)
+                    exp_avg_sq_q.update(exp_avg_sq)
         return loss
 
     def get_memory_stats(self) -> Dict[str, float]:
@@ -394,7 +528,9 @@ class FourBitAdamW(optim.Optimizer):
         print(f"  saving: {stats['savings_percent']:.1f}%")
 
 
-class FourBitSGD(optim.Optimizer):
+class FourBitSGD(_PortableFourBitOptimizer, optim.Optimizer):
+
+    optimizer_type = "four_bit_sgd"
 
     def __init__(
         self,
@@ -407,6 +543,7 @@ class FourBitSGD(optim.Optimizer):
         group_size: int = 128,
         compensate_quant_error: bool = True,
         error_compensation_dtype: Optional[str] = None,
+        error_compensation_mode: str = "absolute",
     ):
         if nesterov and (momentum <= 0 or dampening != 0):
             raise ValueError("Nesterov momentum requires a momentum and zero dampening")
@@ -423,6 +560,7 @@ class FourBitSGD(optim.Optimizer):
         self.group_size = group_size
         self.compensate_quant_error = compensate_quant_error
         self.error_compensation_dtype = error_compensation_dtype
+        self.error_compensation_mode = error_compensation_mode
 
     def _error_dtype(self, tensor: torch.Tensor) -> torch.dtype:
         if self.error_compensation_dtype == "fp16":
@@ -430,6 +568,23 @@ class FourBitSGD(optim.Optimizer):
         if self.error_compensation_dtype == "fp32":
             return torch.float32
         return tensor.dtype
+
+    def _restore_error(
+        self, state: QuantizedState, error: torch.Tensor, dtype: torch.dtype
+    ) -> torch.Tensor:
+        restored = error.to(dtype)
+        if self.error_compensation_mode == "block_scaled":
+            restored = state.denormalize_error(restored)
+        return restored
+
+    def _capture_error(
+        self, state: QuantizedState, tensor: torch.Tensor
+    ) -> torch.Tensor:
+        if self.error_compensation_mode == "block_scaled":
+            error = state.update_and_normalized_error(tensor)
+        else:
+            error = state.update_and_error(tensor)
+        return error.to(self._error_dtype(tensor))
 
     def step(self, closure=None):
         loss = None
@@ -459,7 +614,11 @@ class FourBitSGD(optim.Optimizer):
                 momentum_buffer_q = param_state["momentum_buffer"]
                 buf = momentum_buffer_q.dequantize()
                 if self.compensate_quant_error:
-                    buf = buf + param_state["momentum_error"].to(buf.dtype)
+                    buf = buf + self._restore_error(
+                        momentum_buffer_q,
+                        param_state["momentum_error"],
+                        buf.dtype,
+                    )
                 buf.mul_(momentum).add_(grad, alpha=1 - dampening)
                 if nesterov:
                     grad = grad.add(buf, alpha=momentum)
@@ -467,15 +626,11 @@ class FourBitSGD(optim.Optimizer):
                     grad = buf
                 p.data.add_(grad, alpha=-group["lr"])
                 if self.compensate_quant_error:
-                    new_buf_q = QuantizedState(buf, self.group_size)
-                    param_state["momentum_error"] = (buf - new_buf_q.dequantize()).to(
-                        self._error_dtype(p.data)
+                    param_state["momentum_error"] = self._capture_error(
+                        momentum_buffer_q, buf
                     )
-                    param_state["momentum_buffer"] = new_buf_q
                 else:
-                    param_state["momentum_buffer"] = QuantizedState(
-                        buf, self.group_size
-                    )
+                    momentum_buffer_q.update(buf)
         return loss
 
     def get_memory_stats(self) -> Dict[str, float]:
