@@ -13,6 +13,8 @@ WARMUP_STEPS=${WARMUP_STEPS:-10}
 BATCH_SIZE=${BATCH_SIZE:-8}
 NUM_WORKERS=${NUM_WORKERS:-2}
 PREFETCH_FACTOR=${PREFETCH_FACTOR:-2}
+PRECISION=${PRECISION:-fp32}
+DDP_COMM_HOOK=${DDP_COMM_HOOK:-none}
 
 mkdir -p "${ROOT_DIR}/${OUTPUT_DIR}"
 cd "${ROOT_DIR}" || exit 1
@@ -45,6 +47,8 @@ prefetch_factor = int(os.environ.get("PREFETCH_FACTOR", "2"))
 nproc = int(os.environ.get("NPROC_PER_NODE", "2"))
 accelerator = os.environ.get("ACCELERATOR", "cuda")
 communication_backend = os.environ.get("COMMUNICATION_BACKEND", "nccl")
+precision = os.environ.get("PRECISION", "fp32")
+ddp_comm_hook = os.environ.get("DDP_COMM_HOOK", "none")
 data_dir = os.environ["DATA_DIR"]
 
 parascale = cfg.setdefault("parascale", {})
@@ -54,9 +58,9 @@ runtime = cfg.setdefault("runtime", {})
 hardware = cfg.setdefault("hardware_profile", {})
 
 parascale["training_backend"] = "native_ddp"
-parascale["precision"] = "fp32"
+parascale["precision"] = precision
 parascale["data_parallel_size"] = nproc
-parascale["ddp_comm_hook"] = "none"
+parascale["ddp_comm_hook"] = ddp_comm_hook
 parascale["batch_size"] = batch_size
 parascale["dataloader_num_workers"] = num_workers
 parascale["dataloader_prefetch_factor"] = prefetch_factor
@@ -93,7 +97,7 @@ Path(config_path).write_text(
 )
 PY
 
-echo "[ParaScale strict CLIP] running ${RUN_ID}: accelerator=${ACCELERATOR}, backend=${COMMUNICATION_BACKEND}, data=${DATA_DIR}"
+echo "[ParaScale strict CLIP] running ${RUN_ID}: accelerator=${ACCELERATOR}, backend=${COMMUNICATION_BACKEND}, precision=${PRECISION}, data=${DATA_DIR}"
 if torchrun --standalone --nproc_per_node="${NPROC_PER_NODE}" \
   -m parascale.cli benchmark --config "${CONFIG_PATH}" --output "${OUTPUT_PATH}" >"${LOG_PATH}" 2>&1; then
   rm -f "${OUTPUT_DIR}/${RUN_ID}.error.json"
