@@ -39,6 +39,121 @@ from parascale.commands.stability_resume import (
 )
 
 
+def register_stability_parser(subparsers: argparse._SubParsersAction) -> None:
+    from parascale.commands.benchmark import (
+        add_pipeline_cache_arguments,
+        cmd_benchmark_stability,
+    )
+
+    parser = subparsers.add_parser(
+        "benchmark-stability",
+        help="Run long-window stability and resume stress benchmarks.",
+    )
+    parser.add_argument(
+        "--scenario",
+        required=True,
+        choices=[
+            "clip-datacomp-golden",
+            "vlm-lora-golden",
+            "vlm-lora-real",
+            "yolo-world-large",
+        ],
+        help="Validated stability scenario to execute.",
+    )
+    parser.add_argument(
+        "--backends",
+        nargs="+",
+        choices=[
+            "native_ddp",
+            "fsdp",
+            "deepspeed",
+            "deepspeed_zero2",
+            "deepspeed_zero3",
+        ],
+        help="Backends to run.",
+    )
+    parser.add_argument(
+        "--variants",
+        nargs="+",
+        choices=["s", "m", "l", "x"],
+        help="YOLO-World variants for yolo-world-large.",
+    )
+    parser.add_argument("--base-config", help="Override scenario base config.")
+    parser.add_argument("--run-id", help="Override single-run id.")
+    parser.add_argument("--output-dir", help="Directory for stability files.")
+    parser.add_argument("--summary", help="Path to write stability summary.")
+    parser.add_argument("--markdown", help="Path to write Markdown report.")
+    parser.add_argument(
+        "--output", help="Optional path to write the command payload JSON."
+    )
+    parser.add_argument("--max-steps", type=int, default=500)
+    parser.add_argument("--warmup-steps", type=int, default=20)
+    parser.add_argument("--batch-size", type=int)
+    parser.add_argument("--num-samples", type=int)
+    parser.add_argument("--nproc-per-node", type=int, default=2)
+    parser.add_argument("--master-port", type=int, default=29810)
+    parser.add_argument("--dataloader-workers", type=int)
+    parser.add_argument(
+        "--dataloader-workers-sweep",
+        nargs="+",
+        type=int,
+        help="Run stability windows for each dataloader worker count.",
+    )
+    parser.add_argument(
+        "--persistent-workers-sweep",
+        nargs="+",
+        help="Run stability windows for persistent_workers true/false values.",
+    )
+    parser.add_argument(
+        "--prefetch-factor-sweep",
+        nargs="+",
+        type=int,
+        help="Run stability windows for dataloader prefetch factors.",
+    )
+    parser.add_argument(
+        "--pin-memory-sweep",
+        nargs="+",
+        help="Run stability windows for pin_memory true/false values.",
+    )
+    add_pipeline_cache_arguments(parser)
+    parser.add_argument("--checkpoint-interval", type=int, default=100)
+    parser.add_argument(
+        "--resume-stress",
+        action="store_true",
+        help="Run an initial train phase, then restart a fresh launcher from checkpoint.",
+    )
+    parser.add_argument(
+        "--kill-step",
+        type=int,
+        help="Checkpoint step used as the simulated kill/restart boundary.",
+    )
+    parser.add_argument(
+        "--kill-restart",
+        action="store_true",
+        help=(
+            "SIGKILL the launcher process group after kill-step checkpoint "
+            "validates, then resume with a fresh launcher."
+        ),
+    )
+    parser.add_argument(
+        "--kill-timeout-seconds",
+        type=float,
+        default=3600.0,
+        help="Maximum time to wait for the kill-step checkpoint.",
+    )
+    parser.add_argument(
+        "--resume-steps",
+        type=int,
+        help="Number of steps to run after restart. Defaults to max_steps-kill_step.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Generate configs and commands without launching training.",
+    )
+    parser.set_defaults(func=cmd_benchmark_stability)
+
+
 def run_benchmark_stability_from_args(args: argparse.Namespace) -> Dict[str, Any]:
     if bool(getattr(args, "kill_restart", False)) and not bool(args.resume_stress):
         raise ValueError("--kill-restart requires --resume-stress.")

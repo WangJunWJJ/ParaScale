@@ -379,3 +379,39 @@ def test_commands_do_not_import_private_orchestrator_symbols():
             violations.append(str(path))
 
     assert violations == []
+
+
+def test_cli_delegates_command_parser_registration():
+    cli_source = Path("parascale/cli.py").read_text(encoding="utf-8")
+    command_tokens = [
+        '"config"',
+        '"plan"',
+        '"doctor"',
+        '"smoke"',
+        '"train"',
+        '"infer"',
+        '"serve"',
+        '"benchmark"',
+        '"benchmark-matrix"',
+        '"benchmark-stability"',
+        '"vision-profile"',
+        '"checkpoint"',
+    ]
+
+    assert "register_command_parsers(subparsers)" in cli_source
+    for token in command_tokens:
+        assert token not in cli_source
+
+    modules = {
+        "parascale.commands.configuration": "register_config_parser",
+        "parascale.commands.plan": "register_plan_parser",
+        "parascale.commands.doctor": "register_doctor_parser",
+        "parascale.commands.smoke": "register_smoke_parser",
+        "parascale.commands.run": "register_run_parsers",
+        "parascale.commands.benchmark_matrix": "register_benchmark_matrix_parser",
+        "parascale.commands.stability": "register_stability_parser",
+        "parascale.commands.vision": "register_vision_profile_parser",
+        "parascale.commands.checkpoint": "register_checkpoint_parser",
+    }
+    for module_name, function_name in modules.items():
+        assert hasattr(import_module(module_name), function_name)

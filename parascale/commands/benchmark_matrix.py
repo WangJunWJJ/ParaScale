@@ -34,6 +34,101 @@ from parascale.reporting import (
 )
 from parascale.runtime.profiles import BenchmarkProfileStore
 
+BENCHMARK_MATRIX_EXAMPLES = """examples:
+  python -m parascale.cli benchmark-matrix --scenario yolo-world-large --variants m --dry-run
+  python -m parascale.cli benchmark-matrix --scenario vlm-lora-hf-clip --backends native_ddp fsdp deepspeed --dry-run
+"""
+
+
+def register_benchmark_matrix_parser(
+    subparsers: argparse._SubParsersAction,
+) -> None:
+    from parascale.commands.benchmark import (
+        add_pipeline_cache_arguments,
+        cmd_benchmark_matrix,
+    )
+
+    parser = subparsers.add_parser(
+        "benchmark-matrix",
+        help="Run a unified native-DDP/FSDP/DeepSpeed benchmark matrix.",
+        epilog=BENCHMARK_MATRIX_EXAMPLES,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--scenario",
+        required=True,
+        choices=[
+            "clip-datacomp-golden",
+            "vlm-lora-hf-clip",
+            "vlm-lora-golden",
+            "vlm-lora-real",
+            "yolo-world-large",
+        ],
+        help="Validated benchmark scenario to execute.",
+    )
+    parser.add_argument(
+        "--backends",
+        nargs="+",
+        choices=[
+            "native_ddp",
+            "fsdp",
+            "deepspeed",
+            "deepspeed_zero2",
+            "deepspeed_zero3",
+        ],
+        help="Backends to run. Defaults to all validated matrix backends.",
+    )
+    parser.add_argument(
+        "--variants",
+        nargs="+",
+        choices=["s", "m", "l", "x"],
+        help="YOLO-World variants for yolo-world-large.",
+    )
+    parser.add_argument("--base-config", help="Override scenario base config.")
+    parser.add_argument("--run-id", help="Override single-run id.")
+    parser.add_argument("--output-dir", help="Directory for matrix JSON files.")
+    parser.add_argument("--summary", help="Path to write matrix summary JSON.")
+    parser.add_argument("--markdown", help="Path to write Markdown report.")
+    parser.add_argument(
+        "--output", help="Optional path to write the command payload JSON."
+    )
+    parser.add_argument("--max-steps", type=int, help="Override max steps.")
+    parser.add_argument(
+        "--warmup-steps", type=int, help="Override benchmark warmup steps."
+    )
+    parser.add_argument("--batch-size", type=int, help="Override batch size.")
+    parser.add_argument(
+        "--batch-size-sweep",
+        nargs="+",
+        type=int,
+        help="Run one matrix per listed batch size, for example: 1 2 4.",
+    )
+    parser.add_argument("--num-samples", type=int, help="Override sample limit.")
+    parser.add_argument("--nproc-per-node", type=int, default=2)
+    parser.add_argument("--master-port", type=int, default=29710)
+    parser.add_argument(
+        "--optimize-for",
+        choices=["throughput", "memory", "balanced"],
+        default="balanced",
+        help="Recommendation policy for the generated report.",
+    )
+    parser.add_argument("--throughput-tolerance", type=float, default=0.05)
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Generate configs and commands without launching benchmarks.",
+    )
+    parser.add_argument(
+        "--oom-retry",
+        action="store_true",
+        help=(
+            "On OOM-like failures, retry with a smaller batch, activation "
+            "checkpointing, and safer FSDP/DeepSpeed fallbacks."
+        ),
+    )
+    add_pipeline_cache_arguments(parser)
+    parser.set_defaults(func=cmd_benchmark_matrix)
+
 
 def run_benchmark_matrix_from_args(args: argparse.Namespace) -> Dict[str, Any]:
     scenario = str(args.scenario)
