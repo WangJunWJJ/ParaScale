@@ -3,6 +3,8 @@
 # @Author : Wang Jun
 # @Email: wj_xd@foxmail.com
 
+from dataclasses import is_dataclass
+
 import pytest
 
 
@@ -238,6 +240,17 @@ def test_config_field_map_covers_layered_and_flat_configs():
         field for fields in fields_by_section.values() for field in fields
     }
     assert mapped_fields == flat_fields
+
+
+def test_parascale_config_defaults_are_derived_from_layered_schema():
+    from parascale.config import LayeredParaScaleConfig, ParaScaleConfig
+
+    defaults = LayeredParaScaleConfig().to_flat_dict()
+    config = ParaScaleConfig()
+
+    assert not is_dataclass(ParaScaleConfig)
+    assert config.to_dict() == defaults
+    assert config.to_layered_dict() == LayeredParaScaleConfig().to_dict()
 
 
 def test_layered_config_copies_nested_resolution_buckets_without_torch():
