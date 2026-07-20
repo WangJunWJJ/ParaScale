@@ -11,6 +11,7 @@ from typing import Any, Dict
 
 from parascale.runtime.specs import (
     ClipContrastiveSpec,
+    GroundDinoSpec,
     TinyTorchWorkloadSpec,
     VisionSyntheticSpec,
     VlmLoraSpec,
@@ -20,6 +21,7 @@ from parascale.runtime.workloads import WorkloadRegistry
 
 from .clip import build_clip_contrastive_components
 from .common import _require_torch, _section
+from .ground_dino import build_ground_dino_components
 from .optimizer import (
     trainable_parameter_stats as trainable_parameter_stats,
 )
@@ -59,6 +61,11 @@ def default_workload_registry() -> WorkloadRegistry:
         aliases=("yolo_world_detection", "yoloworld"),
     )
     registry.register(
+        "ground_dino",
+        _build_ground_dino_from_config,
+        aliases=("grounding_dino", "groundingdino", "ground_dino_detection"),
+    )
+    registry.register(
         "torch_tiny",
         _build_tiny_torch_from_config,
         aliases=("synthetic_regression", "torch_tiny_mlp", "tiny_torch"),
@@ -88,6 +95,10 @@ def _build_vlm_lora_from_config(config_data: Dict[str, Any]):
 
 def _build_yolo_world_from_config(config_data: Dict[str, Any]):
     return build_yolo_world_components(YoloWorldSpec.from_config(config_data))
+
+
+def _build_ground_dino_from_config(config_data: Dict[str, Any]):
+    return build_ground_dino_components(GroundDinoSpec.from_config(config_data))
 
 
 def build_optimizer_for_model(model: Any, config_data: Dict[str, Any]):

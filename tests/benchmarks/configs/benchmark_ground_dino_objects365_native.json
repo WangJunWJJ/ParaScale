@@ -1,0 +1,55 @@
+{
+  "parascale": {
+    "task_type": "vision",
+    "model_family": "grounding_dino",
+    "target_scale": "single_node",
+    "optimize_for": "throughput",
+    "training_backend": "native",
+    "batch_size": 1,
+    "precision": "fp32",
+    "dataloader_num_workers": 2,
+    "dataloader_pin_memory": true,
+    "dataloader_prefetch_factor": 2,
+    "dataloader_persistent_workers": true,
+    "tensor_cache": true,
+    "tensor_cache_dir": "runs/cache/ground_dino_objects365_tensor"
+  },
+  "training": {
+    "workload": "ground_dino",
+    "max_steps": 10,
+    "benchmark_steps": 10,
+    "warmup_steps": 2,
+    "batch_size": 1,
+    "checkpoint_interval": 10,
+    "checkpoint_dir": "runs/benchmarks/ground_dino_objects365/native_ckpt",
+    "skip_final_checkpoint": false
+  },
+  "model": {
+    "path": "IDEA-Research/grounding-dino-tiny",
+    "image_size": 640
+  },
+  "task": {
+    "prompt": "object"
+  },
+  "data": {
+    "type": "objects365_yolo_cache",
+    "data_dir": "/dataset/cache/objects365_tiny_yolo",
+    "image_dir": "/dataset/cache/objects365_tiny_yolo/images",
+    "label_dir": "/dataset/cache/objects365_tiny_yolo/labels",
+    "batch_size": 1,
+    "image_size": 640,
+    "num_samples": 64,
+    "num_workers": 2,
+    "pin_memory": true,
+    "prefetch_factor": 2,
+    "persistent_workers": true,
+    "tensor_cache": true,
+    "tensor_cache_dir": "runs/cache/ground_dino_objects365_tensor"
+  },
+  "optimizer": {
+    "lr": 0.00001
+  },
+  "runtime": {
+    "device": "auto"
+  }
+}

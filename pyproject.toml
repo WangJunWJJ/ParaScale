@@ -46,6 +46,10 @@ yolo = [
     "ultralytics>=8.3.0",
     "pillow>=10.0.0",
 ]
+grounding-dino = [
+    "transformers>=4.44.0",
+    "pillow>=10.0.0",
+]
 ascend = [
     "torch-npu>=2.4.0",
 ]

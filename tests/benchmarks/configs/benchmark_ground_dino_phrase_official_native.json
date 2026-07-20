@@ -1,0 +1,43 @@
+{
+  "parascale": {
+    "task_type": "vision",
+    "model_family": "grounding_dino",
+    "target_scale": "single_node",
+    "optimize_for": "throughput",
+    "training_backend": "native",
+    "batch_size": 1,
+    "precision": "fp32",
+    "dataloader_num_workers": 0,
+    "dataloader_pin_memory": true,
+    "tensor_cache": false
+  },
+  "training": {
+    "workload": "ground_dino",
+    "loss_type": "official",
+    "max_steps": 1,
+    "benchmark_steps": 1,
+    "warmup_steps": 0,
+    "batch_size": 1,
+    "checkpoint_interval": 1,
+    "skip_final_checkpoint": true
+  },
+  "model": {
+    "path": "/models/grounding-dino-tiny",
+    "image_size": 224
+  },
+  "data": {
+    "type": "phrase_grounding",
+    "data_dir": "/dataset/ground_dino_phrase_mini",
+    "batch_size": 1,
+    "image_size": 224,
+    "num_samples": 1,
+    "num_workers": 0,
+    "tensor_cache": false
+  },
+  "optimizer": {
+    "lr": 0.00001
+  },
+  "runtime": {
+    "device": "auto"
+  }
+}
