@@ -1,4 +1,7 @@
 # -*- coding: utf-8 -*-
+# @Time : 2026/7/20 下午1:45
+# @Author : Wang Jun
+# @Email: wj_xd@foxmail.com
 
 """Summarize ParaScale Ascend validation results."""
 
