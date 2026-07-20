@@ -12,7 +12,7 @@ import time
 from typing import Any, Dict, Iterable, Mapping, Sequence
 
 from parascale.data import MultiModalCollator
-from parascale.runtime.specs import ClipContrastiveSpec, VlmLoraSpec
+from parascale.workloads.specs import ClipContrastiveSpec, VlmLoraSpec
 
 from .clip import _clip_sample_batches
 from .common import _patchify, _require_torch

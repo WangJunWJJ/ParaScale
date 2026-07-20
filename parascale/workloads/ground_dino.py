@@ -18,7 +18,6 @@ from parascale.data.vision.preprocessor import (
     VisionSample,
     VisionTransformConfig,
 )
-from parascale.runtime.specs import GroundDinoSpec
 from parascale.workloads.adapters.ground_dino import (
     GroundDinoBatchAdapter,
     GroundDinoPhraseTargetAdapter,
@@ -26,6 +25,7 @@ from parascale.workloads.adapters.ground_dino import (
     collect_phrase_grounding_samples,
 )
 from parascale.workloads.adapters.yolo import YoloDetectionTargetAdapter
+from parascale.workloads.specs import GroundDinoSpec
 
 from .common import _require_torch
 

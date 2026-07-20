@@ -1,0 +1,60 @@
+{
+  "mode": "rtx4090_clip_precision_datacomp_summary",
+  "hardware": "dual RTX 4090D 24GB",
+  "image": "parascale-ci:cu121-torch24",
+  "dataset": "datacomp_10k_wds",
+  "model": "clip_medium",
+  "steps": 80,
+  "warmup_steps": 10,
+  "batch_size": 8,
+  "runs": [
+    {
+      "precision": "fp32",
+      "throughput": 77.65258781401893,
+      "step_time_ms": 203.45250597622777,
+      "loss": 2.507680640901838,
+      "peak_memory_bytes": 3978192574.1714287,
+      "dataloader_wait_ms": 2.5963045989296267,
+      "backend": "native_ddp",
+      "global_step": 80,
+      "config_precision": "fp32",
+      "ddp_comm_hook": "none",
+      "data_type": "datacomp_wds",
+      "path": "tests/benchmarks/reports/cross_hardware_clip_datacomp/rtx4090/rtx4090_clip_datacomp_native_ddp_fp32.json",
+      "note": "strict rerun",
+      "relative_to_fp32": 1.0
+    },
+    {
+      "precision": "bf16",
+      "throughput": 131.6025388140789,
+      "step_time_ms": 118.95487174348465,
+      "loss": 2.8012560575436325,
+      "peak_memory_bytes": 3729845760.0,
+      "dataloader_wait_ms": 2.697731961700647,
+      "backend": "native_ddp",
+      "global_step": 80,
+      "config_precision": "bf16",
+      "ddp_comm_hook": "bf16_compress",
+      "data_type": "datacomp_wds",
+      "path": "tests/benchmarks/reports/dual_4090_full_validation/clip_native_ddp.json",
+      "note": "existing full validation",
+      "relative_to_fp32": 1.6947605034010236
+    },
+    {
+      "precision": "fp16",
+      "throughput": 79.59339367623589,
+      "step_time_ms": 198.65730071573384,
+      "loss": 2.649531010219029,
+      "peak_memory_bytes": 3700601892.571429,
+      "dataloader_wait_ms": 2.367188422275441,
+      "backend": "native_ddp",
+      "global_step": 80,
+      "config_precision": "fp16",
+      "ddp_comm_hook": "none",
+      "data_type": "datacomp_wds",
+      "path": "tests/benchmarks/reports/rtx4090_clip_precision_datacomp/fp16/rtx4090_clip_datacomp_native_ddp_fp16.json",
+      "note": "strict rerun",
+      "relative_to_fp32": 1.024993447312603
+    }
+  ]
+}

@@ -68,6 +68,9 @@ wheelhouse_transformers_4442_linux.tar.gz
 
 # Test output
 .pytest_cache/
+.pytest-tmp/
 .pytest-parascale/
 pytest-cache-files-*/
+*.pytest-tmp*/
 tests/.test_runs/
+.codex/

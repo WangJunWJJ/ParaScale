@@ -1,0 +1,65 @@
+{
+  "mode": "cross_hardware_clip_datacomp_summary",
+  "suite_id": "cross_hardware_clip_datacomp_native_ddp_fp32",
+  "dataset": "datacomp_10k_wds",
+  "model": "clip_medium",
+  "precision": "fp32",
+  "steps": 80,
+  "warmup_steps": 10,
+  "batch_size": 8,
+  "passed": true,
+  "runs": [
+    {
+      "label": "rtx4090",
+      "hardware": "dual RTX 4090D 24GB",
+      "image": "parascale-ci:cu121-torch24",
+      "ok": true,
+      "status": "ok",
+      "runtime_status": "real_local",
+      "backend": "native_ddp",
+      "global_step": 80,
+      "throughput": 77.65258781401893,
+      "throughput_metric": "stable_end_to_end_image_text_pairs_per_second",
+      "loss": 2.507680640901838,
+      "peak_memory_bytes": 3978192574.1714287,
+      "dataloader_wait_ms": 2.5963045989296267,
+      "path": "tests\\benchmarks\\reports\\cross_hardware_clip_datacomp\\rtx4090\\rtx4090_clip_datacomp_native_ddp_fp32.json",
+      "error": null,
+      "returncode": null
+    },
+    {
+      "label": "ascend",
+      "hardware": "Ascend 910B4",
+      "image": "quay.io/ascend/llamafactory:latest-npu-a2",
+      "ok": true,
+      "status": "ok",
+      "runtime_status": "real_local",
+      "backend": "native_ddp",
+      "global_step": 80,
+      "throughput": 121.50693592808831,
+      "throughput_metric": "stable_end_to_end_image_text_pairs_per_second",
+      "loss": 2.577154176575797,
+      "peak_memory_bytes": 3908387510.857143,
+      "dataloader_wait_ms": 11.182960249217492,
+      "path": "tests\\benchmarks\\reports\\cross_hardware_clip_datacomp\\ascend\\ascend_clip_datacomp_native_ddp_fp32.json",
+      "error": null,
+      "returncode": null
+    }
+  ],
+  "comparisons": [
+    {
+      "label": "rtx4090",
+      "baseline": "rtx4090",
+      "throughput": 77.65258781401893,
+      "baseline_throughput": 77.65258781401893,
+      "relative_to_baseline": 1.0
+    },
+    {
+      "label": "ascend",
+      "baseline": "rtx4090",
+      "throughput": 121.50693592808831,
+      "baseline_throughput": 77.65258781401893,
+      "relative_to_baseline": 1.5647506328971588
+    }
+  ]
+}

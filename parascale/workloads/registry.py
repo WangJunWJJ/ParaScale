@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from parascale.runtime.specs import (
+from parascale.runtime.workloads import WorkloadRegistry
+from parascale.workloads.specs import (
     ClipContrastiveSpec,
     GroundDinoSpec,
     TinyTorchWorkloadSpec,
@@ -17,7 +18,6 @@ from parascale.runtime.specs import (
     VlmLoraSpec,
     YoloWorldSpec,
 )
-from parascale.runtime.workloads import WorkloadRegistry
 
 from .clip import build_clip_contrastive_components
 from .common import _require_torch, _section

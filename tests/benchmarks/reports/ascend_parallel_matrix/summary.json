@@ -1,0 +1,145 @@
+{
+  "mode": "ascend_parallel_matrix_summary",
+  "suite_id": "ascend_parallel_matrix",
+  "hardware": "Ascend 910B4",
+  "image": "quay.io/ascend/llamafactory:latest-npu-a2",
+  "input_dir": "tests/benchmarks/reports/ascend_parallel_matrix_raw_20260719",
+  "steps": 80,
+  "warmup_steps": 10,
+  "batch_size": 8,
+  "passed": true,
+  "scenarios": [
+    {
+      "scenario": "single_docker_2card",
+      "containers": 1,
+      "cards": 2,
+      "components": [
+        "single_docker_2card"
+      ],
+      "missing": [],
+      "ok": true,
+      "aggregate_throughput": 130.34751588925405,
+      "throughput_per_card": 65.17375794462703,
+      "mean_loss": 2.119536433901106,
+      "peak_memory_bytes_sum": 3929863168.0,
+      "peak_memory_bytes_max": 3929863168.0,
+      "mean_dataloader_wait_ms": 3.3197724459958926
+    },
+    {
+      "scenario": "two_docker_1card",
+      "containers": 2,
+      "cards": 2,
+      "components": [
+        "two_docker_1card_a",
+        "two_docker_1card_b"
+      ],
+      "missing": [],
+      "ok": true,
+      "aggregate_throughput": 154.6248341033404,
+      "throughput_per_card": 77.3124170516702,
+      "mean_loss": 2.1394951496805463,
+      "peak_memory_bytes_sum": 6971261952.0,
+      "peak_memory_bytes_max": 3485630976.0,
+      "mean_dataloader_wait_ms": 3.2668308787313958
+    },
+    {
+      "scenario": "two_docker_2card",
+      "containers": 2,
+      "cards": 4,
+      "components": [
+        "two_docker_2card_a",
+        "two_docker_2card_b"
+      ],
+      "missing": [],
+      "ok": true,
+      "aggregate_throughput": 265.30057366031224,
+      "throughput_per_card": 66.32514341507806,
+      "mean_loss": 2.1195363198007855,
+      "peak_memory_bytes_sum": 7859726336.0,
+      "peak_memory_bytes_max": 3929863168.0,
+      "mean_dataloader_wait_ms": 6.571049668959209
+    }
+  ],
+  "runs": [
+    {
+      "run_id": "single_docker_2card",
+      "ok": true,
+      "status": "ok",
+      "runtime_status": "real_local",
+      "backend": "native_ddp",
+      "global_step": 80,
+      "throughput": 130.34751588925405,
+      "throughput_metric": "stable_end_to_end_image_text_pairs_per_second",
+      "loss": 2.119536433901106,
+      "peak_memory_bytes": 3929863168.0,
+      "dataloader_wait_ms": 3.3197724459958926,
+      "returncode": null,
+      "error": null,
+      "path": "tests/benchmarks/reports/ascend_parallel_matrix_raw_20260719/single_docker_2card.json"
+    },
+    {
+      "run_id": "two_docker_1card_a",
+      "ok": true,
+      "status": "ok",
+      "runtime_status": "real_local",
+      "backend": "ascend_native",
+      "global_step": 80,
+      "throughput": 77.29304249308078,
+      "throughput_metric": "stable_end_to_end_image_text_pairs_per_second",
+      "loss": 2.139495120729719,
+      "peak_memory_bytes": 3485630976.0,
+      "dataloader_wait_ms": 3.0613431108317206,
+      "returncode": null,
+      "error": null,
+      "path": "tests/benchmarks/reports/ascend_parallel_matrix_raw_20260719/two_docker_1card_a.json"
+    },
+    {
+      "run_id": "two_docker_1card_b",
+      "ok": true,
+      "status": "ok",
+      "runtime_status": "real_local",
+      "backend": "ascend_native",
+      "global_step": 80,
+      "throughput": 77.3317916102596,
+      "throughput_metric": "stable_end_to_end_image_text_pairs_per_second",
+      "loss": 2.139495178631374,
+      "peak_memory_bytes": 3485630976.0,
+      "dataloader_wait_ms": 3.4723186466310705,
+      "returncode": null,
+      "error": null,
+      "path": "tests/benchmarks/reports/ascend_parallel_matrix_raw_20260719/two_docker_1card_b.json"
+    },
+    {
+      "run_id": "two_docker_2card_a",
+      "ok": true,
+      "status": "ok",
+      "runtime_status": "real_local",
+      "backend": "native_ddp",
+      "global_step": 80,
+      "throughput": 132.96565487766492,
+      "throughput_metric": "stable_end_to_end_image_text_pairs_per_second",
+      "loss": 2.1195362976619174,
+      "peak_memory_bytes": 3929863168.0,
+      "dataloader_wait_ms": 5.463382468691894,
+      "returncode": null,
+      "error": null,
+      "path": "tests/benchmarks/reports/ascend_parallel_matrix_raw_20260719/two_docker_2card_a.json"
+    },
+    {
+      "run_id": "two_docker_2card_b",
+      "ok": true,
+      "status": "ok",
+      "runtime_status": "real_local",
+      "backend": "native_ddp",
+      "global_step": 80,
+      "throughput": 132.3349187826473,
+      "throughput_metric": "stable_end_to_end_image_text_pairs_per_second",
+      "loss": 2.1195363419396536,
+      "peak_memory_bytes": 3929863168.0,
+      "dataloader_wait_ms": 7.678716869226524,
+      "returncode": null,
+      "error": null,
+      "path": "tests/benchmarks/reports/ascend_parallel_matrix_raw_20260719/two_docker_2card_b.json"
+    }
+  ]
+}

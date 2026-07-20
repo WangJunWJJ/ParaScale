@@ -210,6 +210,47 @@ def test_layered_config_roundtrip_without_torch():
     assert restored.to_dict() == config.to_dict()
 
 
+def test_config_field_map_covers_layered_and_flat_configs():
+    from parascale.config import (
+        BackendConfig,
+        DataPipelineConfig,
+        ParallelConfig,
+        ParaScaleConfig,
+        TrainingRunConfig,
+        WorkloadConfig,
+        flat_config_fields_by_section,
+    )
+
+    fields_by_section = flat_config_fields_by_section()
+    section_types = {
+        "workload": WorkloadConfig,
+        "parallel": ParallelConfig,
+        "backend": BackendConfig,
+        "data": DataPipelineConfig,
+        "training": TrainingRunConfig,
+    }
+    flat_fields = set(ParaScaleConfig().to_dict()) - {"quantization"}
+
+    for section, config_type in section_types.items():
+        assert set(fields_by_section[section]) == set(config_type().to_dict())
+
+    mapped_fields = {
+        field for fields in fields_by_section.values() for field in fields
+    }
+    assert mapped_fields == flat_fields
+
+
+def test_layered_config_copies_nested_resolution_buckets_without_torch():
+    from parascale.config import ParaScaleConfig
+
+    config = ParaScaleConfig(resolution_buckets=[[224, 224], [336, 336]])
+    layered = config.to_layered()
+
+    config.resolution_buckets[0][0] = 128
+
+    assert layered.data.resolution_buckets == [[224, 224], [336, 336]]
+
+
 def test_vlm_lora_fsdp_uses_backend_activation_checkpointing_without_torch():
     from parascale.workloads.vlm_lora import VlmLoraSpec
 

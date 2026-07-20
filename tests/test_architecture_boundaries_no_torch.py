@@ -334,3 +334,28 @@ def test_production_code_does_not_import_deprecated_facades():
             violations.append(str(path))
 
     assert violations == []
+
+
+def test_workload_modules_do_not_import_runtime_specs():
+    violations = []
+    forbidden = "parascale.runtime.specs"
+    for path in Path("parascale/workloads").rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        if forbidden in source:
+            violations.append(str(path))
+
+    assert violations == []
+
+
+def test_commands_do_not_import_private_orchestrator_symbols():
+    violations = []
+    for path in Path("parascale/commands").rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        if "from parascale.runtime.orchestrator import (" not in source:
+            continue
+        block = source.split("from parascale.runtime.orchestrator import (", 1)[1]
+        block = block.split(")", 1)[0]
+        if any(line.strip().startswith("_") for line in block.splitlines()):
+            violations.append(str(path))
+
+    assert violations == []
