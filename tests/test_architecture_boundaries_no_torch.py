@@ -401,6 +401,23 @@ def test_runtime_runners_are_split_by_execution_mode():
     assert "parascale.runtime.orchestrator" not in command_source
 
 
+def test_workload_and_vision_data_use_runtime_device_helpers():
+    checked_paths = [
+        Path("parascale/workloads/common.py"),
+        Path("parascale/data/vision/image_folder.py"),
+    ]
+
+    for path in checked_paths:
+        source = path.read_text(encoding="utf-8")
+        assert "def _select_torch_device" not in source
+        assert "from parascale.runtime.backends.devices import" in source
+
+    workload_source = checked_paths[0].read_text(encoding="utf-8")
+    vision_source = checked_paths[1].read_text(encoding="utf-8")
+    assert "torch.cuda.is_available()" not in workload_source
+    assert "torch.cuda.is_available()" not in vision_source
+
+
 def test_cli_delegates_command_parser_registration():
     cli_source = Path("parascale/cli.py").read_text(encoding="utf-8")
     command_tokens = [
