@@ -14,7 +14,7 @@ from parascale.data.vision import (
     VisionCollator,
     estimate_patch_tokens,
 )
-from parascale.workloads.specs import VisionSyntheticSpec
+from parascale.workloads.specs.vision import VisionSyntheticSpec
 
 from .common import _patchify, _require_torch
 

@@ -288,13 +288,11 @@ def test_default_workload_registry_resolves_builtin_aliases_without_torch():
     assert "clip_contrastive" in registry.names()
 
 
-def test_workload_specs_are_available_from_specs_and_workloads_without_torch():
-    from parascale.runtime import VlmLoraSpec as RuntimeVlmLoraSpec
-    from parascale.runtime.specs import VlmLoraSpec as SpecsVlmLoraSpec
+def test_workload_specs_are_imported_from_scenario_modules_without_torch():
+    from parascale.workloads.specs.vlm_lora import VlmLoraSpec as SpecsVlmLoraSpec
     from parascale.workloads.vlm_lora import VlmLoraSpec as WorkloadVlmLoraSpec
 
     assert WorkloadVlmLoraSpec is SpecsVlmLoraSpec
-    assert RuntimeVlmLoraSpec is SpecsVlmLoraSpec
 
 
 def test_vlm_lora_batches_account_for_gradient_accumulation_without_torch():
@@ -368,7 +366,7 @@ def test_vlm_lora_pipeline_cache_and_worker_preprocess_config_without_torch():
 
 
 def test_yolo_world_dataloader_and_tensor_cache_config_without_torch():
-    from parascale.runtime.specs import YoloWorldSpec
+    from parascale.workloads.specs.yolo import YoloWorldSpec
 
     spec = YoloWorldSpec.from_config(
         {

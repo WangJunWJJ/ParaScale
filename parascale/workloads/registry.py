@@ -10,14 +10,12 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from parascale.runtime.workloads import WorkloadRegistry
-from parascale.workloads.specs import (
-    ClipContrastiveSpec,
-    GroundDinoSpec,
-    TinyTorchWorkloadSpec,
-    VisionSyntheticSpec,
-    VlmLoraSpec,
-    YoloWorldSpec,
-)
+from parascale.workloads.specs.clip import ClipContrastiveSpec
+from parascale.workloads.specs.ground_dino import GroundDinoSpec
+from parascale.workloads.specs.tiny import TinyTorchWorkloadSpec
+from parascale.workloads.specs.vision import VisionSyntheticSpec
+from parascale.workloads.specs.vlm_lora import VlmLoraSpec
+from parascale.workloads.specs.yolo import YoloWorldSpec
 
 from .clip import build_clip_contrastive_components
 from .common import _require_torch, _section

@@ -25,7 +25,7 @@ from parascale.workloads.adapters.ground_dino import (
     collect_phrase_grounding_samples,
 )
 from parascale.workloads.adapters.yolo import YoloDetectionTargetAdapter
-from parascale.workloads.specs import GroundDinoSpec
+from parascale.workloads.specs.ground_dino import GroundDinoSpec
 
 from .common import _require_torch
 

@@ -347,6 +347,26 @@ def test_workload_modules_do_not_import_runtime_specs():
     assert violations == []
 
 
+def test_workload_specs_are_split_by_scenario_modules():
+    specs_root = Path("parascale/workloads/specs")
+    expected_modules = {
+        "tiny": "TinyTorchWorkloadSpec",
+        "vision": "VisionSyntheticSpec",
+        "clip": "ClipContrastiveSpec",
+        "vlm_lora": "VlmLoraSpec",
+        "yolo": "YoloWorldSpec",
+        "ground_dino": "GroundDinoSpec",
+    }
+
+    assert specs_root.is_dir()
+    assert not Path("parascale/workloads/specs.py").exists()
+    assert not Path("parascale/runtime/specs.py").exists()
+    for module_name, class_name in expected_modules.items():
+        module = import_module(f"parascale.workloads.specs.{module_name}")
+
+        assert getattr(module, class_name).__name__ == class_name
+
+
 def test_commands_do_not_import_private_orchestrator_symbols():
     violations = []
     for path in Path("parascale/commands").rglob("*.py"):
