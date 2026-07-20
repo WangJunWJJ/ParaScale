@@ -12,14 +12,13 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
-THROUGHPUT_KEYS = (
-    "stable_end_to_end_image_text_pairs_per_second",
-    "end_to_end_image_text_pairs_per_second",
-    "stable_end_to_end_images_per_second",
-    "end_to_end_images_per_second",
-    "stable_samples_per_second",
-    "samples_per_second",
-    "steps_per_second",
+from tests.benchmarks.tools.common import (
+    IMAGE_TEXT_THROUGHPUT_KEYS,
+    first_metric,
+    loss_value,
+    read_json_payload,
+    run_id_from_path,
+    train_section,
 )
 
 SCENARIOS = {
@@ -41,73 +40,24 @@ SCENARIOS = {
 }
 
 
-def _read_json(path: Path) -> Dict[str, Any]:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        return {
-            "path": str(path),
-            "status": "error",
-            "error": str(exc),
-        }
-    payload.setdefault("path", str(path))
-    return payload
-
-
-def _metric(metrics: Dict[str, Any], keys: Iterable[str]) -> tuple[float, str | None]:
-    for key in keys:
-        try:
-            value = float(metrics.get(key, 0.0) or 0.0)
-        except (TypeError, ValueError):
-            value = 0.0
-        if value > 0:
-            return value, key
-    return 0.0, None
-
-
-def _loss(payload: Dict[str, Any]) -> float | None:
-    metrics = payload.get("metrics", {})
-    train = payload.get("train", {})
-    last_metrics = train.get("last_metrics", {}) if isinstance(train, dict) else {}
-    for source in (metrics, last_metrics):
-        if not isinstance(source, dict):
-            continue
-        for key in ("stable_loss", "loss", "last_loss"):
-            if key in source:
-                try:
-                    return float(source[key])
-                except (TypeError, ValueError):
-                    return None
-    return None
-
-
-def _run_id(path: Path) -> str:
-    stem = path.stem
-    if stem.endswith(".error"):
-        return stem[: -len(".error")]
-    return stem
-
-
 def _record(path: Path) -> Dict[str, Any]:
-    payload = _read_json(path)
+    payload = read_json_payload(path)
     metrics = payload.get("metrics", {})
-    train = payload.get("train", {})
     if not isinstance(metrics, dict):
         metrics = {}
-    if not isinstance(train, dict):
-        train = {}
-    throughput, throughput_metric = _metric(metrics, THROUGHPUT_KEYS)
-    peak_memory, _ = _metric(
+    train = train_section(payload)
+    throughput, throughput_metric = first_metric(metrics, IMAGE_TEXT_THROUGHPUT_KEYS)
+    peak_memory, _ = first_metric(
         metrics,
         ("stable_peak_memory_bytes", "peak_memory_bytes"),
     )
-    dataloader_wait, _ = _metric(
+    dataloader_wait, _ = first_metric(
         metrics,
         ("stable_dataloader_wait_ms", "dataloader_wait_ms"),
     )
     is_error = path.name.endswith(".error.json") or payload.get("status") == "error"
     return {
-        "run_id": _run_id(path),
+        "run_id": run_id_from_path(path),
         "ok": not is_error
         and payload.get("ok", True) is not False
         and payload.get("runtime_status") != "plan_only",
@@ -117,7 +67,7 @@ def _record(path: Path) -> Dict[str, Any]:
         "global_step": train.get("global_step", payload.get("global_step")),
         "throughput": throughput,
         "throughput_metric": throughput_metric,
-        "loss": _loss(payload),
+        "loss": loss_value(payload, keys=("stable_loss", "loss", "last_loss")),
         "peak_memory_bytes": peak_memory,
         "dataloader_wait_ms": dataloader_wait,
         "returncode": payload.get("returncode"),

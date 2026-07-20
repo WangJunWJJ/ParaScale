@@ -12,85 +12,24 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
-THROUGHPUT_KEYS = (
-    "stable_end_to_end_samples_per_second",
-    "end_to_end_samples_per_second",
-    "stable_samples_per_second",
-    "samples_per_second",
-    "steps_per_second",
+from tests.benchmarks.tools.common import (
+    SAMPLE_THROUGHPUT_KEYS,
+    loss_value,
+    merged_train_metrics,
+    metric_value,
+    read_json_payload,
+    run_id_from_path,
+    train_section,
 )
 
 
-def _read_json(path: Path) -> Dict[str, Any]:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        return {
-            "status": "error",
-            "error": str(exc),
-            "path": str(path),
-        }
-    payload.setdefault("path", str(path))
-    return payload
-
-
-def _metric(metrics: Dict[str, Any], keys: Iterable[str]) -> float:
-    for key in keys:
-        try:
-            value = float(metrics.get(key, 0.0) or 0.0)
-        except (TypeError, ValueError):
-            value = 0.0
-        if value > 0:
-            return value
-    return 0.0
-
-
-def _loss(payload: Dict[str, Any]) -> float | None:
-    metrics = payload.get("metrics", {})
-    train = payload.get("train", {})
-    last_metrics = train.get("last_metrics", {}) if isinstance(train, dict) else {}
-    top_last_metrics = payload.get("last_metrics", {})
-    if not isinstance(top_last_metrics, dict):
-        top_last_metrics = {}
-    for source in (metrics, last_metrics, top_last_metrics, payload):
-        for key in ("loss", "stable_loss", "last_loss"):
-            if key in source:
-                try:
-                    return float(source[key])
-                except (TypeError, ValueError):
-                    return None
-    return None
-
-
-def _run_id(path: Path) -> str:
-    stem = path.stem
-    if stem.endswith(".error"):
-        return stem[: -len(".error")]
-    return stem
-
-
 def _record(path: Path) -> Dict[str, Any]:
-    payload = _read_json(path)
-    train = payload.get("train", {})
-    if not isinstance(train, dict):
-        train = {}
-    metrics = payload.get("metrics", {})
-    if not isinstance(metrics, dict):
-        metrics = {}
-    last_metrics = train.get("last_metrics", {})
-    if not isinstance(last_metrics, dict):
-        last_metrics = {}
-    top_last_metrics = payload.get("last_metrics", {})
-    if not isinstance(top_last_metrics, dict):
-        top_last_metrics = {}
-    merged_metrics = {**top_last_metrics, **last_metrics, **metrics}
-    if train.get("steps_per_second") is not None:
-        merged_metrics.setdefault("steps_per_second", train.get("steps_per_second"))
-    if payload.get("steps_per_second") is not None:
-        merged_metrics.setdefault("steps_per_second", payload.get("steps_per_second"))
+    payload = read_json_payload(path)
+    train = train_section(payload)
+    metrics = merged_train_metrics(payload)
     is_error = path.name.endswith(".error.json") or payload.get("status") == "error"
     return {
-        "run_id": _run_id(path),
+        "run_id": run_id_from_path(path),
         "ok": not is_error
         and payload.get("ok", True) is not False
         and payload.get("diagnostics", {}).get("ok", True) is not False,
@@ -99,8 +38,8 @@ def _record(path: Path) -> Dict[str, Any]:
         "runtime_status": payload.get("runtime_status"),
         "backend": train.get("backend") or payload.get("backend"),
         "global_step": train.get("global_step", payload.get("global_step")),
-        "throughput": _metric(merged_metrics, THROUGHPUT_KEYS),
-        "loss": _loss(payload),
+        "throughput": metric_value(metrics, SAMPLE_THROUGHPUT_KEYS),
+        "loss": loss_value(payload, include_top_level=True),
         "npu_available": payload.get("ascend_runtime", {}).get("available"),
         "npu_device_count": payload.get("ascend_runtime", {}).get("device_count"),
         "torch_npu": payload.get("dependencies", {}).get("torch_npu"),

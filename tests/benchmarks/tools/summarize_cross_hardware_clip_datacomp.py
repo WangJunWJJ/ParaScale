@@ -12,71 +12,27 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
-THROUGHPUT_KEYS = (
-    "stable_end_to_end_image_text_pairs_per_second",
-    "end_to_end_image_text_pairs_per_second",
-    "stable_end_to_end_images_per_second",
-    "end_to_end_images_per_second",
-    "stable_samples_per_second",
-    "samples_per_second",
-    "steps_per_second",
+from tests.benchmarks.tools.common import (
+    IMAGE_TEXT_THROUGHPUT_KEYS,
+    first_metric,
+    loss_value,
+    read_json_payload,
+    train_section,
 )
 
 
-def _read_json(path: Path) -> Dict[str, Any]:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        return {
-            "status": "error",
-            "error": str(exc),
-            "path": str(path),
-        }
-    payload.setdefault("path", str(path))
-    return payload
-
-
-def _metric(metrics: Dict[str, Any], keys: Iterable[str]) -> tuple[float, str | None]:
-    for key in keys:
-        try:
-            value = float(metrics.get(key, 0.0) or 0.0)
-        except (TypeError, ValueError):
-            value = 0.0
-        if value > 0:
-            return value, key
-    return 0.0, None
-
-
-def _loss(payload: Dict[str, Any]) -> float | None:
-    metrics = payload.get("metrics", {})
-    train = payload.get("train", {})
-    last_metrics = train.get("last_metrics", {}) if isinstance(train, dict) else {}
-    for source in (metrics, last_metrics):
-        if not isinstance(source, dict):
-            continue
-        for key in ("stable_loss", "loss", "last_loss"):
-            if key in source:
-                try:
-                    return float(source[key])
-                except (TypeError, ValueError):
-                    return None
-    return None
-
-
 def _run_record(label: str, hardware: str, image: str, path: Path) -> Dict[str, Any]:
-    payload = _read_json(path)
+    payload = read_json_payload(path)
     metrics = payload.get("metrics", {})
-    train = payload.get("train", {})
     if not isinstance(metrics, dict):
         metrics = {}
-    if not isinstance(train, dict):
-        train = {}
-    throughput, throughput_metric = _metric(metrics, THROUGHPUT_KEYS)
-    peak_memory, _ = _metric(
+    train = train_section(payload)
+    throughput, throughput_metric = first_metric(metrics, IMAGE_TEXT_THROUGHPUT_KEYS)
+    peak_memory, _ = first_metric(
         metrics,
         ("stable_peak_memory_bytes", "peak_memory_bytes"),
     )
-    dataloader_wait, _ = _metric(
+    dataloader_wait, _ = first_metric(
         metrics,
         ("stable_dataloader_wait_ms", "dataloader_wait_ms"),
     )
@@ -94,7 +50,7 @@ def _run_record(label: str, hardware: str, image: str, path: Path) -> Dict[str, 
         "global_step": train.get("global_step", payload.get("global_step")),
         "throughput": throughput,
         "throughput_metric": throughput_metric,
-        "loss": _loss(payload),
+        "loss": loss_value(payload, keys=("stable_loss", "loss", "last_loss")),
         "peak_memory_bytes": peak_memory,
         "dataloader_wait_ms": dataloader_wait,
         "path": str(path),
