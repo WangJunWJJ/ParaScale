@@ -452,3 +452,33 @@ def test_cli_delegates_command_parser_registration():
     }
     for module_name, function_name in modules.items():
         assert hasattr(import_module(module_name), function_name)
+
+
+def test_no_torch_tests_stay_split_by_behavior_boundary():
+    oversized = []
+    for path in Path("tests").glob("test_*_no_torch.py"):
+        line_count = len(path.read_text(encoding="utf-8").splitlines())
+        if line_count > 700:
+            oversized.append((str(path), line_count))
+
+    assert oversized == []
+
+
+def test_capability_modules_do_not_own_training_orchestration():
+    forbidden_tokens = (
+        "parascale.runtime.train_runner",
+        "parascale.runtime.training",
+        "TrainEngine",
+        "FitLoopRunner",
+        "CheckpointController",
+        "run_train_from_config",
+    )
+    violations = []
+    for package in ("parallel", "quantization", "serving"):
+        for path in Path("parascale", package).rglob("*.py"):
+            source = path.read_text(encoding="utf-8")
+            for token in forbidden_tokens:
+                if token in source:
+                    violations.append((str(path), token))
+
+    assert violations == []
