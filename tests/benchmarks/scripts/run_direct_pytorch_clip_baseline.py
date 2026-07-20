@@ -137,9 +137,11 @@ def _wrap_model(model: nn.Module, backend: str, device: torch.device) -> nn.Modu
             static_graph=True,
         )
     if backend == "fsdp":
-        from torch.distributed.fsdp import FullyShardedDataParallel
-        from torch.distributed.fsdp import MixedPrecision
-        from torch.distributed.fsdp import ShardingStrategy
+        from torch.distributed.fsdp import (
+            FullyShardedDataParallel,
+            MixedPrecision,
+            ShardingStrategy,
+        )
 
         mixed_precision = MixedPrecision(
             param_dtype=torch.float32,

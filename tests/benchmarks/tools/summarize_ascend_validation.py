@@ -9,7 +9,6 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
 
-
 THROUGHPUT_KEYS = (
     "stable_end_to_end_samples_per_second",
     "end_to_end_samples_per_second",
