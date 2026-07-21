@@ -34,7 +34,7 @@ bash tests/benchmarks/scripts/run_p1_functional_validation_suite.sh
 
 P1 之后的优化应继续围绕真实生产风险推进：更长训练的 checkpoint/resume stress、多 worker dataloader 稳定性、异常中断恢复、配置可复现性和报告可审计性。
 
-### 0.1.1 P1 真实 VLM LoRA 升级状态
+### 0.2.0 P1 真实 VLM LoRA 升级状态
 
 真实 VLM LoRA 已从 “HF CLIP frozen encoder + adapter” 推进到独立主路径：
 

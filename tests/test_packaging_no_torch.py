@@ -31,7 +31,7 @@ def test_package_metadata_has_one_version_source():
     assert data["tool"]["setuptools"]["dynamic"]["version"] == {
         "attr": "parascale._version.__version__"
     }
-    assert _source_version() == "0.1.0"
+    assert _source_version() == "0.2.0"
 
 
 def test_setup_py_is_only_a_compatibility_shim():
@@ -102,6 +102,7 @@ def test_benchmark_report_has_one_review_entrypoint():
 def test_trial_release_changelog_declares_version_and_limitations():
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
 
+    assert "## 0.2.0" in changelog
     assert "## 0.1.0" in changelog
     for section in ("Added", "Changed", "Fixed", "Validation", "Known Limitations"):
         assert f"### {section}" in changelog

@@ -85,7 +85,7 @@ python -m pip install -e ".[ascend]"
 parascale --version
 ```
 
-当前包版本为 `0.1.0`，公共 API 版本为 `0.1`。
+当前包版本为 `0.2.0`，公共 API 版本为 `0.2`。
 
 ## 快速开始
 
@@ -356,6 +356,12 @@ CI 覆盖 Python 3.10、3.11、3.12 的源码测试，并在独立 Python 3.11 �
 | [tests/benchmarks/reports/BENCHMARK_REPORT.md](tests/benchmarks/reports/BENCHMARK_REPORT.md) | 统一 benchmark 证据入口 |
 
 ## 版本历史
+
+### 0.2.0 - 架构边界与接口重构版
+
+- 将 workload specs、CLI parser、runtime runners、config defaults、device selection 与 no-torch 测试继续按边界拆分。
+- 将 benchmark 查阅入口收敛到 `tests/benchmarks/reports/BENCHMARK_REPORT.md`。
+- 更新 README，使工程结构、CLI、benchmark 和测试组织与当前代码同步。
 
 ### 0.1.0 - GPU-verified 试用版
 

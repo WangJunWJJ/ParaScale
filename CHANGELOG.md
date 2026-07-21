@@ -4,17 +4,33 @@
 
 ## Unreleased
 
+暂无。
+
+## 0.2.0 - 2026-07-21
+
 ### Added
 
 - 引入配置 schema v1、`config validate` 与 `config migrate`，旧 v0 配置可显式迁移，未来版本配置会被拒绝。
-- 冻结 `PUBLIC_API_VERSION = "0.1"` 的根包公共 API，并通过快照测试防止无意破坏。
+- 冻结 `PUBLIC_API_VERSION = "0.2"` 的根包公共 API，并通过快照测试防止无意破坏。
 - 增加 bug、性能回归和 workload 请求 Issue 表单。
+- 增加架构边界守门测试，约束 no-torch 测试文件规模，并防止 capability 模块反向拥有训练编排。
 
 ### Changed
 
 - 仓库内配置统一声明 `schema_version: 1`，wheel clean-install 增加配置校验和迁移验证。
 - CI action 升级到 Node 24 运行时版本，并收紧为只读仓库权限。
 - 已发布 tag 采用不可变策略；发布后的修复必须使用新的 patch 版本，不再移动历史 tag。
+- 将 workload specs 按 tiny、vision、clip、vlm_lora、yolo、ground_dino 场景拆分，原 `parascale.runtime.specs` 模块不再作为配置汇聚点。
+- 将 CLI parser 注册下沉到 `parascale/commands/*`，保持 `parascale/cli.py` 为薄入口。
+- 将 train、serve、benchmark runner 按执行模式拆分，移除旧 `parascale.runtime.orchestrator` 聚合入口，并集中 torch device selection。
+- 将 no-torch 测试覆盖按 runtime、checkpoint、training、config、workload 边界拆分，降低后续维护冲突。
+- 将 benchmark 查阅入口收敛到 `tests/benchmarks/reports/BENCHMARK_REPORT.md`，并刷新 README 的架构、CLI、benchmark 与测试说明。
+
+### Validation
+
+- 本地通过 `python -m ruff check parascale tests setup.py`。
+- 本地通过 `python tests/run_tests.py`，共 `289 passed`。
+- README 链接与 packaging 相关测试通过，版本源仍由 `parascale._version.__version__` 单点定义。
 
 ## 0.1.0 - 2026-07-03
 

@@ -68,7 +68,7 @@ def main() -> int:
             encoding="utf-8",
         )
         version = run(["parascale", "--version"], workdir)
-        if "0.1.0" not in version.stdout:
+        if "0.2.0" not in version.stdout:
             raise RuntimeError(
                 "clean-install version mismatch: " f"{version.stdout.strip()}"
             )

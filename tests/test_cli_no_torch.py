@@ -34,7 +34,7 @@ def test_cli_prints_package_version(capsys):
         main(["--version"])
 
     assert exc_info.value.code == 0
-    assert capsys.readouterr().out.strip() == "parascale 0.1.0"
+    assert capsys.readouterr().out.strip() == "parascale 0.2.0"
 
 
 def test_emit_json_skips_nonzero_distributed_rank(monkeypatch):
