@@ -19,6 +19,34 @@ from parascale.commands.doctor import build_doctor_payload
 from parascale.commands.plan import build_plan_payload
 from parascale.commands.run import run_serve_from_config, run_train_from_config
 
+SMOKE_EXAMPLES = """examples:
+  python -m parascale.cli smoke --config configs/quickstart/tiny_torch.yaml --skip-real
+  python -m parascale.cli smoke --config configs/quickstart/tiny_torch.yaml
+"""
+
+
+def register_smoke_parser(subparsers: argparse._SubParsersAction) -> None:
+    parser = subparsers.add_parser(
+        "smoke",
+        help="Run the compact server smoke flow and write a JSON report.",
+        epilog=SMOKE_EXAMPLES,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--config",
+        default="configs/server_tiny_torch.json",
+        help="Path to a JSON/YAML smoke config.",
+    )
+    parser.add_argument(
+        "--output",
+        default="runs/server_smoke_report.json",
+        help="Path to write the smoke JSON report.",
+    )
+    parser.add_argument(
+        "--skip-real", action="store_true", help="Only run doctor and plan."
+    )
+    parser.set_defaults(func=cmd_smoke)
+
 
 def build_smoke_report(config_path: str, skip_real: bool = False) -> Dict[str, Any]:
     config = load_config_file(config_path)

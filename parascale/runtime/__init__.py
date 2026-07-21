@@ -29,13 +29,6 @@ from .context import RuntimeContext, WorkloadDescriptor, build_runtime_context
 from .inference import InferenceEngine, InferenceState
 from .launcher import LaunchPlan, build_launch_plan
 from .profiles import BenchmarkProfileStore
-from .specs import (
-    ClipContrastiveSpec,
-    TinyTorchWorkloadSpec,
-    VisionSyntheticSpec,
-    VlmLoraSpec,
-    YoloWorldSpec,
-)
 from .training import TrainEngine, TrainState
 from .workloads import WorkloadRegistry
 
@@ -57,11 +50,6 @@ __all__ = [
     "InferenceEngine",
     "InferenceState",
     "BenchmarkProfileStore",
-    "TinyTorchWorkloadSpec",
-    "VisionSyntheticSpec",
-    "ClipContrastiveSpec",
-    "VlmLoraSpec",
-    "YoloWorldSpec",
     "WorkloadRegistry",
     "TrainingBackend",
     "AscendNativeTrainingBackend",

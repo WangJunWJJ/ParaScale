@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable
 
-from parascale.workloads.specs import TinyTorchWorkloadSpec
+from parascale.workloads.specs.tiny import TinyTorchWorkloadSpec
 
 from .common import _require_torch
 

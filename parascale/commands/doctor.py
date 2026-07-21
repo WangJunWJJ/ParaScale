@@ -19,6 +19,28 @@ from parascale.commands.diagnostics import evaluate_diagnostics
 from parascale.core import AscendDeviceBackend, CpuDeviceBackend, NvidiaDeviceBackend
 
 
+def register_doctor_parser(subparsers: argparse._SubParsersAction) -> None:
+    parser = subparsers.add_parser(
+        "doctor", help="Diagnose local ParaScale runtime dependencies and devices."
+    )
+    parser.add_argument(
+        "--output", help="Optional path to write the doctor JSON."
+    )
+    parser.add_argument(
+        "--strict",
+        action="store_true",
+        help="Exit non-zero when required runtime capabilities are unavailable.",
+    )
+    parser.add_argument(
+        "--require",
+        action="append",
+        choices=["core", "torch", "distributed", "cuda", "deepspeed", "npu"],
+        default=[],
+        help="Capability required by this environment. Repeat for multiple checks.",
+    )
+    parser.set_defaults(func=cmd_doctor)
+
+
 def build_doctor_payload() -> Dict[str, Any]:
     dependencies = {
         "torch": importlib.util.find_spec("torch") is not None,

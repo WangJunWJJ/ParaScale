@@ -16,6 +16,27 @@ from parascale.commands.common import emit_json
 from parascale.commands.errors import EXIT_CHECKPOINT, checkpoint_failure
 
 
+def register_checkpoint_parser(subparsers: argparse._SubParsersAction) -> None:
+    parser = subparsers.add_parser(
+        "checkpoint", help="Checkpoint utility commands."
+    )
+    checkpoint_subparsers = parser.add_subparsers(
+        dest="checkpoint_command", required=True
+    )
+    validate_parser = checkpoint_subparsers.add_parser(
+        "validate", help="Validate a checkpoint manifest and payload files."
+    )
+    validate_parser.add_argument(
+        "--checkpoint",
+        required=True,
+        help="Checkpoint root, step directory, or manifest path.",
+    )
+    validate_parser.add_argument(
+        "--output", help="Optional path to write the validation JSON."
+    )
+    validate_parser.set_defaults(func=cmd_checkpoint_validate)
+
+
 def checkpoint_manager_for_path(checkpoint: str | Path) -> CheckpointManager:
     path = Path(checkpoint)
     if path.is_file() and path.name == "manifest.json":

@@ -88,6 +88,17 @@ def test_release_package_boundary_excludes_non_product_assets():
         assert forbidden in gitignore
 
 
+def test_benchmark_report_has_one_review_entrypoint():
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert not (ROOT / "tests" / "UNIFIED_TEST_BENCHMARK_REPORT.md").exists()
+    assert (
+        "tests/benchmarks/reports/BENCHMARK_REPORT.md"
+        in readme
+    )
+    assert "tests/UNIFIED_TEST_BENCHMARK_REPORT.md" not in readme
+
+
 def test_trial_release_changelog_declares_version_and_limitations():
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
 

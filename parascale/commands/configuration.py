@@ -15,6 +15,27 @@ from parascale.commands.common import emit_json, load_config_file
 from parascale.configuration import migrate_config_schema, validate_config_schema
 
 
+def register_config_parser(subparsers: argparse._SubParsersAction) -> None:
+    parser = subparsers.add_parser(
+        "config", help="Validate or migrate a ParaScale configuration."
+    )
+    config_subparsers = parser.add_subparsers(
+        dest="config_command", required=True
+    )
+    validate_parser = config_subparsers.add_parser(
+        "validate", help="Validate a configuration schema version."
+    )
+    validate_parser.add_argument("--config", required=True)
+    validate_parser.add_argument("--output")
+    validate_parser.set_defaults(func=cmd_config_validate)
+    migrate_parser = config_subparsers.add_parser(
+        "migrate", help="Write a schema-v1 JSON copy of a configuration."
+    )
+    migrate_parser.add_argument("--config", required=True)
+    migrate_parser.add_argument("--output", required=True)
+    migrate_parser.set_defaults(func=cmd_config_migrate)
+
+
 def cmd_config_validate(args: argparse.Namespace) -> int:
     config = load_config_file(args.config)
     payload = {
@@ -38,4 +59,4 @@ def cmd_config_migrate(args: argparse.Namespace) -> int:
     return 0
 
 
-__all__ = ["cmd_config_migrate", "cmd_config_validate"]
+__all__ = ["cmd_config_migrate", "cmd_config_validate", "register_config_parser"]

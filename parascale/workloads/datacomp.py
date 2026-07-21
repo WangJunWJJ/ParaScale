@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, List
 
 from parascale.data.vision import estimate_patch_tokens
-from parascale.workloads.specs import ClipContrastiveSpec
+from parascale.workloads.specs.clip import ClipContrastiveSpec
 
 from .common import _require_pil_image
 

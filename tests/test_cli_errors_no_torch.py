@@ -79,7 +79,7 @@ def test_unexpected_error_returns_exit_seventy(monkeypatch, capsys):
     def fail(_args):
         raise KeyError("broken invariant")
 
-    monkeypatch.setattr("parascale.cli.cmd_plan", fail)
+    monkeypatch.setattr("parascale.commands.plan.cmd_plan", fail)
 
     assert main(["plan", "--config", "unused.json"]) == 70
     payload = json.loads(capsys.readouterr().err)
@@ -91,7 +91,7 @@ def test_debug_mode_reraises_unexpected_error(monkeypatch):
     def fail(_args):
         raise KeyError("broken invariant")
 
-    monkeypatch.setattr("parascale.cli.cmd_plan", fail)
+    monkeypatch.setattr("parascale.commands.plan.cmd_plan", fail)
     monkeypatch.setenv("PARASCALE_DEBUG", "1")
 
     with pytest.raises(KeyError, match="broken invariant"):

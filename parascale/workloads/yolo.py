@@ -25,7 +25,7 @@ from parascale.workloads.adapters.yolo import (
     YoloDetectionTargetAdapter,
     YoloOfficialBatchAdapter,
 )
-from parascale.workloads.specs import YoloWorldSpec
+from parascale.workloads.specs.yolo import YoloWorldSpec
 
 from .common import _require_torch, _select_torch_device
 

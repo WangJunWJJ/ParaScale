@@ -192,7 +192,7 @@ python -m parascale.cli benchmark-stability \
 - [ResolvedConfig 设计](docs/resolved_config_design.md)：配置来源、覆盖规则和审计输出。
 - [架构收口设计](docs/architecture_closure_design.md)：核心职责和推理入口边界。
 - [远程服务器测试指南](docs/remote_server_test_guide.md)：容器化 GPU 测试与远程验证。
-- [统一测试与 benchmark 报告](tests/UNIFIED_TEST_BENCHMARK_REPORT.md)：历史测试方法、口径和结果。
+- [统一 benchmark 报告](tests/benchmarks/reports/BENCHMARK_REPORT.md)：真实硬件测试口径、结果和证据索引。
 
 ## 示例
 
@@ -327,7 +327,7 @@ benchmark 资产统一位于 [`tests/benchmarks/`](tests/benchmarks/)，稳定�
 - 双 RTX 4090 D 已完成真实 DataComp CLIP-B/32 的 native-DDP、FSDP、DeepSpeed 矩阵及 checkpoint/resume smoke。
 - Ascend 架构入口已保留；910B4 验收时设备被现有任务占满，本版本经发布负责人明确豁免该门禁，发布等级为 `GPU-verified / Ascend-unverified`，不声明 Ascend production verified。
 
-详细版本变化见 [CHANGELOG](CHANGELOG.md)，历史测试记录见 [统一测试与 benchmark 报告](tests/UNIFIED_TEST_BENCHMARK_REPORT.md)。
+详细版本变化见 [CHANGELOG](CHANGELOG.md)，测试记录见 [统一 benchmark 报告](tests/benchmarks/reports/BENCHMARK_REPORT.md)。
 
 ## 许可证
 

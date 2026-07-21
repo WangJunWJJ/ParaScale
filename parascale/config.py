@@ -253,89 +253,26 @@ class LayeredParaScaleConfig:
         )
 
 
-@dataclass
 class ParaScaleConfig:
-    task_type: Literal["generic", "llm", "vision", "multimodal"] = "generic"
-    model_family: str = "unknown"
-    target_scale: Literal["local", "single_node", "small_cluster", "sub_100_gpus"] = (
-        "local"
-    )
-    optimize_for: Literal["throughput", "memory", "latency", "balanced"] = "balanced"
-    data_parallel_size: int = 1
-    model_parallel_size: int = 1
-    tensor_parallel_size: int = 1
-    tensor_parallel_mode: Literal["row", "column"] = "row"
-    pipeline_parallel_size: int = 1
-    pipeline_parallel_chunks: int = 1
-    zero_optimization: bool = False
-    zero_stage: int = 0
-    zero_offload: bool = False
-    training_backend: Literal[
-        "native", "native_ddp", "fsdp", "deepspeed", "ascend_native", "auto"
-    ] = "native"
-    fsdp_sharding_strategy: Literal[
-        "full_shard", "shard_grad_op", "no_shard", "hybrid_shard"
-    ] = "full_shard"
-    fsdp_cpu_offload: bool = False
-    fsdp_auto_wrap: bool = False
-    fsdp_min_num_params: int = 100000000
-    fsdp_state_dict_type: Literal["full", "sharded", "local"] = "full"
-    fsdp_use_orig_params: bool = True
-    fsdp_activation_checkpointing_policy: Literal[
-        "none", "transformer_auto", "size_based"
-    ] = "transformer_auto"
-    fsdp_checkpoint_module_classes: List[str] = field(default_factory=list)
-    ddp_find_unused_parameters: bool = False
-    ddp_gradient_as_bucket_view: bool = True
-    ddp_static_graph: bool = False
-    ddp_comm_hook: Literal["none", "fp16_compress", "bf16_compress"] = "none"
-    deepspeed_config: Optional[Dict[str, Any]] = None
-    strategy_memory_margin: float = 0.9
-    max_tensor_parallel_size: int = 8
-    max_pipeline_parallel_size: int = 16
-    enable_activation_checkpointing: bool = False
-    batch_size: int = 32
-    gradient_accumulation_steps: int = 1
-    learning_rate: float = 0.001
-    precision: Literal["fp32", "fp16", "bf16"] = "fp32"
-    grad_clip_norm: Optional[float] = None
-    log_interval: int = 100
-    label_keys: List[str] = field(
-        default_factory=lambda: ["labels", "label", "targets", "target", "y"]
-    )
-    batching_strategy: Literal["sample", "length_bucket", "token_budget"] = "sample"
-    max_tokens_per_batch: Optional[int] = None
-    max_patch_tokens_per_batch: Optional[int] = None
-    resolution_buckets: List[List[int]] = field(default_factory=list)
-    dataloader_num_workers: int = 4
-    dataloader_pin_memory: bool = True
-    dataloader_prefetch_factor: int = 2
-    dataloader_persistent_workers: bool = True
-    dataloader_drop_last: bool = False
-    dataset_local_cache_dir: Optional[str] = None
-    tensor_cache: bool = False
-    tensor_cache_dir: Optional[str] = None
-    device_prefetch: bool = False
-    prefetch_device: Optional[str] = None
-    cuda_prefetch: bool = False
-    cuda_prefetch_device: Optional[str] = None
-    tuner_dataloader_wait_threshold_ms: float = 20.0
-    preprocess_in_workers: bool = False
-    pipeline_cache: bool = False
-    pipeline_cache_dir: Optional[str] = None
-    pipeline_cache_max_entries: int = 4096
-    pipeline_cache_max_bytes: int = 20_000_000_000
-    pipeline_cache_ttl_seconds: float = 0.0
-    prompt_template_cache: bool = False
-    prompt_template_cache_dir: Optional[str] = None
-    seed: int = 42
-    checkpoint_save_path: str = "./checkpoints"
-    checkpoint_save_interval: int = 1000
-    adapter_only_checkpoint: bool = False
-    allow_world_size_change_on_resume: bool = False
-    quantization: QuantizationConfig = field(default_factory=QuantizationConfig)
+    """Flat runtime view derived from the layered ParaScale schema."""
 
-    def __post_init__(self) -> None:
+    def __init__(self, **config_dict: Any) -> None:
+        defaults = LayeredParaScaleConfig().to_flat_dict()
+        quantization = config_dict.pop("quantization", defaults.pop("quantization"))
+        unknown = sorted(set(config_dict) - set(defaults))
+        if unknown:
+            raise TypeError(
+                "unexpected ParaScaleConfig fields: " + ", ".join(unknown)
+            )
+        values = {**defaults, **config_dict}
+        for key, value in values.items():
+            setattr(self, key, _copy_config_value(value))
+        if isinstance(quantization, QuantizationConfig):
+            self.quantization = quantization
+        elif isinstance(quantization, dict):
+            self.quantization = QuantizationConfig.from_dict(quantization)
+        else:
+            raise TypeError("quantization must be a QuantizationConfig or mapping.")
         self._normalize_device_prefetch_aliases()
         self._validate()
 

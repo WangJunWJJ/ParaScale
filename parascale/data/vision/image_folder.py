@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Sequence
 
+from parascale.runtime.backends.devices import select_torch_device
+
 from .transforms import estimate_patch_tokens
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
@@ -96,7 +98,7 @@ def profile_image_folder(
     if not files:
         raise FileNotFoundError(f"no images found under {data_dir}")
 
-    selected_device = _select_torch_device(torch, device)
+    selected_device = select_torch_device(torch, device)
     profile = ImageFolderProfile(
         data_dir=str(data_dir),
         image_size=image_size,
@@ -168,11 +170,3 @@ def _require_pillow():
         raise ImportError("vision image-folder profiling requires Pillow/PIL.") from exc
     return Image
 
-
-def _select_torch_device(torch: Any, requested: str):
-    requested = (requested or "auto").lower()
-    if requested == "auto":
-        return torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    if requested == "cuda":
-        return torch.device("cuda:0")
-    return torch.device(requested)

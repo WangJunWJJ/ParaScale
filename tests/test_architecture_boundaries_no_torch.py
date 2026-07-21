@@ -347,15 +347,138 @@ def test_workload_modules_do_not_import_runtime_specs():
     assert violations == []
 
 
-def test_commands_do_not_import_private_orchestrator_symbols():
+def test_workload_specs_are_split_by_scenario_modules():
+    specs_root = Path("parascale/workloads/specs")
+    expected_modules = {
+        "tiny": "TinyTorchWorkloadSpec",
+        "vision": "VisionSyntheticSpec",
+        "clip": "ClipContrastiveSpec",
+        "vlm_lora": "VlmLoraSpec",
+        "yolo": "YoloWorldSpec",
+        "ground_dino": "GroundDinoSpec",
+    }
+
+    assert specs_root.is_dir()
+    assert not Path("parascale/workloads/specs.py").exists()
+    assert not Path("parascale/runtime/specs.py").exists()
+    for module_name, class_name in expected_modules.items():
+        module = import_module(f"parascale.workloads.specs.{module_name}")
+
+        assert getattr(module, class_name).__name__ == class_name
+
+
+def test_commands_do_not_import_private_runtime_runner_symbols():
     violations = []
     for path in Path("parascale/commands").rglob("*.py"):
         source = path.read_text(encoding="utf-8")
-        if "from parascale.runtime.orchestrator import (" not in source:
-            continue
-        block = source.split("from parascale.runtime.orchestrator import (", 1)[1]
-        block = block.split(")", 1)[0]
-        if any(line.strip().startswith("_") for line in block.splitlines()):
-            violations.append(str(path))
+        for module in (
+            "parascale.runtime.train_runner",
+            "parascale.runtime.serve_runner",
+            "parascale.runtime.benchmark_runner",
+        ):
+            token = f"from {module} import ("
+            if token not in source:
+                continue
+            block = source.split(token, 1)[1].split(")", 1)[0]
+            if any(line.strip().startswith("_") for line in block.splitlines()):
+                violations.append(str(path))
+
+    assert violations == []
+
+
+def test_runtime_runners_are_split_by_execution_mode():
+    assert not Path("parascale/runtime/orchestrator.py").exists()
+
+    expected = {
+        "parascale.runtime.train_runner": "run_train_from_config",
+        "parascale.runtime.serve_runner": "run_serve_from_config",
+        "parascale.runtime.benchmark_runner": "run_benchmark_from_config",
+    }
+    for module_name, function_name in expected.items():
+        assert hasattr(import_module(module_name), function_name)
+
+    command_source = Path("parascale/commands/run.py").read_text(encoding="utf-8")
+    assert "parascale.runtime.orchestrator" not in command_source
+
+
+def test_workload_and_vision_data_use_runtime_device_helpers():
+    checked_paths = [
+        Path("parascale/workloads/common.py"),
+        Path("parascale/data/vision/image_folder.py"),
+    ]
+
+    for path in checked_paths:
+        source = path.read_text(encoding="utf-8")
+        assert "def _select_torch_device" not in source
+        assert "from parascale.runtime.backends.devices import" in source
+
+    workload_source = checked_paths[0].read_text(encoding="utf-8")
+    vision_source = checked_paths[1].read_text(encoding="utf-8")
+    assert "torch.cuda.is_available()" not in workload_source
+    assert "torch.cuda.is_available()" not in vision_source
+
+
+def test_cli_delegates_command_parser_registration():
+    cli_source = Path("parascale/cli.py").read_text(encoding="utf-8")
+    command_tokens = [
+        '"config"',
+        '"plan"',
+        '"doctor"',
+        '"smoke"',
+        '"train"',
+        '"infer"',
+        '"serve"',
+        '"benchmark"',
+        '"benchmark-matrix"',
+        '"benchmark-stability"',
+        '"vision-profile"',
+        '"checkpoint"',
+    ]
+
+    assert "register_command_parsers(subparsers)" in cli_source
+    for token in command_tokens:
+        assert token not in cli_source
+
+    modules = {
+        "parascale.commands.configuration": "register_config_parser",
+        "parascale.commands.plan": "register_plan_parser",
+        "parascale.commands.doctor": "register_doctor_parser",
+        "parascale.commands.smoke": "register_smoke_parser",
+        "parascale.commands.run": "register_run_parsers",
+        "parascale.commands.benchmark_matrix": "register_benchmark_matrix_parser",
+        "parascale.commands.stability": "register_stability_parser",
+        "parascale.commands.vision": "register_vision_profile_parser",
+        "parascale.commands.checkpoint": "register_checkpoint_parser",
+    }
+    for module_name, function_name in modules.items():
+        assert hasattr(import_module(module_name), function_name)
+
+
+def test_no_torch_tests_stay_split_by_behavior_boundary():
+    oversized = []
+    for path in Path("tests").glob("test_*_no_torch.py"):
+        line_count = len(path.read_text(encoding="utf-8").splitlines())
+        if line_count > 700:
+            oversized.append((str(path), line_count))
+
+    assert oversized == []
+
+
+def test_capability_modules_do_not_own_training_orchestration():
+    forbidden_tokens = (
+        "parascale.runtime.train_runner",
+        "parascale.runtime.training",
+        "TrainEngine",
+        "FitLoopRunner",
+        "CheckpointController",
+        "run_train_from_config",
+    )
+    violations = []
+    for package in ("parallel", "quantization", "serving"):
+        for path in Path("parascale", package).rglob("*.py"):
+            source = path.read_text(encoding="utf-8")
+            for token in forbidden_tokens:
+                if token in source:
+                    violations.append((str(path), token))
 
     assert violations == []

@@ -29,6 +29,33 @@ from parascale.strategy import (
     tune_strategy_from_runtime,
 )
 
+PLAN_EXAMPLES = """examples:
+  python -m parascale.cli plan --config configs/quickstart/tiny_torch.yaml
+  python -m parascale.cli plan --config configs/quickstart/vision_synthetic.json --json
+  python -m parascale.cli plan --config configs/quickstart/vision_synthetic.json --output runs/plan.json
+"""
+
+
+def register_plan_parser(subparsers: argparse._SubParsersAction) -> None:
+    parser = subparsers.add_parser(
+        "plan",
+        help="Build an auto strategy and dataloader plan.",
+        epilog=PLAN_EXAMPLES,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--config", required=True, help="Path to a JSON/YAML planning config."
+    )
+    parser.add_argument(
+        "--output", help="Optional path to write the generated plan JSON."
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Print the full machine-readable plan JSON instead of the summary.",
+    )
+    parser.set_defaults(func=cmd_plan)
+
 
 def section(data: Dict[str, Any], name: str) -> Dict[str, Any]:
     value = data.get(name, {})

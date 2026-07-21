@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 
@@ -53,6 +54,16 @@ def resolve_torch_device(
         device_id = resolve_ascend_device_id(local_rank, torch)
         return torch.device(f"npu:{device_id}")
     return torch.device("cpu")
+
+
+def select_torch_device(torch: Any, requested: str | None = "auto") -> Any:
+    requested_text = (requested or "auto").lower()
+    requested_device = None if requested_text == "auto" else requested
+    return resolve_torch_device(
+        torch,
+        local_rank=int(os.environ.get("LOCAL_RANK", "0") or 0),
+        requested_device=requested_device,
+    )
 
 
 def set_current_device(
@@ -119,5 +130,6 @@ __all__ = [
     "npu_is_available",
     "resolve_ascend_device_id",
     "resolve_torch_device",
+    "select_torch_device",
     "set_current_device",
 ]

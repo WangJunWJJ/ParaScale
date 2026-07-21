@@ -16,18 +16,94 @@ from parascale.commands.plan import build_plan_payload, section
 from parascale.configuration import resolve_config, write_config_artifacts
 from parascale.runtime import build_benchmark_plan, build_runtime_context
 from parascale.runtime.backends.devices import set_current_device
-from parascale.runtime.inference import InferenceRunner
-from parascale.runtime.lifecycle import destroy_distributed_runtime
-from parascale.runtime.orchestrator import (
+from parascale.runtime.benchmark_runner import (
     run_benchmark_from_config as _run_benchmark_from_config,
 )
-from parascale.runtime.orchestrator import (
+from parascale.runtime.inference import InferenceRunner
+from parascale.runtime.lifecycle import destroy_distributed_runtime
+from parascale.runtime.serve_runner import (
     run_serve_from_config as _run_serve_from_config,
 )
-from parascale.runtime.orchestrator import (
+from parascale.runtime.train_runner import (
     run_train_from_config as _run_train_from_config,
 )
 from parascale.workloads.inference import build_inference_components
+
+TRAIN_EXAMPLES = """examples:
+  python -m parascale.cli train --config configs/quickstart/tiny_torch.yaml --dry-run
+  python -m parascale.cli train --config configs/quickstart/tiny_torch.yaml
+"""
+
+
+def register_run_parsers(subparsers: argparse._SubParsersAction) -> None:
+    train_parser = subparsers.add_parser(
+        "train",
+        help="Validate and launch a ParaScale training run.",
+        epilog=TRAIN_EXAMPLES,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    train_parser.add_argument(
+        "--config", required=True, help="Path to a JSON/YAML training config."
+    )
+    train_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate config and print the execution plan.",
+    )
+    train_parser.add_argument(
+        "--resume-step", type=int, help="Resume from a ParaScale manifest step."
+    )
+    train_parser.add_argument(
+        "--output", help="Optional path to write the dry-run JSON."
+    )
+    train_parser.set_defaults(func=cmd_train)
+
+    infer_parser = subparsers.add_parser(
+        "infer",
+        help="Run a ParaScale inference workload through the unified runtime.",
+    )
+    infer_parser.add_argument(
+        "--config", required=True, help="Path to a JSON/YAML inference config."
+    )
+    infer_parser.add_argument(
+        "--output", help="Optional path to write the inference JSON."
+    )
+    infer_parser.set_defaults(func=cmd_infer)
+
+    serve_parser = subparsers.add_parser(
+        "serve", help="Validate and launch a ParaScale serving runtime."
+    )
+    serve_parser.add_argument(
+        "--config", help="Optional path to a JSON/YAML serving config."
+    )
+    serve_parser.add_argument(
+        "--checkpoint", help="Optional checkpoint or manifest path."
+    )
+    serve_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate serving inputs without starting a server.",
+    )
+    serve_parser.add_argument(
+        "--output", help="Optional path to write the dry-run JSON."
+    )
+    serve_parser.set_defaults(func=cmd_serve)
+
+    benchmark_parser = subparsers.add_parser(
+        "benchmark", help="Validate and launch a ParaScale benchmark run."
+    )
+    benchmark_parser.add_argument(
+        "--config", required=True, help="Path to a JSON/YAML benchmark config."
+    )
+    benchmark_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Validate config and print benchmark plan.",
+    )
+    benchmark_parser.add_argument(
+        "--output", help="Optional path to write the dry-run JSON."
+    )
+    benchmark_parser.set_defaults(func=cmd_benchmark)
 
 
 def run_train_from_config(
