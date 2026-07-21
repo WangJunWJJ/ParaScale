@@ -4,18 +4,20 @@ This guide is for moving the current workspace to a remote Linux server and runn
 
 ## 1. Copy The Project
 
-From Windows PowerShell:
+Preferred path:
+
+```bash
+git clone https://github.com/WangJunWJJ/ParaScale.git /path/to/ParaScale
+cd /path/to/ParaScale
+git pull --ff-only
+```
+
+If Git access is unavailable, create a temporary archive from Windows
+PowerShell:
 
 ```powershell
 Compress-Archive -Path G:\2-ParaScale-master\* -DestinationPath G:\parascale.zip -Force
 scp G:\parascale.zip user@server:/path/to/
-```
-
-Or use the project packaging helper, which excludes caches, virtualenvs, `.git`, and local run outputs:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File G:\2-ParaScale-master\scripts\package_remote.ps1 -OutputPath G:\parascale-remote.zip
-scp G:\parascale-remote.zip user@server:/path/to/
 ```
 
 On the server:
@@ -26,7 +28,9 @@ unzip -o parascale.zip -d 2-ParaScale-master
 cd 2-ParaScale-master
 ```
 
-If you use git later, prefer `git clone` or `git pull` instead of zip upload.
+Zip upload is a fallback for temporary validation only. Keep local helper
+scripts outside the repository; repeatable benchmark scripts belong under
+`tests/benchmarks/scripts/`.
 
 ## 2. Create Python Environment
 
