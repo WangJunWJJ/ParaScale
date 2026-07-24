@@ -60,13 +60,20 @@ def capability_level_for_scope(base_level: str, config_data: Dict[str, Any]) -> 
 
 
 def workload_flags(workload: str) -> Dict[str, bool]:
+    normalized = str(workload or "").strip().lower()
     return {
-        "synthetic": workload == "synthetic_regression",
-        "vision_synthetic": workload
+        "synthetic": normalized
+        in {"synthetic_regression", "torch_tiny", "torch_tiny_mlp", "tiny_torch"},
+        "vision_synthetic": normalized
         in {"vision_synthetic", "synthetic_vision", "tiny_vit"},
-        "clip_contrastive": workload
+        "clip_contrastive": normalized
         in {"clip_contrastive", "clip_style_contrastive", "tiny_clip"},
-        "vlm_lora": workload in {"vlm_lora", "vlm_lora_finetune", "tiny_vlm_lora"},
+        "vlm_lora": normalized
+        in {"vlm_lora", "vlm_lora_finetune", "tiny_vlm_lora"},
+        "yolo_world": normalized
+        in {"yolo_world", "yolo_world_detection", "yoloworld"},
+        "ground_dino": normalized
+        in {"ground_dino", "grounding_dino", "groundingdino", "ground_dino_detection"},
     }
 
 
@@ -83,6 +90,16 @@ def _base_capability(flags: Dict[str, bool], data_type: str) -> str:
         if data_type in {"datacomp_wds", "webdataset", "wds"}:
             return "local_native_vlm_lora_datacomp_wds"
         return "local_native_vlm_lora_synthetic"
+    if flags["yolo_world"]:
+        if data_type in {"objects365_cached", "objects365", "object365"}:
+            return "local_native_yolo_world_objects365"
+        if data_type in {"coco", "coco_cached"}:
+            return "local_native_yolo_world_coco"
+        return "local_native_yolo_world_detection"
+    if flags["ground_dino"]:
+        if data_type in {"phrase_grounding", "grounding_phrase", "ground_dino_json"}:
+            return "local_native_ground_dino_phrase_grounding"
+        return "local_native_ground_dino_detection"
     return "local_native_real_torch"
 
 
