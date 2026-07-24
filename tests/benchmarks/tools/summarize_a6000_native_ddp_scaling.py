@@ -31,7 +31,21 @@ RUN_RE = re.compile(
     r"(?P<gpus>\d+)gpu_"
     r"(?P<precision>fp32|fp16|bf16)"
     r"(?:_(?P<hook>none|fp16_compress|bf16_compress))?"
+    r"(?:_bucket(?P<bucket>\d+))?"
+    r"(?:_cuda(?P<topology>\d+))?"
     r"_b(?P<batch>\d+)_w(?P<workers>\d+)"
+)
+
+BUCKET_RE = re.compile(
+    r"bucket_(?P<gpus>\d+)gpu_(?P<precision>fp32|fp16|bf16)_"
+    r"(?P<hook>none|fp16_compress|bf16_compress)_bucket(?P<bucket>\d+)_"
+    r"b(?P<batch>\d+)_w(?P<workers>\d+)"
+)
+
+TOPOLOGY_RE = re.compile(
+    r"topo_(?P<gpus>\d+)gpu_(?P<precision>fp32|fp16|bf16)_"
+    r"(?P<hook>none|fp16_compress|bf16_compress)_bucket(?P<bucket>\d+)_"
+    r"cuda(?P<topology>\d+)_b(?P<batch>\d+)_w(?P<workers>\d+)"
 )
 
 
@@ -39,7 +53,18 @@ def _parse_run_id(path: Path) -> Dict[str, Any]:
     run_id = path.stem
     if run_id.endswith(".error"):
         run_id = run_id[: -len(".error")]
+    group = "unknown"
     match = RUN_RE.match(run_id)
+    if match:
+        group = match.group("group")
+    else:
+        match = BUCKET_RE.match(run_id)
+        if match:
+            group = "bucket"
+        else:
+            match = TOPOLOGY_RE.match(run_id)
+            if match:
+                group = "topo"
     if not match:
         return {
             "run_id": run_id,
@@ -47,16 +72,22 @@ def _parse_run_id(path: Path) -> Dict[str, Any]:
             "gpus": 0,
             "precision": "n/a",
             "ddp_comm_hook": "n/a",
+            "ddp_bucket_cap_mb": None,
+            "visible_devices": "",
             "batch_per_gpu": 0,
             "num_workers": 0,
         }
     hook = match.group("hook")
+    bucket = match.groupdict().get("bucket")
+    topology = match.groupdict().get("topology") or ""
     return {
         "run_id": run_id,
-        "group": match.group("group"),
+        "group": group,
         "gpus": int(match.group("gpus")),
         "precision": match.group("precision"),
         "ddp_comm_hook": hook or "none",
+        "ddp_bucket_cap_mb": int(bucket) if bucket else None,
+        "visible_devices": ",".join(topology) if topology else "",
         "batch_per_gpu": int(match.group("batch")),
         "num_workers": int(match.group("workers")),
     }
@@ -168,6 +199,61 @@ def _hook_comparisons(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return rows
 
 
+def _bucket_comparisons(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    ok = _successful(records)
+    baseline = _find(
+        ok,
+        group="hook",
+        gpus=4,
+        precision="bf16",
+        ddp_comm_hook="bf16_compress",
+    )
+    baseline_t = float(baseline.get("throughput") or 0.0) if baseline else 0.0
+    for record in sorted(
+        (
+            item
+            for item in ok
+            if item.get("group") == "bucket"
+            and item.get("precision") == "bf16"
+            and item.get("ddp_comm_hook") == "bf16_compress"
+        ),
+        key=lambda item: int(item.get("ddp_bucket_cap_mb") or 0),
+    ):
+        throughput = float(record.get("throughput") or 0.0)
+        rows.append(
+            {
+                "bucket_cap_mb": record.get("ddp_bucket_cap_mb"),
+                "throughput": throughput,
+                "baseline_throughput": baseline_t,
+                "relative_to_default": (
+                    throughput / baseline_t if baseline_t > 0 else 0.0
+                ),
+                "dataloader_wait_ms": record.get("dataloader_wait_ms"),
+            }
+        )
+    return rows
+
+
+def _topology_comparisons(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    ok = _successful(records)
+    for record in sorted(
+        (item for item in ok if item.get("group") == "topo"),
+        key=lambda item: str(item.get("visible_devices") or ""),
+    ):
+        rows.append(
+            {
+                "visible_devices": record.get("visible_devices"),
+                "bucket_cap_mb": record.get("ddp_bucket_cap_mb"),
+                "throughput": record.get("throughput"),
+                "dataloader_wait_ms": record.get("dataloader_wait_ms"),
+                "peak_memory_bytes": record.get("peak_memory_bytes"),
+            }
+        )
+    return rows
+
+
 def _best_data_loader(records: List[Dict[str, Any]]) -> Dict[str, Any] | None:
     data_records = [
         record
@@ -209,10 +295,12 @@ def build_report(
         "runs": records,
         "scaling": _scaling(records),
         "hook_comparisons": _hook_comparisons(records),
+        "bucket_comparisons": _bucket_comparisons(records),
+        "topology_comparisons": _topology_comparisons(records),
         "best_dataloader": _best_data_loader(records),
         "notes": [
-            "This suite does not sweep DDP bucket_cap_mb because ParaScale does not expose it in the native-DDP config yet.",
-            "Use this evidence to decide whether bucket_cap_mb should become a production config field.",
+            "Bucket sweep uses bf16_compress on 4 visible GPUs.",
+            "Topology sweep constrains CUDA_VISIBLE_DEVICES before torchrun.",
         ],
     }
 
@@ -270,20 +358,59 @@ def write_markdown(report: Dict[str, Any], path: Path) -> None:
     lines.extend(
         [
             "",
+            "## Bucket Cap",
+            "",
+            "| Bucket cap MB | Throughput | Relative to default | Dataloader wait ms |",
+            "| ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for item in report["bucket_comparisons"]:
+        lines.append(
+            "| {bucket} | {throughput:.3f} | {relative:.3f}x | {wait:.3f} |".format(
+                bucket=item.get("bucket_cap_mb") or "default",
+                throughput=float(item.get("throughput") or 0.0),
+                relative=float(item.get("relative_to_default") or 0.0),
+                wait=float(item.get("dataloader_wait_ms") or 0.0),
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Topology",
+            "",
+            "| CUDA_VISIBLE_DEVICES | Bucket cap MB | Throughput | Dataloader wait ms | Peak GB |",
+            "| --- | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for item in report["topology_comparisons"]:
+        lines.append(
+            "| `{visible}` | {bucket} | {throughput:.3f} | {wait:.3f} | {memory:.3f} |".format(
+                visible=item.get("visible_devices") or "all",
+                bucket=item.get("bucket_cap_mb") or "default",
+                throughput=float(item.get("throughput") or 0.0),
+                wait=float(item.get("dataloader_wait_ms") or 0.0),
+                memory=float(item.get("peak_memory_bytes") or 0.0) / 1024**3,
+            )
+        )
+    lines.extend(
+        [
+            "",
             "## Runs",
             "",
-            "| Run | Group | GPUs | Precision | Hook | Workers | OK | Throughput | Loss | Peak GB | Wait ms |",
-            "| --- | --- | ---: | --- | --- | ---: | --- | ---: | ---: | ---: | ---: |",
+            "| Run | Group | GPUs | Precision | Hook | Bucket MB | Visible devices | Workers | OK | Throughput | Loss | Peak GB | Wait ms |",
+            "| --- | --- | ---: | --- | --- | ---: | --- | ---: | --- | ---: | ---: | ---: | ---: |",
         ]
     )
     for run in report["runs"]:
         lines.append(
-            "| {run_id} | {group} | {gpus} | {precision} | {hook} | {workers} | {ok} | {throughput:.3f} | {loss} | {memory:.3f} | {wait:.3f} |".format(
+            "| {run_id} | {group} | {gpus} | {precision} | {hook} | {bucket} | {visible} | {workers} | {ok} | {throughput:.3f} | {loss} | {memory:.3f} | {wait:.3f} |".format(
                 run_id=run["run_id"],
                 group=run["group"],
                 gpus=run["gpus"],
                 precision=run["precision"],
                 hook=run["ddp_comm_hook"],
+                bucket=run.get("ddp_bucket_cap_mb") or 0,
+                visible=run.get("visible_devices") or "all",
                 workers=run["num_workers"],
                 ok=run["ok"],
                 throughput=float(run.get("throughput") or 0.0),

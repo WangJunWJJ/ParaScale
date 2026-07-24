@@ -399,6 +399,40 @@ def _a6000_native_ddp_scaling_section(summary: Dict[str, Any]) -> List[str]:
                 relative=_ratio(item.get("relative_to_none")),
             )
         )
+    if summary.get("bucket_comparisons"):
+        lines.extend(
+            [
+                "",
+                "| Bucket cap MB | Throughput | Relative to default | Dataloader wait ms |",
+                "| ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for item in summary.get("bucket_comparisons", []):
+            lines.append(
+                "| {bucket} | {throughput} | {relative} | {wait} |".format(
+                    bucket=item.get("bucket_cap_mb") or "default",
+                    throughput=_number(item.get("throughput")),
+                    relative=_ratio(item.get("relative_to_default")),
+                    wait=_number(item.get("dataloader_wait_ms")),
+                )
+            )
+    if summary.get("topology_comparisons"):
+        lines.extend(
+            [
+                "",
+                "| CUDA_VISIBLE_DEVICES | Bucket cap MB | Throughput | Dataloader wait ms |",
+                "| --- | ---: | ---: | ---: |",
+            ]
+        )
+        for item in summary.get("topology_comparisons", []):
+            lines.append(
+                "| `{visible}` | {bucket} | {throughput} | {wait} |".format(
+                    visible=item.get("visible_devices") or "all",
+                    bucket=item.get("bucket_cap_mb") or "default",
+                    throughput=_number(item.get("throughput")),
+                    wait=_number(item.get("dataloader_wait_ms")),
+                )
+            )
     best = summary.get("best_dataloader")
     if isinstance(best, dict):
         lines.extend(

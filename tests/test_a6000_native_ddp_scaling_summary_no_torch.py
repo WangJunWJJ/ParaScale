@@ -35,6 +35,16 @@ def test_a6000_native_ddp_scaling_summary_parses_matrix(tmp_path):
     _write_result(tmp_path / "scale_2gpu_bf16_none_b8_w2.json", 160.0, 5.5)
     _write_result(tmp_path / "scale_4gpu_bf16_none_b8_w2.json", 280.0, 6.0)
     _write_result(tmp_path / "hook_4gpu_bf16_bf16_compress_b8_w2.json", 300.0, 6.2)
+    _write_result(
+        tmp_path / "bucket_4gpu_bf16_bf16_compress_bucket100_b8_w2.json",
+        330.0,
+        6.1,
+    )
+    _write_result(
+        tmp_path / "topo_4gpu_bf16_bf16_compress_bucket100_cuda1234_b8_w2.json",
+        340.0,
+        5.9,
+    )
     _write_result(tmp_path / "data_4gpu_bf16_none_b8_w4_p4_persist.json", 310.0, 3.0)
 
     report = build_report(
@@ -59,4 +69,7 @@ def test_a6000_native_ddp_scaling_summary_parses_matrix(tmp_path):
     assert bf16["scale_1_to_4"] == 2.8
     assert bf16["efficiency_1_to_4"] == 0.7
     assert hook["relative_to_none"] > 1.07
+    assert report["bucket_comparisons"][0]["bucket_cap_mb"] == 100
+    assert report["bucket_comparisons"][0]["relative_to_default"] == 1.1
+    assert report["topology_comparisons"][0]["visible_devices"] == "1,2,3,4"
     assert report["best_dataloader"]["run_id"] == "data_4gpu_bf16_none_b8_w4_p4_persist"

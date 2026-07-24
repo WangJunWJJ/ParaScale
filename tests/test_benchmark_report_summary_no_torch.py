@@ -165,6 +165,22 @@ def test_benchmark_report_combines_suite_summaries(tmp_path):
                     "relative_to_none": 1.0714,
                 }
             ],
+            "bucket_comparisons": [
+                {
+                    "bucket_cap_mb": 100,
+                    "throughput": 310.0,
+                    "relative_to_default": 1.107,
+                    "dataloader_wait_ms": 4.2,
+                }
+            ],
+            "topology_comparisons": [
+                {
+                    "visible_devices": "1,2,3,4",
+                    "bucket_cap_mb": 100,
+                    "throughput": 320.0,
+                    "dataloader_wait_ms": 4.1,
+                }
+            ],
             "best_dataloader": {
                 "run_id": "data_4gpu_bf16_none_b8_w4_p4_persist",
                 "throughput": 300.0,
@@ -185,4 +201,6 @@ def test_benchmark_report_combines_suite_summaries(tmp_path):
     assert "rtx4090_clip_precision_datacomp/summary.json" in markdown
     assert "A6000 Native-DDP Scaling" in markdown
     assert "bf16_compress" in markdown
+    assert "CUDA_VISIBLE_DEVICES" in markdown
+    assert "1,2,3,4" in markdown
     assert "a6000_native_ddp_scaling/summary.json" in markdown

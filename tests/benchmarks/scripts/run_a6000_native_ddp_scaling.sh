@@ -67,7 +67,9 @@ make_config() {
   local workers="$6"
   local prefetch="$7"
   local persistent="$8"
-  python3 - "$BASE_CONFIG" "$CONFIG_DIR" "$run_id" "$gpus" "$precision" "$hook" "$batch" "$workers" "$prefetch" "$persistent" "$DATA_DIR" "$STEPS" "$WARMUP_STEPS" <<'PY'
+  local bucket_cap="$9"
+  local visible_devices="${10}"
+  python3 - "$BASE_CONFIG" "$CONFIG_DIR" "$run_id" "$gpus" "$precision" "$hook" "$batch" "$workers" "$prefetch" "$persistent" "$bucket_cap" "$visible_devices" "$DATA_DIR" "$STEPS" "$WARMUP_STEPS" <<'PY'
 import json
 import sys
 
@@ -82,16 +84,19 @@ import sys
     workers,
     prefetch,
     persistent,
+    bucket_cap,
+    visible_devices,
     data_dir,
     steps,
     warmup_steps,
-) = sys.argv[1:14]
+) = sys.argv[1:16]
 gpus = int(gpus)
 batch = int(batch)
 workers = int(workers)
 prefetch = int(prefetch)
 steps = int(steps)
 warmup_steps = int(warmup_steps)
+bucket_cap_value = int(bucket_cap) if str(bucket_cap).strip() else 0
 persistent_bool = persistent.lower() in {"1", "true", "yes"}
 with open(base, "r", encoding="utf-8") as handle:
     config = json.load(handle)
@@ -103,6 +108,7 @@ parascale["data_parallel_size"] = gpus
 parascale["ddp_gradient_as_bucket_view"] = True
 parascale["ddp_static_graph"] = True
 parascale["ddp_comm_hook"] = "none" if gpus == 1 else hook
+parascale["ddp_bucket_cap_mb"] = bucket_cap_value or None
 parascale["batch_size"] = batch
 parascale["dataloader_num_workers"] = workers
 parascale["dataloader_prefetch_factor"] = prefetch
@@ -134,6 +140,8 @@ metadata.update(
         "gpus": gpus,
         "precision": precision,
         "ddp_comm_hook": parascale["ddp_comm_hook"],
+        "ddp_bucket_cap_mb": parascale["ddp_bucket_cap_mb"],
+        "visible_devices": visible_devices,
         "batch_per_gpu": batch,
         "num_workers": workers,
         "prefetch_factor": prefetch,
@@ -160,32 +168,55 @@ run_config() {
   local workers="$6"
   local prefetch="$7"
   local persistent="$8"
+  local bucket_cap="${9:-0}"
+  local visible_devices="${10:-}"
   local config
-  config=$(make_config "${run_id}" "${gpus}" "${precision}" "${hook}" "${batch}" "${workers}" "${prefetch}" "${persistent}")
+  config=$(make_config "${run_id}" "${gpus}" "${precision}" "${hook}" "${batch}" "${workers}" "${prefetch}" "${persistent}" "${bucket_cap}" "${visible_devices}")
   if [ "${gpus}" -eq 1 ]; then
-    run_and_capture "${run_id}" python3 -m parascale.cli benchmark --config "${config}"
+    if [ -n "${visible_devices}" ]; then
+      CUDA_VISIBLE_DEVICES="${visible_devices}" run_and_capture "${run_id}" python3 -m parascale.cli benchmark --config "${config}"
+    else
+      run_and_capture "${run_id}" python3 -m parascale.cli benchmark --config "${config}"
+    fi
   else
-    run_and_capture "${run_id}" torchrun --standalone --nproc_per_node="${gpus}" -m parascale.cli benchmark --config "${config}"
+    if [ -n "${visible_devices}" ]; then
+      CUDA_VISIBLE_DEVICES="${visible_devices}" run_and_capture "${run_id}" torchrun --standalone --nproc_per_node="${gpus}" -m parascale.cli benchmark --config "${config}"
+    else
+      run_and_capture "${run_id}" torchrun --standalone --nproc_per_node="${gpus}" -m parascale.cli benchmark --config "${config}"
+    fi
   fi
 }
 
 for precision in bf16 fp16 fp32; do
   for gpus in 1 2 4; do
-    run_config "scale_${gpus}gpu_${precision}_none_b${DEFAULT_BATCH_PER_GPU}_w2" "${gpus}" "${precision}" none "${DEFAULT_BATCH_PER_GPU}" 2 2 false || true
+    run_config "scale_${gpus}gpu_${precision}_none_b${DEFAULT_BATCH_PER_GPU}_w2" "${gpus}" "${precision}" none "${DEFAULT_BATCH_PER_GPU}" 2 2 false 0 "" || true
   done
 done
 
 for gpus in 2 4; do
-  run_config "hook_${gpus}gpu_bf16_bf16_compress_b${DEFAULT_BATCH_PER_GPU}_w2" "${gpus}" bf16 bf16_compress "${DEFAULT_BATCH_PER_GPU}" 2 2 false || true
-  run_config "hook_${gpus}gpu_fp16_fp16_compress_b${DEFAULT_BATCH_PER_GPU}_w2" "${gpus}" fp16 fp16_compress "${DEFAULT_BATCH_PER_GPU}" 2 2 false || true
+  run_config "hook_${gpus}gpu_bf16_bf16_compress_b${DEFAULT_BATCH_PER_GPU}_w2" "${gpus}" bf16 bf16_compress "${DEFAULT_BATCH_PER_GPU}" 2 2 false 0 "" || true
+  run_config "hook_${gpus}gpu_fp16_fp16_compress_b${DEFAULT_BATCH_PER_GPU}_w2" "${gpus}" fp16 fp16_compress "${DEFAULT_BATCH_PER_GPU}" 2 2 false 0 "" || true
+done
+
+for bucket_cap in 25 50 100 200; do
+  run_config "bucket_4gpu_bf16_bf16_compress_bucket${bucket_cap}_b${DEFAULT_BATCH_PER_GPU}_w2" 4 bf16 bf16_compress "${DEFAULT_BATCH_PER_GPU}" 2 2 false "${bucket_cap}" "" || true
+done
+
+for topology in 0123 0134 1234; do
+  visible=$(python3 - "${topology}" <<'PY'
+import sys
+print(",".join(sys.argv[1]))
+PY
+)
+  run_config "topo_4gpu_bf16_bf16_compress_bucket100_cuda${topology}_b${DEFAULT_BATCH_PER_GPU}_w2" 4 bf16 bf16_compress "${DEFAULT_BATCH_PER_GPU}" 2 2 false 100 "${visible}" || true
 done
 
 for workers in 0 2 4 8; do
   if [ "${workers}" -eq 0 ]; then
-    run_config "data_4gpu_bf16_none_b${DEFAULT_BATCH_PER_GPU}_w0" 4 bf16 none "${DEFAULT_BATCH_PER_GPU}" 0 2 false || true
+    run_config "data_4gpu_bf16_none_b${DEFAULT_BATCH_PER_GPU}_w0" 4 bf16 none "${DEFAULT_BATCH_PER_GPU}" 0 2 false 0 "" || true
   else
-    run_config "data_4gpu_bf16_none_b${DEFAULT_BATCH_PER_GPU}_w${workers}_p2" 4 bf16 none "${DEFAULT_BATCH_PER_GPU}" "${workers}" 2 false || true
-    run_config "data_4gpu_bf16_none_b${DEFAULT_BATCH_PER_GPU}_w${workers}_p4_persist" 4 bf16 none "${DEFAULT_BATCH_PER_GPU}" "${workers}" 4 true || true
+    run_config "data_4gpu_bf16_none_b${DEFAULT_BATCH_PER_GPU}_w${workers}_p2" 4 bf16 none "${DEFAULT_BATCH_PER_GPU}" "${workers}" 2 false 0 "" || true
+    run_config "data_4gpu_bf16_none_b${DEFAULT_BATCH_PER_GPU}_w${workers}_p4_persist" 4 bf16 none "${DEFAULT_BATCH_PER_GPU}" "${workers}" 4 true 0 "" || true
   fi
 done
 
