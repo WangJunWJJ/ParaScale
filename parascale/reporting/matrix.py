@@ -90,6 +90,11 @@ def _load_result(path: Path) -> Dict[str, Any]:
         "backend": backend,
         "status": "ok",
         "metrics": metrics,
+        "evidence": (
+            payload.get("evidence", {})
+            if isinstance(payload.get("evidence"), dict)
+            else {}
+        ),
         "config": config if isinstance(config, dict) else {},
         "config_artifacts": (
             config_artifacts if isinstance(config_artifacts, dict) else {}
@@ -612,6 +617,9 @@ def write_markdown(report: Dict[str, Any], path: Path) -> None:
                         )
                     )
     lines.extend(["", "## 对照", ""])
+    lines.extend(_markdown_evidence_summary(report))
+    lines.extend(_markdown_device_evidence(report))
+    lines.extend(_markdown_tuner_evidence(report))
     for item in report["comparisons"]:
         lines.append(
             "- {run}: {target} vs native-DDP, speedup={speedup:.4f}, memory_ratio={memory:.4f}, status={status}".format(
@@ -645,6 +653,91 @@ def write_markdown(report: Dict[str, Any], path: Path) -> None:
                     )
                 )
     path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def _markdown_evidence_summary(report: Dict[str, Any]) -> List[str]:
+    summary = report.get("evidence_summary", {})
+    if not isinstance(summary, dict):
+        summary = {}
+    selected = ", ".join(summary.get("selected_backends", []) or []) or "n/a"
+    return [
+        "",
+        "## Evidence Summary",
+        "",
+        f"- Results: {summary.get('ok_result_count', 0)} ok / {summary.get('result_count', 0)} total.",
+        f"- Failed results: {summary.get('failed_result_count', 0)}.",
+        f"- Recommendations: {summary.get('recommendation_count', 0)}; selected_backends={selected}.",
+        f"- OOM recovery: {summary.get('recovered_oom_count', 0)} recovered / {summary.get('oom_recovery_count', 0)} total.",
+    ]
+
+
+def _markdown_device_evidence(report: Dict[str, Any]) -> List[str]:
+    devices = report.get("device_evidence", {})
+    if not isinstance(devices, dict) or not devices.get("accelerators"):
+        return [
+            "",
+            "## Device Evidence",
+            "",
+            "- No device evidence was found in benchmark payloads.",
+        ]
+    lines = [
+        "",
+        "## Device Evidence",
+        "",
+        "| Accelerator | Available | Device count | Peak memory allocated bytes |",
+        "| --- | --- | ---: | ---: |",
+    ]
+    available = set(devices.get("available_accelerators", []) or [])
+    counts = devices.get("device_counts", {})
+    peak_memory = devices.get("peak_memory_allocated_bytes", {})
+    for accelerator in devices.get("accelerators", []) or []:
+        lines.append(
+            "| {accelerator} | {available} | {count} | {memory} |".format(
+                accelerator=accelerator,
+                available=accelerator in available,
+                count=counts.get(accelerator, 0) if isinstance(counts, dict) else 0,
+                memory=(
+                    peak_memory.get(accelerator, 0)
+                    if isinstance(peak_memory, dict)
+                    else 0
+                ),
+            )
+        )
+    return lines
+
+
+def _markdown_tuner_evidence(report: Dict[str, Any]) -> List[str]:
+    explanations = report.get("tuner_explanations", [])
+    if not isinstance(explanations, list) or not explanations:
+        return [
+            "",
+            "## Tuner Evidence",
+            "",
+            "- No tuner explanations were attached to this report.",
+        ]
+    lines = ["", "## Tuner Evidence", ""]
+    for item in explanations:
+        if not isinstance(item, dict):
+            continue
+        tuning = item.get("runtime_tuning", {})
+        decisions = tuning.get("decisions", []) if isinstance(tuning, dict) else []
+        for decision in decisions[:3]:
+            if not isinstance(decision, dict):
+                continue
+            lines.append(
+                "- {run}/{backend}: action={action}, dominant_pipeline_stage={stage}, dataloader_wait_ms={wait}".format(
+                    run=item.get("run_id", "n/a"),
+                    backend=item.get("backend", "n/a"),
+                    action=decision.get("action", "unknown"),
+                    stage=dict(decision.get("evidence", {}) or {}).get(
+                        "dominant_pipeline_stage", "n/a"
+                    ),
+                    wait=dict(decision.get("evidence", {}) or {}).get(
+                        "dataloader_wait_ms", "n/a"
+                    ),
+                )
+            )
+    return lines
 
 
 def build_report(
@@ -685,6 +778,7 @@ def build_report(
         recommendations=recommendations,
         oom_recovery=oom_recovery,
     )
+    device_evidence = _device_evidence_summary(rows)
     return {
         "title": title,
         "workload_label": workload_label,
@@ -695,6 +789,7 @@ def build_report(
         "recommendations": recommendations,
         "oom_recovery": oom_recovery,
         "evidence_summary": evidence_summary,
+        "device_evidence": device_evidence,
         "conclusion": conclusion,
     }
 
@@ -722,4 +817,51 @@ def _evidence_summary(
         "recovered_oom_count": len(
             [item for item in oom_recovery if item.get("recovered")]
         ),
+    }
+
+
+def _device_evidence_summary(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    accelerators: List[str] = []
+    available_accelerators: List[str] = []
+    device_counts: Dict[str, int] = {}
+    peak_memory: Dict[str, int] = {}
+    for row in rows:
+        evidence = row.get("evidence", {})
+        devices = evidence.get("devices", {}) if isinstance(evidence, dict) else {}
+        if not isinstance(devices, dict):
+            continue
+        accelerator_names = list(devices.get("accelerators", []) or [])
+        counts = devices.get("device_counts", {})
+        if isinstance(counts, dict):
+            accelerator_names.extend(counts.keys())
+        memory = devices.get("peak_memory_allocated_bytes", {})
+        if isinstance(memory, dict):
+            accelerator_names.extend(memory.keys())
+        for accelerator in accelerator_names:
+            accelerator = str(accelerator)
+            if accelerator not in accelerators:
+                accelerators.append(accelerator)
+        for accelerator in devices.get("available_accelerators", []) or []:
+            accelerator = str(accelerator)
+            if accelerator not in available_accelerators:
+                available_accelerators.append(accelerator)
+        if isinstance(counts, dict):
+            for accelerator, count in counts.items():
+                key = str(accelerator)
+                device_counts[key] = max(
+                    int(device_counts.get(key, 0)),
+                    int(count or 0),
+                )
+        if isinstance(memory, dict):
+            for accelerator, value in memory.items():
+                key = str(accelerator)
+                peak_memory[key] = max(
+                    int(peak_memory.get(key, 0)),
+                    int(value or 0),
+                )
+    return {
+        "accelerators": accelerators,
+        "available_accelerators": available_accelerators,
+        "device_counts": device_counts,
+        "peak_memory_allocated_bytes": peak_memory,
     }

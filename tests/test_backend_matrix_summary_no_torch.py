@@ -21,7 +21,7 @@ def _workspace_tmp(name):
     return path
 
 
-def _write_benchmark(path, *, backend, throughput, memory_gb):
+def _write_benchmark(path, *, backend, throughput, memory_gb, evidence=None):
     payload = {
         "mode": "benchmark",
         "config": {
@@ -47,6 +47,8 @@ def _write_benchmark(path, *, backend, throughput, memory_gb):
             },
         },
     }
+    if evidence:
+        payload["evidence"] = evidence
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
@@ -280,6 +282,13 @@ def test_backend_matrix_markdown_reports_communication_plan():
         backend="native_ddp",
         throughput=100.0,
         memory_gb=2.0,
+        evidence={
+            "devices": {
+                "available_accelerators": ["cuda"],
+                "device_counts": {"cuda": 2},
+                "peak_memory_allocated_bytes": {"cuda": 2147483648},
+            }
+        },
     )
 
     report = build_report(
@@ -288,6 +297,24 @@ def test_backend_matrix_markdown_reports_communication_plan():
         workload_label="synthetic matrix",
         optimize_for="throughput",
     )
+    report["tuner_explanations"] = [
+        {
+            "run_id": "model",
+            "backend": "native_ddp",
+            "runtime_tuning": {
+                "decisions": [
+                    {
+                        "action": "prefetch_to_device",
+                        "evidence": {
+                            "dominant_pipeline_stage": "host_to_device_ms",
+                            "dataloader_wait_ms": 8.0,
+                        },
+                    }
+                ]
+            },
+            "explain": {"summary": "Runtime tuner recommends prefetch_to_device"},
+        }
+    ]
     from parascale.reporting.matrix import write_markdown
 
     write_markdown(report, markdown_path)
@@ -297,6 +324,12 @@ def test_backend_matrix_markdown_reports_communication_plan():
     assert "native_ddp" in markdown
     assert "Candidate Evaluation" in markdown
     assert "Expected trade-off" in markdown
+    assert "Evidence Summary" in markdown
+    assert "Tuner Evidence" in markdown
+    assert "prefetch_to_device" in markdown
+    assert "Device Evidence" in markdown
+    assert "cuda" in markdown
+    assert "2147483648" in markdown
 
 
 def test_backend_matrix_report_marks_oom_retry_recovered():
