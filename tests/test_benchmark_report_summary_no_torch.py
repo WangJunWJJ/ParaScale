@@ -134,6 +134,44 @@ def test_benchmark_report_combines_suite_summaries(tmp_path):
             ],
         },
     )
+    _write_json(
+        tmp_path / "a6000_native_ddp_scaling" / "summary.json",
+        {
+            "hardware": "5x RTX A6000",
+            "image": "image-c",
+            "dataset": "datacomp",
+            "model": "clip_medium",
+            "steps": 120,
+            "warmup_steps": 20,
+            "scaling": [
+                {
+                    "precision": "bf16",
+                    "one_gpu_throughput": 100.0,
+                    "two_gpu_throughput": 160.0,
+                    "four_gpu_throughput": 280.0,
+                    "scale_1_to_2": 1.6,
+                    "scale_2_to_4": 1.75,
+                    "scale_1_to_4": 2.8,
+                    "efficiency_1_to_4": 0.7,
+                }
+            ],
+            "hook_comparisons": [
+                {
+                    "gpus": 4,
+                    "precision": "bf16",
+                    "hook": "bf16_compress",
+                    "baseline_throughput": 280.0,
+                    "hook_throughput": 300.0,
+                    "relative_to_none": 1.0714,
+                }
+            ],
+            "best_dataloader": {
+                "run_id": "data_4gpu_bf16_none_b8_w4_p4_persist",
+                "throughput": 300.0,
+                "dataloader_wait_ms": 4.0,
+            },
+        },
+    )
 
     markdown = build_report_markdown(load_summaries(tmp_path), report_root=tmp_path)
 
@@ -145,3 +183,6 @@ def test_benchmark_report_combines_suite_summaries(tmp_path):
     assert "10/100" in markdown
     assert "Ascend Parallel Matrix" in markdown
     assert "rtx4090_clip_precision_datacomp/summary.json" in markdown
+    assert "A6000 Native-DDP Scaling" in markdown
+    assert "bf16_compress" in markdown
+    assert "a6000_native_ddp_scaling/summary.json" in markdown
