@@ -111,6 +111,34 @@ def test_cli_plan_command_defaults_to_summary_and_keeps_json_flag(capsys):
     assert payload["strategy_plan"]["backend"] == "fsdp"
 
 
+def test_cli_train_dry_run_output_refreshes_evidence_config_artifacts():
+    tmp_path = _workspace_tmp("cli_train_dry_run_evidence")
+    config_path = tmp_path / "config.json"
+    output_path = tmp_path / "train.json"
+    config_path.write_text(json.dumps(_sample_config()), encoding="utf-8")
+
+    assert (
+        main(
+            [
+                "train",
+                "--config",
+                str(config_path),
+                "--dry-run",
+                "--output",
+                str(output_path),
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+
+    resolved_path = Path(payload["config_artifacts"]["resolved_config"])
+    assert resolved_path.is_file()
+    assert payload["evidence"]["config_artifacts"]["resolved_config"] == str(
+        resolved_path
+    )
+
+
 def test_load_config_file_accepts_utf8_bom_json():
     tmp_path = _workspace_tmp("cli_utf8_bom")
     config_path = tmp_path / "config.json"
@@ -396,6 +424,37 @@ def test_infer_command_runs_synthetic_clip_and_yolo_without_torch():
     assert yolo_payload["task"] == "vision_detection"
     assert yolo_payload["metrics"]["images"] == 2
     assert json.dumps(yolo_payload)
+
+
+def test_cli_infer_output_writes_resolved_config_artifact():
+    tmp_path = _workspace_tmp("cli_infer_evidence")
+    config_path = tmp_path / "config.json"
+    output_path = tmp_path / "infer.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "runtime": {"accelerator": "cpu"},
+                "inference": {
+                    "workload": "clip_synthetic",
+                    "batch_size": 1,
+                    "num_batches": 1,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        main(["infer", "--config", str(config_path), "--output", str(output_path)])
+        == 0
+    )
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+
+    resolved_path = Path(payload["config_artifacts"]["resolved_config"])
+    assert resolved_path.is_file()
+    assert payload["evidence"]["config_artifacts"]["run_dir"] == str(
+        output_path.parent / output_path.stem
+    )
 
 
 def test_cli_smoke_report_skip_real_builds_doctor_and_plan_only():

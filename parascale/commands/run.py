@@ -280,26 +280,43 @@ def cmd_train(args: argparse.Namespace) -> int:
         return 0
     payload = build_train_dry_run_payload(config_data)
     payload["config_artifacts"] = config_artifacts
+    attach_runtime_evidence(payload)
     emit_json(payload, args.output)
     return 0
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
     config_data = load_config_file(args.config) if args.config else {}
+    config_artifacts = _write_command_config_artifacts(
+        config_data,
+        output_path=args.output,
+        mode="serve",
+        dry_run=bool(args.dry_run),
+    )
     if not args.dry_run:
         payload = run_serve_from_config(config_data, args.checkpoint)
+        payload.setdefault("config_artifacts", config_artifacts)
+        attach_runtime_evidence(payload)
         emit_json(payload, args.output)
         return 0
-    emit_json(
-        build_serve_dry_run_payload(config_data, checkpoint=args.checkpoint),
-        args.output,
-    )
+    payload = build_serve_dry_run_payload(config_data, checkpoint=args.checkpoint)
+    payload["config_artifacts"] = config_artifacts
+    attach_runtime_evidence(payload)
+    emit_json(payload, args.output)
     return 0
 
 
 def cmd_infer(args: argparse.Namespace) -> int:
     config_data = load_config_file(args.config)
+    config_artifacts = _write_command_config_artifacts(
+        config_data,
+        output_path=args.output,
+        mode="infer",
+        dry_run=False,
+    )
     payload = run_inference_from_config(config_data)
+    payload["config_artifacts"] = config_artifacts
+    attach_runtime_evidence(payload)
     emit_json(payload, args.output)
     return 0
 
@@ -320,6 +337,7 @@ def cmd_benchmark(args: argparse.Namespace) -> int:
     else:
         payload = build_benchmark_dry_run_payload(config_data)
     payload.setdefault("config_artifacts", config_artifacts)
+    attach_runtime_evidence(payload)
     emit_json(payload, args.output)
     return 0
 
