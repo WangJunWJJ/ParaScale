@@ -44,9 +44,10 @@ class InferenceRunner:
         images = 0
         image_text_pairs = 0
         tokens = 0
+        requested_warmup_steps = max(0, int(warmup_steps))
         effective_warmup_steps = self._effective_warmup_steps(
             batches,
-            warmup_steps=warmup_steps,
+            warmup_steps=requested_warmup_steps,
         )
         iterator = iter(batches)
         for _ in range(effective_warmup_steps):
@@ -76,11 +77,18 @@ class InferenceRunner:
             tokens=tokens,
         )
         memory.add_peak_memory_metrics(metrics)
+        measurement_window = {
+            "warmup_steps_requested": requested_warmup_steps,
+            "warmup_steps_effective": effective_warmup_steps,
+            "measured_batches": requests,
+            "warmup_excluded_from_metrics": effective_warmup_steps > 0,
+        }
         return {
             "task": self.task,
             "device": self.device,
             "outputs": outputs,
             "metrics": metrics,
+            "measurement_window": measurement_window,
         }
 
     @staticmethod

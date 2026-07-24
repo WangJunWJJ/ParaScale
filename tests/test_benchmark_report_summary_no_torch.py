@@ -103,6 +103,12 @@ def test_benchmark_report_combines_suite_summaries(tmp_path):
                     "hardware": "dual RTX 4090D",
                     "backend": "native_ddp",
                     "throughput": 10.0,
+                    "runtime_status": "real_local",
+                    "capability_level": "local_native_clip_datacomp",
+                    "measurement_window": {
+                        "warmup_steps_effective": 10,
+                        "measured_batches": 100,
+                    },
                 }
             ],
             "comparisons": [
@@ -134,5 +140,8 @@ def test_benchmark_report_combines_suite_summaries(tmp_path):
     assert "# ParaScale Benchmark Report" in markdown
     assert "Dual RTX 4090 Validation" in markdown
     assert "parascale_native_ddp" in markdown
+    assert "Evidence Quality" in markdown
+    assert "local_native_clip_datacomp" in markdown
+    assert "10/100" in markdown
     assert "Ascend Parallel Matrix" in markdown
     assert "rtx4090_clip_precision_datacomp/summary.json" in markdown

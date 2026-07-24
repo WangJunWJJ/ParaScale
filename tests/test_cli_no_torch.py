@@ -383,6 +383,8 @@ def test_infer_command_runs_synthetic_clip_and_yolo_without_torch():
     assert clip_payload["mode"] == "infer"
     assert clip_payload["task"] == "multimodal_embedding"
     assert clip_payload["metrics"]["image_text_pairs"] == 2
+    assert clip_payload["measurement_window"]["warmup_steps_requested"] == 1
+    assert clip_payload["measurement_window"]["measured_batches"] == 1
     assert yolo_payload["task"] == "vision_detection"
     assert yolo_payload["metrics"]["images"] == 2
     assert json.dumps(yolo_payload)

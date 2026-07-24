@@ -86,6 +86,12 @@ def test_inference_runner_excludes_warmup_batches_from_measured_outputs():
     assert [item["id"] for item in payload["outputs"]] == [1, 2]
     assert payload["metrics"]["requests"] == 2
     assert payload["metrics"]["images"] == 2
+    assert payload["measurement_window"] == {
+        "warmup_steps_requested": 1,
+        "warmup_steps_effective": 1,
+        "measured_batches": 2,
+        "warmup_excluded_from_metrics": True,
+    }
 
 
 def test_inference_runner_keeps_one_measured_batch_when_warmup_covers_finite_input():
@@ -110,6 +116,12 @@ def test_inference_runner_keeps_one_measured_batch_when_warmup_covers_finite_inp
     assert payload["outputs"] == [{"id": 0, "num_images": 2}]
     assert payload["metrics"]["requests"] == 1
     assert payload["metrics"]["images"] == 2
+    assert payload["measurement_window"] == {
+        "warmup_steps_requested": 1,
+        "warmup_steps_effective": 0,
+        "measured_batches": 1,
+        "warmup_excluded_from_metrics": False,
+    }
 
 
 def test_synthetic_clip_and_yolo_inference_adapters_are_generic_without_torch():

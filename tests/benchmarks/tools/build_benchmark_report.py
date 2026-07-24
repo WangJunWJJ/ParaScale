@@ -87,6 +87,7 @@ def build_report_markdown(
         "",
     ]
     lines.extend(_overview_table(summaries))
+    lines.extend(_evidence_quality_section(summaries))
     lines.extend(_dual_4090_section(summaries["dual_4090"]))
     lines.extend(_direct_pytorch_section(summaries["direct_pytorch"]))
     lines.extend(_ascend_validation_section(summaries["ascend_validation"]))
@@ -123,6 +124,59 @@ def _overview_table(summaries: Dict[str, Dict[str, Any]]) -> List[str]:
         )
     lines.append("")
     return lines
+
+
+def _evidence_quality_section(summaries: Dict[str, Dict[str, Any]]) -> List[str]:
+    evidence_rows = list(_evidence_quality_rows(summaries))
+    if not evidence_rows:
+        return []
+    lines = [
+        "## Evidence Quality",
+        "",
+        "| Suite | Run | Runtime status | Capability level | Warmup/measured |",
+        "| --- | --- | --- | --- | ---: |",
+    ]
+    for row in evidence_rows:
+        lines.append(
+            "| {suite} | {run} | {runtime} | {capability} | {window} |".format(
+                suite=row["suite"],
+                run=row["run"],
+                runtime=row["runtime"],
+                capability=row["capability"],
+                window=row["window"],
+            )
+        )
+    lines.append("")
+    return lines
+
+
+def _evidence_quality_rows(
+    summaries: Dict[str, Dict[str, Any]]
+) -> Iterable[Dict[str, str]]:
+    for suite, summary in summaries.items():
+        runs = summary.get("runs", [])
+        if not isinstance(runs, list):
+            continue
+        for index, run in enumerate(runs, start=1):
+            if not isinstance(run, dict):
+                continue
+            capability = run.get("capability_level")
+            runtime = run.get("runtime_status")
+            window = _measurement_window(run.get("measurement_window"))
+            if not any((capability, runtime, window != "n/a")):
+                continue
+            yield {
+                "suite": suite,
+                "run": str(
+                    run.get("run_id")
+                    or run.get("label")
+                    or run.get("scenario")
+                    or index
+                ),
+                "runtime": str(runtime or "n/a"),
+                "capability": str(capability or "n/a"),
+                "window": window,
+            }
 
 
 def _dual_4090_section(summary: Dict[str, Any]) -> List[str]:
@@ -353,6 +407,16 @@ def _bytes_to_gb(value: Any) -> str:
         return f"{float(value) / 1024**3:.3f}"
     except (TypeError, ValueError):
         return "n/a"
+
+
+def _measurement_window(value: Any) -> str:
+    if not isinstance(value, dict):
+        return "n/a"
+    warmup = value.get("warmup_steps_effective")
+    measured = value.get("measured_batches")
+    if warmup is None and measured is None:
+        return "n/a"
+    return f"{warmup or 0}/{measured or 0}"
 
 
 def _hardware_summary(summary: Dict[str, Any]) -> str:
