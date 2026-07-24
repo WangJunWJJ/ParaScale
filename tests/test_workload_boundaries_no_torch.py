@@ -17,6 +17,30 @@ def test_workload_capability_lives_outside_orchestrator_without_torch(monkeypatc
 
     assert capability_level_for_training(config) == "multi_node_smoke"
 
+
+def test_detection_workloads_have_specific_capability_levels_without_torch(monkeypatch):
+    from parascale.workloads.capability import describe_workload
+
+    monkeypatch.setenv("WORLD_SIZE", "1")
+
+    yolo = describe_workload(
+        {
+            "training": {"workload": "yolo_world"},
+            "data": {"type": "objects365_cached"},
+        }
+    )
+    ground = describe_workload(
+        {
+            "training": {"workload": "ground_dino"},
+            "data": {"type": "phrase_grounding"},
+        }
+    )
+
+    assert yolo.flags["yolo_world"] is True
+    assert yolo.capability_level == "local_native_yolo_world_objects365"
+    assert ground.flags["ground_dino"] is True
+    assert ground.capability_level == "local_native_ground_dino_phrase_grounding"
+
 def test_benchmark_aggregation_lives_in_reporting_without_torch():
     from parascale.reporting.aggregation import aggregate_stable_metrics
 

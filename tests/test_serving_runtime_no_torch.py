@@ -106,6 +106,29 @@ def test_serving_engine_returns_request_errors_without_sticking_cache():
     assert serving.metrics()["requests_failed"] == 1
     assert serving.metrics()["kv_cache"]["blocks"] == 0
 
+
+def test_serving_engine_strict_errors_raise_after_releasing_cache():
+    class BrokenModel:
+        def generate(self, requests):
+            raise RuntimeError("boom")
+
+    serving = ServingEngine(
+        runtime=InferenceEngine().load_model(model=BrokenModel()),
+        strict_errors=True,
+    )
+    serving.submit(ServeRequest(request_id="bad", payload="hello"))
+
+    try:
+        serving.step()
+    except RuntimeError as exc:
+        assert "boom" in str(exc)
+    else:
+        raise AssertionError("strict serving mode must raise runtime errors")
+
+    assert serving.metrics()["requests_failed"] == 1
+    assert serving.metrics()["kv_cache"]["blocks"] == 0
+
+
 def test_default_serving_model_registry_exposes_tiny_loader():
     registry = default_serving_model_registry()
 
