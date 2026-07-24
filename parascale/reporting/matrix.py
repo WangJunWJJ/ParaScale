@@ -680,6 +680,11 @@ def build_report(
         )
     else:
         conclusion = "矩阵未完全闭环，需优先处理失败后端或缺失依赖后再做性能判断。"
+    evidence_summary = _evidence_summary(
+        rows=rows,
+        recommendations=recommendations,
+        oom_recovery=oom_recovery,
+    )
     return {
         "title": title,
         "workload_label": workload_label,
@@ -689,5 +694,32 @@ def build_report(
         "comparisons": comparisons,
         "recommendations": recommendations,
         "oom_recovery": oom_recovery,
+        "evidence_summary": evidence_summary,
         "conclusion": conclusion,
+    }
+
+
+def _evidence_summary(
+    *,
+    rows: List[Dict[str, Any]],
+    recommendations: List[Dict[str, Any]],
+    oom_recovery: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    selected_backends = [
+        str(item.get("selected_backend"))
+        for item in recommendations
+        if item.get("selected_backend")
+    ]
+    ok_rows = [row for row in rows if row.get("status") == "ok"]
+    failed_rows = [row for row in rows if row.get("status") != "ok"]
+    return {
+        "result_count": len(rows),
+        "ok_result_count": len(ok_rows),
+        "failed_result_count": len(failed_rows),
+        "recommendation_count": len(recommendations),
+        "selected_backends": selected_backends,
+        "oom_recovery_count": len(oom_recovery),
+        "recovered_oom_count": len(
+            [item for item in oom_recovery if item.get("recovered")]
+        ),
     }

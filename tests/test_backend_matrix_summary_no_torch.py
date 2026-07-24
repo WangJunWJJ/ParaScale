@@ -262,6 +262,8 @@ def test_backend_matrix_report_includes_recommendations():
         "config.resolved.json"
     )
     assert report["recommendations"][0]["communication_plan"]["backend"] == "fsdp"
+    assert report["evidence_summary"]["recommendation_count"] == 1
+    assert report["evidence_summary"]["selected_backends"] == ["fsdp"]
     assert (
         report["recommendations"][0]["communication_plan"]["evidence"][
             "dataloader_wait_ms"

@@ -53,6 +53,11 @@ def build_runtime_evidence(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "resolved_config": artifacts.get("resolved_config"),
                 "deepspeed_final_config": artifacts.get("deepspeed_final_config"),
             }
+    if payload.get("mode") == "benchmark_matrix":
+        evidence["benchmark_matrix"] = _benchmark_matrix_evidence(payload)
+        tuner = _matrix_tuner_evidence(payload)
+        if tuner:
+            evidence["tuner"] = tuner
     return evidence
 
 
@@ -63,6 +68,52 @@ def _measurement_window_from_metrics(metrics: Dict[str, Any]) -> Dict[str, Any] 
         "warmup_steps_effective": int(metrics.get("warmup_steps", 0) or 0),
         "measured_steps": int(metrics.get("measured_steps", 0) or 0),
         "warmup_excluded_from_metrics": int(metrics.get("warmup_steps", 0) or 0) > 0,
+    }
+
+
+def _benchmark_matrix_evidence(payload: Dict[str, Any]) -> Dict[str, Any]:
+    commands = payload.get("commands", [])
+    report = payload.get("report", {})
+    recommendations = (
+        report.get("recommendations", []) if isinstance(report, dict) else []
+    )
+    selected_backends = [
+        str(item.get("selected_backend"))
+        for item in recommendations
+        if isinstance(item, dict) and item.get("selected_backend")
+    ]
+    return {
+        "scenario": payload.get("scenario"),
+        "planned_commands": len(commands) if isinstance(commands, list) else 0,
+        "run_result_count": len(payload.get("run_results", []) or []),
+        "retry_result_count": len(payload.get("retry_results", []) or []),
+        "recommendation_count": (
+            len(recommendations) if isinstance(recommendations, list) else 0
+        ),
+        "selected_backends": selected_backends,
+        "oom_retry": bool(payload.get("oom_retry", False)),
+    }
+
+
+def _matrix_tuner_evidence(payload: Dict[str, Any]) -> Dict[str, Any] | None:
+    report = payload.get("report", {})
+    if not isinstance(report, dict):
+        return None
+    explanations = report.get("tuner_explanations", [])
+    if not isinstance(explanations, list):
+        return None
+    decision_count = 0
+    for item in explanations:
+        if not isinstance(item, dict):
+            continue
+        tuning = item.get("runtime_tuning", {})
+        decisions = tuning.get("decisions", []) if isinstance(tuning, dict) else []
+        if isinstance(decisions, list):
+            decision_count += len(decisions)
+    return {
+        "available": bool(explanations),
+        "explanation_count": len(explanations),
+        "decision_count": decision_count,
     }
 
 
