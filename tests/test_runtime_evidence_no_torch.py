@@ -44,3 +44,42 @@ def test_runtime_evidence_summarizes_matrix_recommendations_and_tuner_decisions(
     assert evidence["tuner"]["available"] is True
     assert evidence["tuner"]["explanation_count"] == 1
     assert evidence["tuner"]["decision_count"] == 2
+
+
+def test_runtime_evidence_summarizes_device_backend_capabilities():
+    from parascale.runtime.evidence import build_runtime_evidence
+
+    evidence = build_runtime_evidence(
+        {
+            "mode": "doctor",
+            "runtime_status": "diagnostic",
+            "device_backends": [
+                {
+                    "name": "cpu",
+                    "accelerator": "cpu",
+                    "available": True,
+                    "device_count": 1,
+                    "memory": {"peak_memory_allocated_bytes": 0},
+                },
+                {
+                    "name": "nvidia",
+                    "accelerator": "cuda",
+                    "available": False,
+                    "device_count": 0,
+                    "memory": {"peak_memory_allocated_bytes": 0},
+                },
+                {
+                    "name": "ascend",
+                    "accelerator": "npu",
+                    "available": True,
+                    "device_count": 8,
+                    "memory": {"peak_memory_allocated_bytes": 1024},
+                },
+            ],
+        }
+    )
+
+    assert evidence["devices"]["accelerators"] == ["cpu", "cuda", "npu"]
+    assert evidence["devices"]["available_accelerators"] == ["cpu", "npu"]
+    assert evidence["devices"]["device_counts"]["npu"] == 8
+    assert evidence["devices"]["peak_memory_allocated_bytes"]["npu"] == 1024

@@ -17,6 +17,7 @@ from typing import Any, Dict
 from parascale.commands.common import emit_json
 from parascale.commands.diagnostics import evaluate_diagnostics
 from parascale.core import AscendDeviceBackend, CpuDeviceBackend, NvidiaDeviceBackend
+from parascale.runtime.evidence import attach_runtime_evidence
 
 
 def register_doctor_parser(subparsers: argparse._SubParsersAction) -> None:
@@ -91,10 +92,13 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     if args.strict:
         requirements = ["core", "torch", *requirements]
     payload = build_doctor_payload()
+    payload.setdefault("mode", "doctor")
+    payload.setdefault("runtime_status", "diagnostic")
     if "deepspeed" in requirements:
         payload["deepspeed_runtime"] = inspect_deepspeed_runtime()
     report = evaluate_diagnostics(payload, requirements)
     payload.update(report.to_dict())
+    attach_runtime_evidence(payload)
     emit_json(payload, args.output)
     return 0 if report.ok else 2
 

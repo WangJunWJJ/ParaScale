@@ -53,6 +53,8 @@ def build_runtime_evidence(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "resolved_config": artifacts.get("resolved_config"),
                 "deepspeed_final_config": artifacts.get("deepspeed_final_config"),
             }
+    if isinstance(payload.get("device_backends"), list):
+        evidence["devices"] = _device_backend_evidence(payload["device_backends"])
     if payload.get("mode") == "benchmark_matrix":
         evidence["benchmark_matrix"] = _benchmark_matrix_evidence(payload)
         tuner = _matrix_tuner_evidence(payload)
@@ -114,6 +116,32 @@ def _matrix_tuner_evidence(payload: Dict[str, Any]) -> Dict[str, Any] | None:
         "available": bool(explanations),
         "explanation_count": len(explanations),
         "decision_count": decision_count,
+    }
+
+
+def _device_backend_evidence(backends: list[Any]) -> Dict[str, Any]:
+    accelerators = []
+    available_accelerators = []
+    device_counts: Dict[str, int] = {}
+    peak_memory: Dict[str, int] = {}
+    for backend in backends:
+        if not isinstance(backend, dict):
+            continue
+        accelerator = str(backend.get("accelerator", "unknown"))
+        accelerators.append(accelerator)
+        if bool(backend.get("available", False)):
+            available_accelerators.append(accelerator)
+        device_counts[accelerator] = int(backend.get("device_count", 0) or 0)
+        memory = backend.get("memory", {})
+        if isinstance(memory, dict):
+            peak_memory[accelerator] = int(
+                memory.get("peak_memory_allocated_bytes", 0) or 0
+            )
+    return {
+        "accelerators": accelerators,
+        "available_accelerators": available_accelerators,
+        "device_counts": device_counts,
+        "peak_memory_allocated_bytes": peak_memory,
     }
 
 
