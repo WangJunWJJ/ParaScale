@@ -4,6 +4,8 @@
 # @Email: wj_xd@foxmail.com
 
 from parascale import InferenceEngine, ServeRequest, ServingEngine
+from parascale.checkpoint import CheckpointManager, CheckpointManifest
+from parascale.runtime.serve_runner import run_serve_from_config
 from parascale.workloads.serving import default_serving_model_registry
 
 
@@ -127,6 +129,60 @@ def test_serving_engine_strict_errors_raise_after_releasing_cache():
 
     assert serving.metrics()["requests_failed"] == 1
     assert serving.metrics()["kv_cache"]["blocks"] == 0
+
+
+def test_serve_runner_uses_serving_engine_for_non_strict_request_errors(
+    tmp_path, monkeypatch
+):
+    class BrokenModel:
+        def generate(self, requests):
+            raise RuntimeError("boom")
+
+    manager = CheckpointManager(str(tmp_path))
+    manifest_path = manager.write_manifest(
+        CheckpointManifest(step=1, backend="native", files=[])
+    )
+    monkeypatch.setattr(
+        "parascale.runtime.serve_runner.build_serving_model_from_checkpoint",
+        lambda *_args, **_kwargs: BrokenModel(),
+    )
+
+    payload = run_serve_from_config(
+        {"serving": {"requests": ["a", "b"]}},
+        checkpoint=str(manifest_path),
+    )
+
+    assert payload["strict_errors"] is False
+    assert payload["result"]["mode"] == "error"
+    assert payload["result"]["ok"] is False
+    assert payload["result"]["outputs"] == [None, None]
+    assert payload["serving_metrics"]["requests_failed"] == 2
+    assert payload["serving_metrics"]["kv_cache"]["blocks"] == 0
+
+
+def test_serve_runner_honors_strict_errors_config(tmp_path, monkeypatch):
+    class BrokenModel:
+        def generate(self, requests):
+            raise RuntimeError("boom")
+
+    manager = CheckpointManager(str(tmp_path))
+    manifest_path = manager.write_manifest(
+        CheckpointManifest(step=1, backend="native", files=[])
+    )
+    monkeypatch.setattr(
+        "parascale.runtime.serve_runner.build_serving_model_from_checkpoint",
+        lambda *_args, **_kwargs: BrokenModel(),
+    )
+
+    try:
+        run_serve_from_config(
+            {"serving": {"requests": ["a"], "strict_errors": True}},
+            checkpoint=str(manifest_path),
+        )
+    except RuntimeError as exc:
+        assert "boom" in str(exc)
+    else:
+        raise AssertionError("strict serving config must raise model errors")
 
 
 def test_default_serving_model_registry_exposes_tiny_loader():
