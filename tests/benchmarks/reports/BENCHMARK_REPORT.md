@@ -45,6 +45,10 @@ python tests/benchmarks/tools/build_benchmark_report.py --report-root tests/benc
 | ascend_matrix | two_docker_2card_b | real_local | n/a | n/a |
 | cross_hardware | rtx4090 | real_local | n/a | n/a |
 | cross_hardware | ascend | real_local | n/a | n/a |
+| a6000_native_ddp_scaling | bucket_4gpu_bf16_bf16_compress_bucket100_b8_w2 | real_local | n/a | n/a |
+| a6000_native_ddp_scaling | bucket_4gpu_bf16_bf16_compress_bucket200_b8_w2 | real_local | n/a | n/a |
+| a6000_native_ddp_scaling | bucket_4gpu_bf16_bf16_compress_bucket25_b8_w2 | real_local | n/a | n/a |
+| a6000_native_ddp_scaling | bucket_4gpu_bf16_bf16_compress_bucket50_b8_w2 | real_local | n/a | n/a |
 | a6000_native_ddp_scaling | data_4gpu_bf16_none_b8_w0 | real_local | n/a | n/a |
 | a6000_native_ddp_scaling | data_4gpu_bf16_none_b8_w2_p2 | real_local | n/a | n/a |
 | a6000_native_ddp_scaling | data_4gpu_bf16_none_b8_w2_p4_persist | real_local | n/a | n/a |
@@ -65,6 +69,9 @@ python tests/benchmarks/tools/build_benchmark_report.py --report-root tests/benc
 | a6000_native_ddp_scaling | scale_4gpu_bf16_none_b8_w2 | real_local | n/a | n/a |
 | a6000_native_ddp_scaling | scale_4gpu_fp16_none_b8_w2 | real_local | n/a | n/a |
 | a6000_native_ddp_scaling | scale_4gpu_fp32_none_b8_w2 | real_local | n/a | n/a |
+| a6000_native_ddp_scaling | topo_4gpu_bf16_bf16_compress_bucket100_cuda0123_b8_w2 | real_local | n/a | n/a |
+| a6000_native_ddp_scaling | topo_4gpu_bf16_bf16_compress_bucket100_cuda0134_b8_w2 | real_local | n/a | n/a |
+| a6000_native_ddp_scaling | topo_4gpu_bf16_bf16_compress_bucket100_cuda1234_b8_w2 | real_local | n/a | n/a |
 
 ## Dual RTX 4090 Validation
 
@@ -135,18 +142,31 @@ python tests/benchmarks/tools/build_benchmark_report.py --report-root tests/benc
 
 | Precision | 1 GPU | 2 GPU | 4 GPU | 1->2 | 2->4 | 1->4 | 4 GPU efficiency |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| fp32 | 108.328 | 109.833 | 166.887 | 1.014x | 1.519x | 1.541x | 0.385 |
-| fp16 | 109.122 | 103.289 | 161.905 | 0.947x | 1.567x | 1.484x | 0.371 |
-| bf16 | 107.664 | 104.758 | 163.892 | 0.973x | 1.564x | 1.522x | 0.381 |
+| fp32 | 106.347 | 108.178 | 166.446 | 1.017x | 1.539x | 1.565x | 0.391 |
+| fp16 | 106.761 | 105.147 | 162.224 | 0.985x | 1.543x | 1.520x | 0.380 |
+| bf16 | 120.904 | 107.386 | 164.346 | 0.888x | 1.530x | 1.359x | 0.340 |
 
 | GPUs | Precision | Hook | Baseline throughput | Hook throughput | Relative |
 | ---: | --- | --- | ---: | ---: | ---: |
-| 2 | bf16 | bf16_compress | 104.758 | 150.030 | 1.432x |
-| 4 | bf16 | bf16_compress | 163.892 | 235.913 | 1.439x |
-| 2 | fp16 | fp16_compress | 103.289 | 141.748 | 1.372x |
-| 4 | fp16 | fp16_compress | 161.905 | 230.336 | 1.423x |
+| 2 | bf16 | bf16_compress | 107.386 | 147.074 | 1.370x |
+| 4 | bf16 | bf16_compress | 164.346 | 242.931 | 1.478x |
+| 2 | fp16 | fp16_compress | 105.147 | 140.377 | 1.335x |
+| 4 | fp16 | fp16_compress | 162.224 | 227.676 | 1.403x |
 
-Best dataloader candidate: `data_4gpu_bf16_none_b8_w2_p2` at 166.495 pairs/s, wait 5.823 ms.
+| Bucket cap MB | Throughput | Relative to default | Dataloader wait ms |
+| ---: | ---: | ---: | ---: |
+| 25 | 232.048 | 0.955x | 6.335 |
+| 50 | 235.256 | 0.968x | 6.534 |
+| 100 | 235.593 | 0.970x | 6.013 |
+| 200 | 228.409 | 0.940x | 6.532 |
+
+| CUDA_VISIBLE_DEVICES | Bucket cap MB | Throughput | Dataloader wait ms |
+| --- | ---: | ---: | ---: |
+| `0,1,2,3` | 100 | 234.117 | 7.136 |
+| `0,1,3,4` | 100 | 262.403 | 6.210 |
+| `1,2,3,4` | 100 | 235.049 | 6.438 |
+
+Best dataloader candidate: `data_4gpu_bf16_none_b8_w2_p2` at 167.074 pairs/s, wait 6.754 ms.
 
 ## Evidence Files
 
