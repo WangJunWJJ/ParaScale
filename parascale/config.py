@@ -88,7 +88,8 @@ class BackendConfig:
     ddp_find_unused_parameters: bool = False
     ddp_gradient_as_bucket_view: bool = True
     ddp_static_graph: bool = False
-    ddp_comm_hook: Literal["none", "fp16_compress", "bf16_compress"] = "none"
+    ddp_comm_hook: Literal["auto", "none", "fp16_compress", "bf16_compress"] = "auto"
+    ddp_bucket_cap_mb: Optional[int] = None
     deepspeed_config: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
@@ -257,6 +258,7 @@ class ParaScaleConfig:
     """Flat runtime view derived from the layered ParaScale schema."""
 
     def __init__(self, **config_dict: Any) -> None:
+        explicit_fields = set(config_dict)
         defaults = LayeredParaScaleConfig().to_flat_dict()
         quantization = config_dict.pop("quantization", defaults.pop("quantization"))
         unknown = sorted(set(config_dict) - set(defaults))
@@ -273,6 +275,7 @@ class ParaScaleConfig:
             self.quantization = QuantizationConfig.from_dict(quantization)
         else:
             raise TypeError("quantization must be a QuantizationConfig or mapping.")
+        self._explicit_fields = frozenset(explicit_fields)
         self._normalize_device_prefetch_aliases()
         self._validate()
 
@@ -359,10 +362,20 @@ class ParaScaleConfig:
                 "transformer_auto, or size_based, got "
                 f"{self.fsdp_activation_checkpointing_policy}"
             )
-        if self.ddp_comm_hook not in ["none", "fp16_compress", "bf16_compress"]:
+        if self.ddp_comm_hook not in [
+            "auto",
+            "none",
+            "fp16_compress",
+            "bf16_compress",
+        ]:
             raise ValueError(
-                "ddp_comm_hook must be none, fp16_compress, or bf16_compress, "
-                f"got {self.ddp_comm_hook}"
+                "ddp_comm_hook must be auto, none, fp16_compress, or "
+                f"bf16_compress, got {self.ddp_comm_hook}"
+            )
+        if self.ddp_bucket_cap_mb is not None and self.ddp_bucket_cap_mb < 1:
+            raise ValueError(
+                "ddp_bucket_cap_mb must be >= 1 when set, got "
+                f"{self.ddp_bucket_cap_mb}"
             )
         if not 0 < self.strategy_memory_margin <= 1:
             raise ValueError(
@@ -445,6 +458,7 @@ class ParaScaleConfig:
             )
 
     def update(self, config_dict: Dict[str, Any]) -> "ParaScaleConfig":
+        explicit_fields = set(getattr(self, "_explicit_fields", frozenset()))
         for key, value in config_dict.items():
             if key == "quantization":
                 if isinstance(value, QuantizationConfig):
@@ -454,6 +468,8 @@ class ParaScaleConfig:
                 continue
             if hasattr(self, key):
                 setattr(self, key, value)
+                explicit_fields.add(key)
+        self._explicit_fields = frozenset(explicit_fields)
         self._normalize_device_prefetch_aliases()
         self._validate()
         return self

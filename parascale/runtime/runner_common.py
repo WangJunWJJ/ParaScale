@@ -62,5 +62,6 @@ def _apply_strategy_plan_to_config(config: ParaScaleConfig, plan: Any) -> None:
         config.zero_offload = plan.zero_offload
     if plan.backend == "native_ddp":
         config.ddp_comm_hook = plan.ddp_comm_hook
+        config.ddp_bucket_cap_mb = plan.ddp_bucket_cap_mb
         config.ddp_gradient_as_bucket_view = plan.ddp_gradient_as_bucket_view
         config.ddp_static_graph = plan.ddp_static_graph

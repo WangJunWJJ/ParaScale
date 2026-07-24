@@ -108,6 +108,25 @@ def test_native_backend_places_model_on_resolved_accelerator_without_torch(monke
     assert placed is model
     assert model.moved_to == "cuda:1"
 
+
+def test_native_ddp_backend_builds_bucket_cap_kwargs_without_torch():
+    from parascale.config import ParaScaleConfig
+    from parascale.runtime.backends.native import NativeDdpTrainingBackend
+
+    config = ParaScaleConfig(
+        training_backend="native_ddp",
+        ddp_bucket_cap_mb=100,
+        ddp_gradient_as_bucket_view=True,
+        ddp_static_graph=True,
+    )
+    backend = NativeDdpTrainingBackend(config=config)
+
+    kwargs = backend._ddp_common_kwargs()
+
+    assert kwargs["bucket_cap_mb"] == 100
+    assert kwargs["gradient_as_bucket_view"] is True
+    assert kwargs["static_graph"] is True
+
 def test_ascend_backend_prepares_nested_batch_for_npu_without_torch():
     from parascale.runtime.backends.ascend_native import AscendNativeTrainingBackend
 

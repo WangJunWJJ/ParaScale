@@ -185,7 +185,11 @@ def build_strategy_plan(
         checkpoint_policy = "rank0_file"
         fsdp_state_dict_type = get_value(config, "fsdp_state_dict_type", "full")
 
-    ddp_comm_hook = str(get_value(config, "ddp_comm_hook", "none") or "none")
+    ddp_comm_hook = str(get_value(config, "ddp_comm_hook", "auto") or "auto")
+    ddp_comm_hook_explicit = "ddp_comm_hook" in set(
+        getattr(config, "_explicit_fields", frozenset())
+    )
+    ddp_bucket_cap_mb = get_value(config, "ddp_bucket_cap_mb", None)
     ddp_gradient_as_bucket_view = bool(
         get_value(config, "ddp_gradient_as_bucket_view", True)
     )
@@ -194,7 +198,14 @@ def build_strategy_plan(
         ddp_gradient_as_bucket_view = True
         if task_type == "multimodal" or multimodal_family:
             ddp_static_graph = True
-            if ddp_comm_hook == "none":
+            if ddp_comm_hook == "auto":
+                hook_plan = recommend_ddp_hook(
+                    precision=precision,
+                    task_type=task_type,
+                    model_family=model_family,
+                )
+                ddp_comm_hook = hook_plan.hook
+            elif ddp_comm_hook == "none" and not ddp_comm_hook_explicit:
                 hook_plan = recommend_ddp_hook(
                     precision=precision,
                     task_type=task_type,
@@ -206,9 +217,13 @@ def build_strategy_plan(
                     f"Enabled {ddp_comm_hook} for native-DDP based on verified CLIP/DataComp benchmark policy."
                 )
         elif task_type == "vision" or vision_family:
+            if ddp_comm_hook == "auto":
+                ddp_comm_hook = "none"
             reasons.append(
                 "Kept native-DDP communication hook disabled for detection by default until a detection-specific hook benchmark proves a win."
             )
+        elif ddp_comm_hook == "auto":
+            ddp_comm_hook = "none"
 
     requested_tp = int(get_value(config, "tensor_parallel_size", 1) or 1)
     requested_pp = int(get_value(config, "pipeline_parallel_size", 1) or 1)
@@ -295,9 +310,12 @@ def build_strategy_plan(
         gradient_accumulation_steps=gradient_accumulation_steps,
         trainable_ratio=trainable_ratio,
         dataloader_wait_ms=0.0,
+        bucket_cap_mb=ddp_bucket_cap_mb,
     ).to_dict()
     if backend == "native_ddp" and ddp_comm_hook != "none":
         communication_plan["ddp_hook"] = ddp_comm_hook
+    elif backend == "native_ddp":
+        communication_plan["ddp_hook"] = "none"
 
     return StrategyPlan(
         backend=backend,
@@ -309,6 +327,7 @@ def build_strategy_plan(
         precision=precision,
         fsdp_state_dict_type=fsdp_state_dict_type,
         ddp_comm_hook=ddp_comm_hook,
+        ddp_bucket_cap_mb=ddp_bucket_cap_mb,
         ddp_gradient_as_bucket_view=ddp_gradient_as_bucket_view,
         ddp_static_graph=ddp_static_graph,
         activation_checkpointing=activation_checkpointing,
