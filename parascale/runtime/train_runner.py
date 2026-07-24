@@ -22,6 +22,7 @@ from parascale.runtime.lifecycle import (
     model_device,
     validate_distributed_topology,
 )
+from parascale.runtime.evidence import attach_runtime_evidence
 from parascale.runtime.runner_common import (
     _apply_strategy_plan_to_config,
     _section,
@@ -184,7 +185,7 @@ def run_train_from_config(
             manager,
             engine.save_checkpoint(manager),
         )
-    return {
+    return attach_runtime_evidence({
         "mode": "train",
         "dry_run": False,
         "runtime_status": runtime_status,
@@ -208,7 +209,7 @@ def run_train_from_config(
         "resumed_from": resumed_from,
         "strategy_plan": engine.plan().to_dict(),
         "config_artifacts": config_artifacts,
-    }
+    })
 
 def _validate_final_checkpoint_result(
     manager: CheckpointManager,

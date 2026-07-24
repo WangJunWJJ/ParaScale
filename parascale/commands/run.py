@@ -19,6 +19,7 @@ from parascale.runtime.backends.devices import set_current_device
 from parascale.runtime.benchmark_runner import (
     run_benchmark_from_config as _run_benchmark_from_config,
 )
+from parascale.runtime.evidence import attach_runtime_evidence
 from parascale.runtime.inference import InferenceRunner
 from parascale.runtime.lifecycle import destroy_distributed_runtime
 from parascale.runtime.serve_runner import (
@@ -138,7 +139,7 @@ def run_inference_from_config(config_data: Dict[str, Any]) -> Dict[str, Any]:
         batches,
         warmup_steps=int(inference.get("warmup_steps", 1) or 0),
     )
-    return {
+    return attach_runtime_evidence({
         "mode": "infer",
         "dry_run": False,
         "runtime_status": "real_local" if device != "cpu" else "local_cpu",
@@ -146,7 +147,7 @@ def run_inference_from_config(config_data: Dict[str, Any]) -> Dict[str, Any]:
         "task": task,
         "workload": str(inference.get("workload", "clip_synthetic")),
         **payload,
-    }
+    })
 
 
 def _resolve_inference_device(runtime: Dict[str, Any]) -> tuple[str, Any]:
@@ -207,7 +208,7 @@ def build_train_dry_run_payload(config_data: Dict[str, Any]) -> Dict[str, Any]:
     )
     if runtime:
         payload["runtime"] = runtime
-    return payload
+    return attach_runtime_evidence(payload)
 
 
 def build_serve_dry_run_payload(
@@ -233,7 +234,7 @@ def build_serve_dry_run_payload(
         payload["config_sections"] = sorted(config_data.keys())
     if serving:
         payload["serving"] = serving
-    return payload
+    return attach_runtime_evidence(payload)
 
 
 def build_benchmark_dry_run_payload(config_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -258,7 +259,7 @@ def build_benchmark_dry_run_payload(config_data: Dict[str, Any]) -> Dict[str, An
             "resolved_config": resolved_config.to_dict(),
         }
     )
-    return payload
+    return attach_runtime_evidence(payload)
 
 
 def cmd_train(args: argparse.Namespace) -> int:

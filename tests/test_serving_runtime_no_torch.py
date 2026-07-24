@@ -158,6 +158,8 @@ def test_serve_runner_uses_serving_engine_for_non_strict_request_errors(
     assert payload["result"]["outputs"] == [None, None]
     assert payload["serving_metrics"]["requests_failed"] == 2
     assert payload["serving_metrics"]["kv_cache"]["blocks"] == 0
+    assert payload["evidence"]["runtime_status"] == "real_local"
+    assert payload["evidence"]["strict_errors"] is False
 
 
 def test_serve_runner_honors_strict_errors_config(tmp_path, monkeypatch):

@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from parascale.checkpoint import CheckpointManager
+from parascale.runtime.evidence import attach_runtime_evidence
 from parascale.runtime.inference.engine import InferenceEngine
 from parascale.runtime.runner_common import _section
 from parascale.serving import ServeRequest, ServingEngine
@@ -56,7 +57,7 @@ def run_serve_from_config(
     serving_engine = ServingEngine(runtime=engine, strict_errors=strict_errors)
     responses = _run_serving_requests(serving_engine, requests)
     result = _serving_result(responses)
-    return {
+    return attach_runtime_evidence({
         "mode": "serve",
         "dry_run": False,
         "runtime_status": runtime_status,
@@ -68,7 +69,7 @@ def run_serve_from_config(
         "manifest": manifest.to_dict(),
         "result": result,
         "serving_metrics": serving_engine.metrics(),
-    }
+    })
 
 
 def _run_serving_requests(

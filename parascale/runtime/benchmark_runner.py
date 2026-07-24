@@ -12,6 +12,7 @@ from typing import Any, Dict
 
 from parascale.reporting.aggregation import aggregate_stable_metrics
 from parascale.reporting.benchmark import benchmark_result_from_train_payload
+from parascale.runtime.evidence import attach_runtime_evidence
 from parascale.runtime.runner_common import _section
 from parascale.runtime.train_runner import run_train_from_config
 
@@ -35,7 +36,7 @@ def run_benchmark_from_config(config_data: Dict[str, Any]) -> Dict[str, Any]:
     benchmark_result = benchmark_result_from_train_payload(train_payload)
     task_type = _section(config_data, "parascale").get("task_type", "generic")
     workload = str(training.get("workload", "synthetic_regression"))
-    return {
+    return attach_runtime_evidence({
         "mode": "benchmark",
         "dry_run": False,
         "runtime_status": train_payload.get("runtime_status", "real_local"),
@@ -108,7 +109,7 @@ def run_benchmark_from_config(config_data: Dict[str, Any]) -> Dict[str, Any]:
         },
         "config_artifacts": train_payload.get("config_artifacts", {}),
         "train": train_payload,
-    }
+    })
 
 def _build_benchmark_validation_payload(
     config_data: Dict[str, Any],

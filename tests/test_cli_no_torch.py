@@ -165,6 +165,9 @@ def test_cli_train_dry_run_payload_marks_explicit_dry_run():
     assert payload["runtime_status"] == "plan_only"
     assert payload["strategy_plan"]["backend"] == "fsdp"
     assert payload["dataloader_plan"]["batch_sampler"] == "token_budget"
+    assert payload["evidence"]["runtime_status"] == "plan_only"
+    assert payload["evidence"]["capability_level"] == "dry_run"
+    assert payload["evidence"]["resolved_config"]["available"] is True
 
 
 def test_cli_serve_dry_run_payload_accepts_checkpoint():
@@ -177,6 +180,8 @@ def test_cli_serve_dry_run_payload_accepts_checkpoint():
     assert payload["runtime_status"] == "plan_only"
     assert payload["checkpoint"] == "ckpt/manifest.json"
     assert payload["serving"]["host"] == "127.0.0.1"
+    assert payload["evidence"]["runtime_status"] == "plan_only"
+    assert payload["evidence"]["mock"] is False
 
 
 def test_cli_checkpoint_validation_payload_accepts_manifest_path():
@@ -247,6 +252,8 @@ def test_cli_benchmark_dry_run_payload_exposes_expected_metrics():
     assert payload["runtime_status"] == "plan_only"
     assert "tokens_per_second" in payload["metrics"]
     assert "images_per_second" in payload["metrics"]
+    assert payload["evidence"]["runtime_status"] == "plan_only"
+    assert payload["evidence"]["resolved_config"]["available"] is True
 
 
 def test_cli_train_dry_run_writes_json():
@@ -385,6 +392,7 @@ def test_infer_command_runs_synthetic_clip_and_yolo_without_torch():
     assert clip_payload["metrics"]["image_text_pairs"] == 2
     assert clip_payload["measurement_window"]["warmup_steps_requested"] == 1
     assert clip_payload["measurement_window"]["measured_batches"] == 1
+    assert clip_payload["evidence"]["measurement_window"]["measured_batches"] == 1
     assert yolo_payload["task"] == "vision_detection"
     assert yolo_payload["metrics"]["images"] == 2
     assert json.dumps(yolo_payload)
