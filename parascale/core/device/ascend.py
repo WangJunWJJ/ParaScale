@@ -77,8 +77,8 @@ class AscendDeviceBackend(DeviceBackend):
         if not torch_npu_available:
             return False, 0
         try:
-            import torch_npu  # noqa: F401
             import torch
+            import torch_npu  # noqa: F401
 
             npu = getattr(torch, "npu", None)
             if npu is None:

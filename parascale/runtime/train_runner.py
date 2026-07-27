@@ -15,6 +15,7 @@ from typing import Any, Dict
 from parascale.checkpoint import CheckpointManager
 from parascale.config import ParaScaleConfig
 from parascale.optimizers.spec import OptimizerSpec
+from parascale.runtime.evidence import attach_runtime_evidence
 from parascale.runtime.lifecycle import (
     distributed_rank,
     initialize_distributed_for_backend,
@@ -22,7 +23,6 @@ from parascale.runtime.lifecycle import (
     model_device,
     validate_distributed_topology,
 )
-from parascale.runtime.evidence import attach_runtime_evidence
 from parascale.runtime.runner_common import (
     _apply_strategy_plan_to_config,
     _section,
