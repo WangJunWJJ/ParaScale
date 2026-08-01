@@ -50,6 +50,30 @@ def test_communication_plan_prefers_bf16_hook_for_multimodal_without_torch():
     assert hook.hook == "bf16_compress"
 
 
+def test_communication_plan_prefers_fp16_hook_for_clip_without_torch():
+    hook = recommend_ddp_hook(
+        precision="fp16",
+        task_type="multimodal",
+        model_family="clip",
+    )
+
+    assert hook.hook == "fp16_compress"
+
+
+def test_communication_plan_carries_bucket_cap_without_torch():
+    plan = build_communication_plan(
+        backend="native_ddp",
+        precision="bf16",
+        task_type="multimodal",
+        model_family="clip",
+        bucket_cap_mb=100,
+    )
+
+    assert plan.ddp_hook == "bf16_compress"
+    assert plan.bucket_cap_mb == 100
+    assert plan.evidence["bucket_cap_mb"] == 100
+
+
 def test_communication_plan_detects_adapter_only_sync_without_torch():
     plan = build_communication_plan(
         backend="native_ddp",

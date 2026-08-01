@@ -23,6 +23,55 @@ python tests/benchmarks/tools/build_benchmark_report.py --report-root tests/benc
 | Ascend parallel matrix | passed | Ascend 910B4 | `quay.io/ascend/llamafactory:latest-npu-a2` | [ascend_parallel_matrix/summary.json](ascend_parallel_matrix/summary.json) |
 | Cross-hardware CLIP DataComp | passed | multiple | `n/a` | [cross_hardware_clip_datacomp/summary.json](cross_hardware_clip_datacomp/summary.json) |
 | RTX 4090 precision comparison | recorded | dual RTX 4090D 24GB | `parascale-ci:cu121-torch24` | [rtx4090_clip_precision_datacomp/summary.json](rtx4090_clip_precision_datacomp/summary.json) |
+| A6000 native-DDP scaling | passed | 5x RTX A6000, measured with 1/2/4 visible GPUs | `parascale-ci:a6000-cu126-torch25` | [a6000_native_ddp_scaling/summary.json](a6000_native_ddp_scaling/summary.json) |
+
+## Evidence Quality
+
+| Suite | Run | Runtime status | Capability level | Warmup/measured |
+| --- | --- | --- | --- | ---: |
+| dual_4090 | clip_deepspeed | real_local | local_native_clip_contrastive_datacomp_wds | n/a |
+| dual_4090 | clip_fsdp | real_local | local_native_clip_contrastive_datacomp_wds | n/a |
+| dual_4090 | clip_native_ddp | real_local | local_native_clip_contrastive_datacomp_wds | n/a |
+| dual_4090 | ground_native | real_local | local_native_real_torch | n/a |
+| dual_4090 | vlm_native_ddp | real_local | local_native_vlm_lora_synthetic | n/a |
+| dual_4090 | yolo_proxy_native | real_local | local_native_real_torch | n/a |
+| ascend_validation | doctor | diagnostic | n/a | n/a |
+| ascend_validation | tiny_hccl | synthetic | n/a | n/a |
+| ascend_validation | tiny_single | synthetic | n/a | n/a |
+| ascend_matrix | single_docker_2card | real_local | n/a | n/a |
+| ascend_matrix | two_docker_1card_a | real_local | n/a | n/a |
+| ascend_matrix | two_docker_1card_b | real_local | n/a | n/a |
+| ascend_matrix | two_docker_2card_a | real_local | n/a | n/a |
+| ascend_matrix | two_docker_2card_b | real_local | n/a | n/a |
+| cross_hardware | rtx4090 | real_local | n/a | n/a |
+| cross_hardware | ascend | real_local | n/a | n/a |
+| a6000_native_ddp_scaling | bucket_4gpu_bf16_bf16_compress_bucket100_b8_w2 | real_local | n/a | n/a |
+| a6000_native_ddp_scaling | bucket_4gpu_bf16_bf16_compress_bucket200_b8_w2 | real_local | n/a | n/a |
+| a6000_native_ddp_scaling | bucket_4gpu_bf16_bf16_compress_bucket25_b8_w2 | real_local | n/a | n/a |
+| a6000_native_ddp_scaling | bucket_4gpu_bf16_bf16_compress_bucket50_b8_w2 | real_local | n/a | n/a |
+| a6000_native_ddp_scaling | data_4gpu_bf16_none_b8_w0 | real_local | n/a | n/a |
+| a6000_native_ddp_scaling | data_4gpu_bf16_none_b8_w2_p2 | real_local | n/a | n/a |
+| a6000_native_ddp_scaling | data_4gpu_bf16_none_b8_w2_p4_persist | real_local | n/a | n/a |
+| a6000_native_ddp_scaling | data_4gpu_bf16_none_b8_w4_p2 | real_local | n/a | n/a |
+| a6000_native_ddp_scaling | data_4gpu_bf16_none_b8_w4_p4_persist | real_local | n/a | n/a |
+| a6000_native_ddp_scaling | data_4gpu_bf16_none_b8_w8_p2 | real_local | n/a | n/a |
+| a6000_native_ddp_scaling | data_4gpu_bf16_none_b8_w8_p4_persist | real_local | n/a | n/a |
+| a6000_native_ddp_scaling | hook_2gpu_bf16_bf16_compress_b8_w2 | real_local | n/a | n/a |
+| a6000_native_ddp_scaling | hook_2gpu_fp16_fp16_compress_b8_w2 | real_local | n/a | n/a |
+| a6000_native_ddp_scaling | hook_4gpu_bf16_bf16_compress_b8_w2 | real_local | n/a | n/a |
+| a6000_native_ddp_scaling | hook_4gpu_fp16_fp16_compress_b8_w2 | real_local | n/a | n/a |
+| a6000_native_ddp_scaling | scale_1gpu_bf16_none_b8_w2 | real_local | n/a | n/a |
+| a6000_native_ddp_scaling | scale_1gpu_fp16_none_b8_w2 | real_local | n/a | n/a |
+| a6000_native_ddp_scaling | scale_1gpu_fp32_none_b8_w2 | real_local | n/a | n/a |
+| a6000_native_ddp_scaling | scale_2gpu_bf16_none_b8_w2 | real_local | n/a | n/a |
+| a6000_native_ddp_scaling | scale_2gpu_fp16_none_b8_w2 | real_local | n/a | n/a |
+| a6000_native_ddp_scaling | scale_2gpu_fp32_none_b8_w2 | real_local | n/a | n/a |
+| a6000_native_ddp_scaling | scale_4gpu_bf16_none_b8_w2 | real_local | n/a | n/a |
+| a6000_native_ddp_scaling | scale_4gpu_fp16_none_b8_w2 | real_local | n/a | n/a |
+| a6000_native_ddp_scaling | scale_4gpu_fp32_none_b8_w2 | real_local | n/a | n/a |
+| a6000_native_ddp_scaling | topo_4gpu_bf16_bf16_compress_bucket100_cuda0123_b8_w2 | real_local | n/a | n/a |
+| a6000_native_ddp_scaling | topo_4gpu_bf16_bf16_compress_bucket100_cuda0134_b8_w2 | real_local | n/a | n/a |
+| a6000_native_ddp_scaling | topo_4gpu_bf16_bf16_compress_bucket100_cuda1234_b8_w2 | real_local | n/a | n/a |
 
 ## Dual RTX 4090 Validation
 
@@ -84,6 +133,41 @@ python tests/benchmarks/tools/build_benchmark_report.py --report-root tests/benc
 | bf16 | native_ddp | 131.603 | 1.695x | 118.955 | 2.801256 | 3.474 | existing full validation |
 | fp16 | native_ddp | 79.593 | 1.025x | 198.657 | 2.649531 | 3.446 | strict rerun |
 
+## A6000 Native-DDP Scaling
+
+- Dataset: `/dataset/datacomp_subsets/final/datacomp_10k_wds`
+- Model: `clip_medium`
+- Steps: 120
+- Warmup steps: 20
+
+| Precision | 1 GPU | 2 GPU | 4 GPU | 1->2 | 2->4 | 1->4 | 4 GPU efficiency |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| fp32 | 106.347 | 108.178 | 166.446 | 1.017x | 1.539x | 1.565x | 0.391 |
+| fp16 | 106.761 | 105.147 | 162.224 | 0.985x | 1.543x | 1.520x | 0.380 |
+| bf16 | 120.904 | 107.386 | 164.346 | 0.888x | 1.530x | 1.359x | 0.340 |
+
+| GPUs | Precision | Hook | Baseline throughput | Hook throughput | Relative |
+| ---: | --- | --- | ---: | ---: | ---: |
+| 2 | bf16 | bf16_compress | 107.386 | 147.074 | 1.370x |
+| 4 | bf16 | bf16_compress | 164.346 | 242.931 | 1.478x |
+| 2 | fp16 | fp16_compress | 105.147 | 140.377 | 1.335x |
+| 4 | fp16 | fp16_compress | 162.224 | 227.676 | 1.403x |
+
+| Bucket cap MB | Throughput | Relative to default | Dataloader wait ms |
+| ---: | ---: | ---: | ---: |
+| 25 | 232.048 | 0.955x | 6.335 |
+| 50 | 235.256 | 0.968x | 6.534 |
+| 100 | 235.593 | 0.970x | 6.013 |
+| 200 | 228.409 | 0.940x | 6.532 |
+
+| CUDA_VISIBLE_DEVICES | Bucket cap MB | Throughput | Dataloader wait ms |
+| --- | ---: | ---: | ---: |
+| `0,1,2,3` | 100 | 234.117 | 7.136 |
+| `0,1,3,4` | 100 | 262.403 | 6.210 |
+| `1,2,3,4` | 100 | 235.049 | 6.438 |
+
+Best dataloader candidate: `data_4gpu_bf16_none_b8_w2_p2` at 167.074 pairs/s, wait 6.754 ms.
+
 ## Evidence Files
 
 | Suite | Summary | Config snapshots |
@@ -94,3 +178,4 @@ python tests/benchmarks/tools/build_benchmark_report.py --report-root tests/benc
 | ascend_matrix | [ascend_parallel_matrix/summary.json](ascend_parallel_matrix/summary.json) | n/a |
 | cross_hardware | [cross_hardware_clip_datacomp/summary.json](cross_hardware_clip_datacomp/summary.json) | [cross_hardware_clip_datacomp/ascend/ascend_clip_datacomp_native_ddp_fp32.config.json](cross_hardware_clip_datacomp/ascend/ascend_clip_datacomp_native_ddp_fp32.config.json), [cross_hardware_clip_datacomp/rtx4090/rtx4090_clip_datacomp_native_ddp_fp32.config.json](cross_hardware_clip_datacomp/rtx4090/rtx4090_clip_datacomp_native_ddp_fp32.config.json) |
 | rtx4090_precision | [rtx4090_clip_precision_datacomp/summary.json](rtx4090_clip_precision_datacomp/summary.json) | [rtx4090_clip_precision_datacomp/fp16/rtx4090_clip_datacomp_native_ddp_fp16.config.json](rtx4090_clip_precision_datacomp/fp16/rtx4090_clip_datacomp_native_ddp_fp16.config.json) |
+| a6000_native_ddp_scaling | [a6000_native_ddp_scaling/summary.json](a6000_native_ddp_scaling/summary.json) | n/a |

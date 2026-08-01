@@ -57,12 +57,15 @@ def test_benchmark_matrix_dry_run_generates_unified_commands():
     )
 
     assert rc == 0
-    payload = output.read_text(encoding="utf-8")
-    assert '"mode": "benchmark_matrix"' in payload
-    assert '"scenario": "vlm-lora-hf-clip"' in payload
-    assert "torchrun" in payload
-    assert "native_ddp" in payload
-    assert "fsdp" in payload
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    payload_text = json.dumps(payload, ensure_ascii=False)
+    assert payload["mode"] == "benchmark_matrix"
+    assert payload["scenario"] == "vlm-lora-hf-clip"
+    assert payload["evidence"]["runtime_status"] == "plan_only"
+    assert payload["evidence"]["benchmark_matrix"]["planned_commands"] == 2
+    assert "torchrun" in payload_text
+    assert "native_ddp" in payload_text
+    assert "fsdp" in payload_text
     config_text = (case_dir / "runs" / "hf_clip_lora_native_ddp.config.json").read_text(
         encoding="utf-8"
     )

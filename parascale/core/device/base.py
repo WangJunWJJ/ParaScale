@@ -42,6 +42,12 @@ class DeviceBackend:
     def reset_peak_memory_stats(self) -> None:
         return None
 
+    def memory_stats(self) -> Dict[str, int]:
+        return {
+            "memory_allocated_bytes": int(self.memory_allocated()),
+            "peak_memory_allocated_bytes": int(self.max_memory_allocated()),
+        }
+
     def supports_bf16(self) -> bool:
         return False
 
@@ -61,6 +67,8 @@ class DeviceBackend:
             "available": self.available,
             "supports_bf16": self.supports_bf16(),
             "supports_flash_attention": self.supports_flash_attention(),
+            "device_count": 1 if self.available else 0,
+            "memory": self.memory_stats(),
         }
 
 

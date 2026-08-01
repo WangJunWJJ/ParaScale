@@ -31,6 +31,7 @@ class ServingEngine:
     requests_failed: int = 0
     batches_completed: int = 0
     total_latency_ms: float = 0.0
+    strict_errors: bool = False
 
     def submit(self, request: ServeRequest) -> None:
         self.scheduler.submit(request)
@@ -83,6 +84,8 @@ class ServingEngine:
             self.total_latency_ms += elapsed_ms
             for request in batch:
                 self.kv_cache.release(request.request_id)
+            if self.strict_errors:
+                raise
             return [
                 ServeResponse(
                     request_id=request.request_id,

@@ -111,6 +111,34 @@ def test_cli_plan_command_defaults_to_summary_and_keeps_json_flag(capsys):
     assert payload["strategy_plan"]["backend"] == "fsdp"
 
 
+def test_cli_train_dry_run_output_refreshes_evidence_config_artifacts():
+    tmp_path = _workspace_tmp("cli_train_dry_run_evidence")
+    config_path = tmp_path / "config.json"
+    output_path = tmp_path / "train.json"
+    config_path.write_text(json.dumps(_sample_config()), encoding="utf-8")
+
+    assert (
+        main(
+            [
+                "train",
+                "--config",
+                str(config_path),
+                "--dry-run",
+                "--output",
+                str(output_path),
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+
+    resolved_path = Path(payload["config_artifacts"]["resolved_config"])
+    assert resolved_path.is_file()
+    assert payload["evidence"]["config_artifacts"]["resolved_config"] == str(
+        resolved_path
+    )
+
+
 def test_load_config_file_accepts_utf8_bom_json():
     tmp_path = _workspace_tmp("cli_utf8_bom")
     config_path = tmp_path / "config.json"
@@ -165,6 +193,9 @@ def test_cli_train_dry_run_payload_marks_explicit_dry_run():
     assert payload["runtime_status"] == "plan_only"
     assert payload["strategy_plan"]["backend"] == "fsdp"
     assert payload["dataloader_plan"]["batch_sampler"] == "token_budget"
+    assert payload["evidence"]["runtime_status"] == "plan_only"
+    assert payload["evidence"]["capability_level"] == "dry_run"
+    assert payload["evidence"]["resolved_config"]["available"] is True
 
 
 def test_cli_serve_dry_run_payload_accepts_checkpoint():
@@ -177,6 +208,8 @@ def test_cli_serve_dry_run_payload_accepts_checkpoint():
     assert payload["runtime_status"] == "plan_only"
     assert payload["checkpoint"] == "ckpt/manifest.json"
     assert payload["serving"]["host"] == "127.0.0.1"
+    assert payload["evidence"]["runtime_status"] == "plan_only"
+    assert payload["evidence"]["mock"] is False
 
 
 def test_cli_checkpoint_validation_payload_accepts_manifest_path():
@@ -247,6 +280,8 @@ def test_cli_benchmark_dry_run_payload_exposes_expected_metrics():
     assert payload["runtime_status"] == "plan_only"
     assert "tokens_per_second" in payload["metrics"]
     assert "images_per_second" in payload["metrics"]
+    assert payload["evidence"]["runtime_status"] == "plan_only"
+    assert payload["evidence"]["resolved_config"]["available"] is True
 
 
 def test_cli_train_dry_run_writes_json():
@@ -383,9 +418,43 @@ def test_infer_command_runs_synthetic_clip_and_yolo_without_torch():
     assert clip_payload["mode"] == "infer"
     assert clip_payload["task"] == "multimodal_embedding"
     assert clip_payload["metrics"]["image_text_pairs"] == 2
+    assert clip_payload["measurement_window"]["warmup_steps_requested"] == 1
+    assert clip_payload["measurement_window"]["measured_batches"] == 1
+    assert clip_payload["evidence"]["measurement_window"]["measured_batches"] == 1
     assert yolo_payload["task"] == "vision_detection"
     assert yolo_payload["metrics"]["images"] == 2
     assert json.dumps(yolo_payload)
+
+
+def test_cli_infer_output_writes_resolved_config_artifact():
+    tmp_path = _workspace_tmp("cli_infer_evidence")
+    config_path = tmp_path / "config.json"
+    output_path = tmp_path / "infer.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "runtime": {"accelerator": "cpu"},
+                "inference": {
+                    "workload": "clip_synthetic",
+                    "batch_size": 1,
+                    "num_batches": 1,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        main(["infer", "--config", str(config_path), "--output", str(output_path)])
+        == 0
+    )
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+
+    resolved_path = Path(payload["config_artifacts"]["resolved_config"])
+    assert resolved_path.is_file()
+    assert payload["evidence"]["config_artifacts"]["run_dir"] == str(
+        output_path.parent / output_path.stem
+    )
 
 
 def test_cli_smoke_report_skip_real_builds_doctor_and_plan_only():

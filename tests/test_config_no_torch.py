@@ -34,6 +34,8 @@ def test_backend_config_roundtrip_without_torch():
         fsdp_state_dict_type="sharded",
         fsdp_activation_checkpointing_policy="transformer_auto",
         fsdp_checkpoint_module_classes=["Qwen2DecoderLayer"],
+        ddp_comm_hook="auto",
+        ddp_bucket_cap_mb=100,
         allow_world_size_change_on_resume=True,
     )
 
@@ -62,7 +64,20 @@ def test_backend_config_roundtrip_without_torch():
     assert restored.fsdp_state_dict_type == "sharded"
     assert restored.fsdp_activation_checkpointing_policy == "transformer_auto"
     assert restored.fsdp_checkpoint_module_classes == ["Qwen2DecoderLayer"]
+    assert restored.ddp_comm_hook == "auto"
+    assert restored.ddp_bucket_cap_mb == 100
     assert restored.allow_world_size_change_on_resume is True
+
+
+def test_config_rejects_invalid_ddp_bucket_cap_without_torch():
+    from parascale.config import ParaScaleConfig
+
+    try:
+        ParaScaleConfig(ddp_bucket_cap_mb=0)
+    except ValueError as exc:
+        assert "ddp_bucket_cap_mb" in str(exc)
+    else:
+        raise AssertionError("expected invalid ddp_bucket_cap_mb to fail")
 
 def test_config_accepts_ascend_native_backend_without_torch():
     from parascale.config import ParaScaleConfig

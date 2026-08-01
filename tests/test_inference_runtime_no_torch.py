@@ -54,6 +54,76 @@ def test_inference_runner_moves_nested_batch_and_reports_metrics_without_torch()
     assert payload["metrics"]["latency_ms_avg"] >= 0.0
 
 
+def test_inference_runner_excludes_warmup_batches_from_measured_outputs():
+    from parascale.runtime.inference.runner import InferenceRunner
+
+    class FakeModel:
+        def __init__(self):
+            self.seen = []
+
+        def eval(self):
+            return self
+
+        def predict(self, batch):
+            self.seen.append(batch["id"])
+            return {"id": batch["id"], "num_images": batch["num_images"]}
+
+    def batches():
+        for index in range(3):
+            yield {"id": index, "num_images": 1}
+
+    model = FakeModel()
+    runner = InferenceRunner(
+        model=model,
+        task="vision_detection",
+        device="cpu",
+        memory_getter=lambda: None,
+    )
+
+    payload = runner.run(batches(), warmup_steps=1)
+
+    assert model.seen == [0, 1, 2]
+    assert [item["id"] for item in payload["outputs"]] == [1, 2]
+    assert payload["metrics"]["requests"] == 2
+    assert payload["metrics"]["images"] == 2
+    assert payload["measurement_window"] == {
+        "warmup_steps_requested": 1,
+        "warmup_steps_effective": 1,
+        "measured_batches": 2,
+        "warmup_excluded_from_metrics": True,
+    }
+
+
+def test_inference_runner_keeps_one_measured_batch_when_warmup_covers_finite_input():
+    from parascale.runtime.inference.runner import InferenceRunner
+
+    class FakeModel:
+        def eval(self):
+            return self
+
+        def predict(self, batch):
+            return {"id": batch["id"], "num_images": batch["num_images"]}
+
+    runner = InferenceRunner(
+        model=FakeModel(),
+        task="vision_detection",
+        device="cpu",
+        memory_getter=lambda: None,
+    )
+
+    payload = runner.run([{"id": 0, "num_images": 2}], warmup_steps=1)
+
+    assert payload["outputs"] == [{"id": 0, "num_images": 2}]
+    assert payload["metrics"]["requests"] == 1
+    assert payload["metrics"]["images"] == 2
+    assert payload["measurement_window"] == {
+        "warmup_steps_requested": 1,
+        "warmup_steps_effective": 0,
+        "measured_batches": 1,
+        "warmup_excluded_from_metrics": False,
+    }
+
+
 def test_synthetic_clip_and_yolo_inference_adapters_are_generic_without_torch():
     from parascale.workloads.inference import build_inference_components
 

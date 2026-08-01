@@ -25,6 +25,7 @@ class StrategyPlan:
     precision: str = "fp32"
     fsdp_state_dict_type: str = "full"
     ddp_comm_hook: str = "none"
+    ddp_bucket_cap_mb: Optional[int] = None
     ddp_gradient_as_bucket_view: bool = True
     ddp_static_graph: bool = False
     activation_checkpointing: bool = False
@@ -65,6 +66,7 @@ class StrategyPlan:
             "precision": self.precision,
             "fsdp_state_dict_type": self.fsdp_state_dict_type,
             "ddp_comm_hook": self.ddp_comm_hook,
+            "ddp_bucket_cap_mb": self.ddp_bucket_cap_mb,
             "ddp_gradient_as_bucket_view": self.ddp_gradient_as_bucket_view,
             "ddp_static_graph": self.ddp_static_graph,
             "activation_checkpointing": self.activation_checkpointing,

@@ -21,6 +21,7 @@ def build_communication_plan(
     gradient_accumulation_steps: int = 1,
     trainable_ratio: float | None = None,
     dataloader_wait_ms: float = 0.0,
+    bucket_cap_mb: int | None = None,
 ) -> CommunicationPlan:
     backend = str(backend or "native")
     reasons: list[str] = []
@@ -49,8 +50,8 @@ def build_communication_plan(
         )
     return CommunicationPlan(
         backend=backend,
-        ddp_hook=hook_plan.hook,
-        bucket_cap_mb=None,
+        ddp_hook=hook_plan.hook if backend == "native_ddp" else "none",
+        bucket_cap_mb=bucket_cap_mb,
         use_no_sync=use_no_sync,
         adapter_only_sync=adapter_only_sync,
         overlap_h2d=overlap_h2d,
@@ -62,5 +63,6 @@ def build_communication_plan(
             "gradient_accumulation_steps": gradient_accumulation_steps,
             "trainable_ratio": trainable_ratio,
             "dataloader_wait_ms": dataloader_wait_ms,
+            "bucket_cap_mb": bucket_cap_mb,
         },
     )

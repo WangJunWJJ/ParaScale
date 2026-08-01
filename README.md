@@ -6,7 +6,7 @@
 
 统一配置、运行计划、数据管线、后端选择、benchmark、checkpoint/resume 与 serving，让 CLIP、VLM LoRA、YOLO、GroundingDINO 等任务可以用同一套口径训练、对比和复现。
 
-[特性](#特性) · [快速开始](#快速开始) · [架构](#架构) · [CLI](#cli) · [Benchmark](#benchmark-与验证) · [测试](#测试) · [文档](#文档)
+[定位](#项目定位) · [特性](#特性) · [快速开始](#快速开始) · [架构](#架构) · [CLI](#cli) · [Benchmark](#benchmark-与验证) · [示例](#示例) · [测试](#测试) · [文档](#文档)
 
 </div>
 
@@ -32,6 +32,18 @@ config -> plan -> train/smoke -> benchmark -> profile/tune -> checkpoint/resume 
 | Ascend / CUDA | 统一 device/backend 边界和配置入口 | CANN/HCCL 或 CUDA/NCCL |
 
 > 当前版本适合架构评估、功能验证和受控训练实验。任何性能结论都必须基于相同硬件、数据、模型、batch budget、精度、warmup 和测量窗口。
+
+### 非目标
+
+ParaScale 当前聚焦“分布式训练控制层”，不是覆盖所有训练范式的全栈训练框架。为了避免能力边界被误读，当前版本明确不以以下目标为主：
+
+| 非目标 | 说明 |
+| --- | --- |
+| 替代 DeepSpeed | DeepSpeed 仍是 ZeRO、offload、显存缩放和成熟大模型后端的重要选择。ParaScale 负责统一配置、选择、验证和报告，不重新实现 DeepSpeed 的核心后端能力。 |
+| 替代 PyTorch DDP/FSDP | native DDP 和 FSDP 是 ParaScale 调度和对比的底层执行后端。ParaScale 不替代 PyTorch 分布式 API，而是在其上组织策略、证据和 checkpoint/resume 闭环。 |
+| 通用 RL / 具身智能框架 | 当前没有内置 rollout、replay buffer、environment step、actor-learner 或 PPO/SAC 等在线 RL 抽象。离线 imitation learning 可以通过普通 `model + dataloader + loss_fn` adapter 接入。 |
+| 超大规模 Megatron 替代品 | ParaScale 不提供 Megatron-LM 级别的 tensor/pipeline parallel 预训练系统、IndexedDataset、sequence packing 和多机千卡调度能力。超大规模 LLM 预训练应优先使用 Megatron/NeMo 等成熟系统。 |
+| 性能万能加速器 | ParaScale 只在同硬件、同数据、同模型、同 batch budget、同精度和同测量窗口下比较性能，不承诺某个后端在所有任务上更快。 |
 
 ## 特性
 
@@ -287,6 +299,8 @@ tests/validation/configs/    长窗口与稳定性验证配置
 
 ## 示例
 
+以下示例分为“本地 quickstart”和“真实训练/benchmark”。真实训练示例依赖对应模型、数据集和硬件环境；如果只想检查配置与启动路径，可以先加 `--dry-run` 或使用 tiny quickstart。
+
 ```bash
 # GPU tiny CLIP 训练
 bash examples/gpu/example_001_clip_tiny_native/run.sh
@@ -302,6 +316,47 @@ bash examples/gpu/example_004_yolo_world_real_inference/run.sh
 bash examples/ascend/example_001_tiny_ascend_native/run.sh
 bash examples/ascend/example_002_tiny_native_ddp_hccl/run.sh
 ```
+
+### 稳定训练与验证示例
+
+| 场景 | 目标 | 推荐入口 |
+| --- | --- | --- |
+| CLIP / DataComp 后端矩阵 | 同口径比较 native DDP、FSDP、DeepSpeed 的功能、吞吐、显存和 dataloader wait | `tests/benchmarks/scripts/run_datacomp_medium_benchmark_matrix.sh` |
+| CLIP / DataComp 直接 PyTorch 对比 | 将 ParaScale native DDP/FSDP/DeepSpeed 与直接 PyTorch DDP/FSDP 训练放在同任务下对比 | `tests/benchmarks/scripts/run_direct_pytorch_clip_comparison.sh` |
+| VLM LoRA 轻量训练 | 验证 LoRA adapter-only 训练、trainable ratio、native DDP 通信策略和 checkpoint 证据 | `tests/benchmarks/scripts/run_vlm_lora_datacomp_native_ddp_smoke.sh` |
+| VLM LoRA 后端预览 | 生成 native DDP、FSDP、DeepSpeed 的后端矩阵启动配置 | `python -m parascale.cli benchmark-matrix --scenario vlm-lora-hf-clip --backends native_ddp fsdp deepspeed --dry-run` |
+| YOLO-World vision smoke | 使用真实检测数据验证 YOLO-World workload adapter、tensor cache 和 checkpoint 路径 | `tests/benchmarks/scripts/run_yolo_world_objects365_official_benchmark_matrix.sh` |
+| GroundingDINO vision smoke | 使用 GroundingDINO phrase/检测样本验证视觉 grounding workload adapter | `python -m parascale.cli benchmark --config tests/benchmarks/configs/benchmark_ground_dino_phrase_official_native.json` |
+
+常用单配置入口：
+
+```bash
+# CLIP/DataComp native DDP
+python -m parascale.cli benchmark \
+  --config tests/benchmarks/configs/benchmark_datacomp_medium_native_ddp.json
+
+# CLIP/DataComp FSDP
+python -m parascale.cli benchmark \
+  --config tests/benchmarks/configs/benchmark_datacomp_medium_fsdp.json
+
+# CLIP/DataComp DeepSpeed
+python -m parascale.cli benchmark \
+  --config tests/benchmarks/configs/benchmark_datacomp_medium_deepspeed.json
+
+# VLM LoRA native DDP
+python -m parascale.cli benchmark \
+  --config tests/benchmarks/configs/benchmark_vlm_lora_datacomp_native_ddp.json
+
+# YOLO-World native DDP
+python -m parascale.cli benchmark \
+  --config tests/benchmarks/configs/benchmark_yolo_world_objects365_official_native_ddp.json
+
+# GroundingDINO native
+python -m parascale.cli benchmark \
+  --config tests/benchmarks/configs/benchmark_ground_dino_objects365_native.json
+```
+
+正式记录性能时，请同步保存配置、模型路径、数据路径、硬件、后端、精度、global batch、warmup、测量窗口、吞吐、峰值显存、`dataloader_wait_ms` 和 checkpoint/resume 状态。统一报告入口为 [tests/benchmarks/reports/BENCHMARK_REPORT.md](tests/benchmarks/reports/BENCHMARK_REPORT.md)。
 
 更多说明：
 

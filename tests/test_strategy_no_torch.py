@@ -137,7 +137,65 @@ def test_auto_strategy_selects_native_ddp_for_clip_benchmark_path():
     assert plan.ddp_comm_hook == "bf16_compress"
     assert plan.ddp_gradient_as_bucket_view is True
     assert plan.ddp_static_graph is True
+    assert plan.communication_plan["ddp_hook"] == "bf16_compress"
     assert plan.validate(2)
+
+
+def test_user_can_disable_native_ddp_comm_hook_with_none():
+    model = ModelProfile(
+        total_params=150_000_000,
+        total_memory=1_200_000_000,
+        num_layers=18,
+        model_type="clip_medium",
+    )
+    hardware = HardwareProfile(
+        num_gpus=2,
+        gpu_memory=24 * GB,
+        available_memory=20 * GB,
+        gpus_per_node=2,
+    )
+    config = ParaScaleConfig(
+        task_type="multimodal",
+        model_family="clip",
+        optimize_for="throughput",
+        training_backend="auto",
+        ddp_comm_hook="none",
+    )
+
+    plan = build_strategy_plan(model, hardware, config)
+
+    assert plan.backend == "native_ddp"
+    assert plan.ddp_comm_hook == "none"
+    assert plan.communication_plan["ddp_hook"] == "none"
+
+
+def test_strategy_plan_carries_native_ddp_bucket_cap():
+    model = ModelProfile(
+        total_params=150_000_000,
+        total_memory=1_200_000_000,
+        num_layers=18,
+        model_type="clip_medium",
+    )
+    hardware = HardwareProfile(
+        num_gpus=4,
+        gpu_memory=48 * GB,
+        available_memory=44 * GB,
+        gpus_per_node=4,
+    )
+    config = ParaScaleConfig(
+        task_type="multimodal",
+        model_family="clip",
+        optimize_for="throughput",
+        training_backend="native_ddp",
+        precision="bf16",
+        ddp_bucket_cap_mb=100,
+    )
+
+    plan = build_strategy_plan(model, hardware, config)
+
+    assert plan.ddp_comm_hook == "bf16_compress"
+    assert plan.ddp_bucket_cap_mb == 100
+    assert plan.communication_plan["bucket_cap_mb"] == 100
 
 
 def test_auto_strategy_selects_native_ddp_for_yolo_without_hook_by_default():

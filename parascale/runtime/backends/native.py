@@ -90,13 +90,7 @@ class NativeDdpTrainingBackend(NativeTrainingBackend):
                 model,
                 device_ids=[self.local_rank],
                 output_device=self.local_rank,
-                find_unused_parameters=bool(
-                    getattr(self.config, "ddp_find_unused_parameters", False)
-                ),
-                gradient_as_bucket_view=bool(
-                    getattr(self.config, "ddp_gradient_as_bucket_view", True)
-                ),
-                static_graph=self._static_graph_enabled(),
+                **self._ddp_common_kwargs(),
             )
             self._register_comm_hook(wrapped)
             return wrapped
@@ -112,13 +106,7 @@ class NativeDdpTrainingBackend(NativeTrainingBackend):
             return wrapped
         wrapped = DistributedDataParallel(
             model,
-            find_unused_parameters=bool(
-                getattr(self.config, "ddp_find_unused_parameters", False)
-            ),
-            gradient_as_bucket_view=bool(
-                getattr(self.config, "ddp_gradient_as_bucket_view", True)
-            ),
-            static_graph=self._static_graph_enabled(),
+            **self._ddp_common_kwargs(),
         )
         self._register_comm_hook(wrapped)
         return wrapped
@@ -127,7 +115,14 @@ class NativeDdpTrainingBackend(NativeTrainingBackend):
         return super().prepare_batch(batch)
 
     def _wrap_npu_ddp(self, ddp_cls: Any, model: Any, device_id: int) -> Any:
-        kwargs = {
+        kwargs = self._ddp_common_kwargs()
+        try:
+            return ddp_cls(model, device_ids=[device_id], **kwargs)
+        except (TypeError, ValueError):
+            return ddp_cls(model, **kwargs)
+
+    def _ddp_common_kwargs(self) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {
             "find_unused_parameters": bool(
                 getattr(self.config, "ddp_find_unused_parameters", False)
             ),
@@ -136,10 +131,10 @@ class NativeDdpTrainingBackend(NativeTrainingBackend):
             ),
             "static_graph": self._static_graph_enabled(),
         }
-        try:
-            return ddp_cls(model, device_ids=[device_id], **kwargs)
-        except (TypeError, ValueError):
-            return ddp_cls(model, **kwargs)
+        bucket_cap_mb = getattr(self.config, "ddp_bucket_cap_mb", None)
+        if bucket_cap_mb is not None:
+            kwargs["bucket_cap_mb"] = int(bucket_cap_mb)
+        return kwargs
 
     def _static_graph_enabled(self) -> bool:
         return (
@@ -149,6 +144,14 @@ class NativeDdpTrainingBackend(NativeTrainingBackend):
 
     def _register_comm_hook(self, model: Any) -> None:
         hook_name = str(getattr(self.config, "ddp_comm_hook", "none") or "none")
+        if hook_name == "auto":
+            from parascale.communication import recommend_ddp_hook
+
+            hook_name = recommend_ddp_hook(
+                precision=str(getattr(self.config, "precision", "fp32")),
+                task_type=str(getattr(self.config, "task_type", "")),
+                model_family=str(getattr(self.config, "model_family", "")),
+            ).hook
         if hook_name == "none":
             return
         try:

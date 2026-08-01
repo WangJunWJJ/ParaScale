@@ -7,6 +7,8 @@
 
 import importlib
 import json
+import sys
+from types import SimpleNamespace
 
 from parascale.cli import main
 
@@ -126,3 +128,72 @@ def test_cli_diagnostic_only_doctor_remains_successful(monkeypatch, tmp_path):
     payload = json.loads(output.read_text(encoding="utf-8"))
     assert payload["ok"] is True
     assert payload["requirements"] == []
+    assert payload["evidence"]["runtime_status"] == "diagnostic"
+
+
+def test_ascend_device_backend_requires_visible_npu(monkeypatch):
+    from parascale.core.device.ascend import AscendDeviceBackend
+
+    original_find_spec = importlib.util.find_spec
+
+    def fake_find_spec(name):
+        if name == "torch_npu":
+            return object()
+        return original_find_spec(name)
+
+    class FakeNpu:
+        @staticmethod
+        def is_available():
+            return True
+
+        @staticmethod
+        def device_count():
+            return 0
+
+    monkeypatch.setattr(importlib.util, "find_spec", fake_find_spec)
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(npu=FakeNpu()))
+    monkeypatch.setitem(sys.modules, "torch_npu", SimpleNamespace())
+
+    backend = AscendDeviceBackend()
+
+    assert backend.available is False
+    assert backend.capability()["device_count"] == 0
+
+
+def test_ascend_device_backend_capability_exposes_memory_stats(monkeypatch):
+    from parascale.core.device.ascend import AscendDeviceBackend
+
+    original_find_spec = importlib.util.find_spec
+
+    def fake_find_spec(name):
+        if name == "torch_npu":
+            return object()
+        return original_find_spec(name)
+
+    class FakeNpu:
+        @staticmethod
+        def is_available():
+            return True
+
+        @staticmethod
+        def device_count():
+            return 1
+
+        @staticmethod
+        def memory_allocated():
+            return 123
+
+        @staticmethod
+        def max_memory_allocated():
+            return 456
+
+    monkeypatch.setattr(importlib.util, "find_spec", fake_find_spec)
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(npu=FakeNpu()))
+    monkeypatch.setitem(sys.modules, "torch_npu", SimpleNamespace())
+
+    backend = AscendDeviceBackend()
+    capability = backend.capability()
+
+    assert capability["device_count"] == 1
+    assert capability["memory"]["memory_allocated_bytes"] == 123
+    assert capability["memory"]["peak_memory_allocated_bytes"] == 456

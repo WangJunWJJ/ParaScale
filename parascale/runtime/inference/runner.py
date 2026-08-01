@@ -44,10 +44,19 @@ class InferenceRunner:
         images = 0
         image_text_pairs = 0
         tokens = 0
-        batch_list = list(batches)
-        for batch in batch_list[: max(0, int(warmup_steps))]:
+        requested_warmup_steps = max(0, int(warmup_steps))
+        effective_warmup_steps = self._effective_warmup_steps(
+            batches,
+            warmup_steps=requested_warmup_steps,
+        )
+        iterator = iter(batches)
+        for _ in range(effective_warmup_steps):
+            try:
+                batch = next(iterator)
+            except StopIteration:
+                break
             self._predict(self._prepare_batch(batch))
-        for batch in batch_list:
+        for batch in iterator:
             prepared = self._prepare_batch(batch)
             start = time.perf_counter()
             output = self._predict(prepared)
@@ -68,12 +77,32 @@ class InferenceRunner:
             tokens=tokens,
         )
         memory.add_peak_memory_metrics(metrics)
+        measurement_window = {
+            "warmup_steps_requested": requested_warmup_steps,
+            "warmup_steps_effective": effective_warmup_steps,
+            "measured_batches": requests,
+            "warmup_excluded_from_metrics": effective_warmup_steps > 0,
+        }
         return {
             "task": self.task,
             "device": self.device,
             "outputs": outputs,
             "metrics": metrics,
+            "measurement_window": measurement_window,
         }
+
+    @staticmethod
+    def _effective_warmup_steps(batches: Iterable[Any], *, warmup_steps: int) -> int:
+        requested = max(0, int(warmup_steps))
+        if requested == 0:
+            return 0
+        try:
+            available = len(batches)  # type: ignore[arg-type]
+        except (TypeError, AttributeError):
+            return requested
+        if int(available) <= 0:
+            return 0
+        return min(requested, max(0, int(available) - 1))
 
     def _prepare_model(self) -> None:
         to_device = getattr(self.model, "to", None)

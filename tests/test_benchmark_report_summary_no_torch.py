@@ -103,6 +103,12 @@ def test_benchmark_report_combines_suite_summaries(tmp_path):
                     "hardware": "dual RTX 4090D",
                     "backend": "native_ddp",
                     "throughput": 10.0,
+                    "runtime_status": "real_local",
+                    "capability_level": "local_native_clip_datacomp",
+                    "measurement_window": {
+                        "warmup_steps_effective": 10,
+                        "measured_batches": 100,
+                    },
                 }
             ],
             "comparisons": [
@@ -128,11 +134,73 @@ def test_benchmark_report_combines_suite_summaries(tmp_path):
             ],
         },
     )
+    _write_json(
+        tmp_path / "a6000_native_ddp_scaling" / "summary.json",
+        {
+            "hardware": "5x RTX A6000",
+            "image": "image-c",
+            "dataset": "datacomp",
+            "model": "clip_medium",
+            "steps": 120,
+            "warmup_steps": 20,
+            "scaling": [
+                {
+                    "precision": "bf16",
+                    "one_gpu_throughput": 100.0,
+                    "two_gpu_throughput": 160.0,
+                    "four_gpu_throughput": 280.0,
+                    "scale_1_to_2": 1.6,
+                    "scale_2_to_4": 1.75,
+                    "scale_1_to_4": 2.8,
+                    "efficiency_1_to_4": 0.7,
+                }
+            ],
+            "hook_comparisons": [
+                {
+                    "gpus": 4,
+                    "precision": "bf16",
+                    "hook": "bf16_compress",
+                    "baseline_throughput": 280.0,
+                    "hook_throughput": 300.0,
+                    "relative_to_none": 1.0714,
+                }
+            ],
+            "bucket_comparisons": [
+                {
+                    "bucket_cap_mb": 100,
+                    "throughput": 310.0,
+                    "relative_to_default": 1.107,
+                    "dataloader_wait_ms": 4.2,
+                }
+            ],
+            "topology_comparisons": [
+                {
+                    "visible_devices": "1,2,3,4",
+                    "bucket_cap_mb": 100,
+                    "throughput": 320.0,
+                    "dataloader_wait_ms": 4.1,
+                }
+            ],
+            "best_dataloader": {
+                "run_id": "data_4gpu_bf16_none_b8_w4_p4_persist",
+                "throughput": 300.0,
+                "dataloader_wait_ms": 4.0,
+            },
+        },
+    )
 
     markdown = build_report_markdown(load_summaries(tmp_path), report_root=tmp_path)
 
     assert "# ParaScale Benchmark Report" in markdown
     assert "Dual RTX 4090 Validation" in markdown
     assert "parascale_native_ddp" in markdown
+    assert "Evidence Quality" in markdown
+    assert "local_native_clip_datacomp" in markdown
+    assert "10/100" in markdown
     assert "Ascend Parallel Matrix" in markdown
     assert "rtx4090_clip_precision_datacomp/summary.json" in markdown
+    assert "A6000 Native-DDP Scaling" in markdown
+    assert "bf16_compress" in markdown
+    assert "CUDA_VISIBLE_DEVICES" in markdown
+    assert "1,2,3,4" in markdown
+    assert "a6000_native_ddp_scaling/summary.json" in markdown

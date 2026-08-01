@@ -15,11 +15,13 @@ from .base import DeviceBackend
 class AscendDeviceBackend(DeviceBackend):
     def __init__(self) -> None:
         torch_npu_available = importlib.util.find_spec("torch_npu") is not None
+        available, device_count = self._inspect_npu_runtime(torch_npu_available)
+        self.device_count = device_count
         super().__init__(
             name="ascend",
             accelerator="npu",
             communication="hccl",
-            available=torch_npu_available,
+            available=available,
         )
 
     def set_device(self, local_rank: int = 0) -> None:
@@ -64,6 +66,32 @@ class AscendDeviceBackend(DeviceBackend):
 
     def supports_bf16(self) -> bool:
         return self.available
+
+    def capability(self):
+        payload = super().capability()
+        payload["device_count"] = int(self.device_count)
+        return payload
+
+    @staticmethod
+    def _inspect_npu_runtime(torch_npu_available: bool) -> tuple[bool, int]:
+        if not torch_npu_available:
+            return False, 0
+        try:
+            import torch
+            import torch_npu  # noqa: F401
+
+            npu = getattr(torch, "npu", None)
+            if npu is None:
+                return False, 0
+            is_available = (
+                bool(npu.is_available()) if hasattr(npu, "is_available") else False
+            )
+            device_count = (
+                int(npu.device_count()) if hasattr(npu, "device_count") else 0
+            )
+            return bool(is_available and device_count > 0), device_count
+        except Exception:
+            return False, 0
 
 
 __all__ = ["AscendDeviceBackend"]

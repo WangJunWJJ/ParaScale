@@ -19,6 +19,7 @@ SUMMARY_FILES = {
     "ascend_matrix": Path("ascend_parallel_matrix/summary.json"),
     "cross_hardware": Path("cross_hardware_clip_datacomp/summary.json"),
     "rtx4090_precision": Path("rtx4090_clip_precision_datacomp/summary.json"),
+    "a6000_native_ddp_scaling": Path("a6000_native_ddp_scaling/summary.json"),
 }
 
 CONFIG_FILES = {
@@ -87,12 +88,14 @@ def build_report_markdown(
         "",
     ]
     lines.extend(_overview_table(summaries))
+    lines.extend(_evidence_quality_section(summaries))
     lines.extend(_dual_4090_section(summaries["dual_4090"]))
     lines.extend(_direct_pytorch_section(summaries["direct_pytorch"]))
     lines.extend(_ascend_validation_section(summaries["ascend_validation"]))
     lines.extend(_ascend_matrix_section(summaries["ascend_matrix"]))
     lines.extend(_cross_hardware_section(summaries["cross_hardware"]))
     lines.extend(_precision_section(summaries["rtx4090_precision"]))
+    lines.extend(_a6000_native_ddp_scaling_section(summaries["a6000_native_ddp_scaling"]))
     lines.extend(_evidence_links(report_root, summaries))
     return "\n".join(lines).rstrip() + "\n"
 
@@ -111,6 +114,7 @@ def _overview_table(summaries: Dict[str, Dict[str, Any]]) -> List[str]:
         "ascend_matrix": "Ascend parallel matrix",
         "cross_hardware": "Cross-hardware CLIP DataComp",
         "rtx4090_precision": "RTX 4090 precision comparison",
+        "a6000_native_ddp_scaling": "A6000 native-DDP scaling",
     }
     for name, label in labels.items():
         summary = summaries[name]
@@ -123,6 +127,59 @@ def _overview_table(summaries: Dict[str, Dict[str, Any]]) -> List[str]:
         )
     lines.append("")
     return lines
+
+
+def _evidence_quality_section(summaries: Dict[str, Dict[str, Any]]) -> List[str]:
+    evidence_rows = list(_evidence_quality_rows(summaries))
+    if not evidence_rows:
+        return []
+    lines = [
+        "## Evidence Quality",
+        "",
+        "| Suite | Run | Runtime status | Capability level | Warmup/measured |",
+        "| --- | --- | --- | --- | ---: |",
+    ]
+    for row in evidence_rows:
+        lines.append(
+            "| {suite} | {run} | {runtime} | {capability} | {window} |".format(
+                suite=row["suite"],
+                run=row["run"],
+                runtime=row["runtime"],
+                capability=row["capability"],
+                window=row["window"],
+            )
+        )
+    lines.append("")
+    return lines
+
+
+def _evidence_quality_rows(
+    summaries: Dict[str, Dict[str, Any]]
+) -> Iterable[Dict[str, str]]:
+    for suite, summary in summaries.items():
+        runs = summary.get("runs", [])
+        if not isinstance(runs, list):
+            continue
+        for index, run in enumerate(runs, start=1):
+            if not isinstance(run, dict):
+                continue
+            capability = run.get("capability_level")
+            runtime = run.get("runtime_status")
+            window = _measurement_window(run.get("measurement_window"))
+            if not any((capability, runtime, window != "n/a")):
+                continue
+            yield {
+                "suite": suite,
+                "run": str(
+                    run.get("run_id")
+                    or run.get("label")
+                    or run.get("scenario")
+                    or index
+                ),
+                "runtime": str(runtime or "n/a"),
+                "capability": str(capability or "n/a"),
+                "window": window,
+            }
 
 
 def _dual_4090_section(summary: Dict[str, Any]) -> List[str]:
@@ -292,6 +349,106 @@ def _precision_section(summary: Dict[str, Any]) -> List[str]:
     return lines
 
 
+def _a6000_native_ddp_scaling_section(summary: Dict[str, Any]) -> List[str]:
+    if summary.get("missing"):
+        return [
+            "## A6000 Native-DDP Scaling",
+            "",
+            "No A6000 native-DDP scaling summary has been recorded yet.",
+            "",
+        ]
+    lines = [
+        "## A6000 Native-DDP Scaling",
+        "",
+        f"- Dataset: `{summary.get('dataset', 'n/a')}`",
+        f"- Model: `{summary.get('model', 'n/a')}`",
+        f"- Steps: {summary.get('steps', 'n/a')}",
+        f"- Warmup steps: {summary.get('warmup_steps', 'n/a')}",
+        "",
+        "| Precision | 1 GPU | 2 GPU | 4 GPU | 1->2 | 2->4 | 1->4 | 4 GPU efficiency |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for item in summary.get("scaling", []):
+        lines.append(
+            "| {precision} | {one} | {two} | {four} | {s12} | {s24} | {s14} | {eff} |".format(
+                precision=item.get("precision", "n/a"),
+                one=_number(item.get("one_gpu_throughput")),
+                two=_number(item.get("two_gpu_throughput")),
+                four=_number(item.get("four_gpu_throughput")),
+                s12=_ratio(item.get("scale_1_to_2")),
+                s24=_ratio(item.get("scale_2_to_4")),
+                s14=_ratio(item.get("scale_1_to_4")),
+                eff=_number(item.get("efficiency_1_to_4")),
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "| GPUs | Precision | Hook | Baseline throughput | Hook throughput | Relative |",
+            "| ---: | --- | --- | ---: | ---: | ---: |",
+        ]
+    )
+    for item in summary.get("hook_comparisons", []):
+        lines.append(
+            "| {gpus} | {precision} | {hook} | {base} | {hook_t} | {relative} |".format(
+                gpus=item.get("gpus", 0),
+                precision=item.get("precision", "n/a"),
+                hook=item.get("hook", "n/a"),
+                base=_number(item.get("baseline_throughput")),
+                hook_t=_number(item.get("hook_throughput")),
+                relative=_ratio(item.get("relative_to_none")),
+            )
+        )
+    if summary.get("bucket_comparisons"):
+        lines.extend(
+            [
+                "",
+                "| Bucket cap MB | Throughput | Relative to default | Dataloader wait ms |",
+                "| ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for item in summary.get("bucket_comparisons", []):
+            lines.append(
+                "| {bucket} | {throughput} | {relative} | {wait} |".format(
+                    bucket=item.get("bucket_cap_mb") or "default",
+                    throughput=_number(item.get("throughput")),
+                    relative=_ratio(item.get("relative_to_default")),
+                    wait=_number(item.get("dataloader_wait_ms")),
+                )
+            )
+    if summary.get("topology_comparisons"):
+        lines.extend(
+            [
+                "",
+                "| CUDA_VISIBLE_DEVICES | Bucket cap MB | Throughput | Dataloader wait ms |",
+                "| --- | ---: | ---: | ---: |",
+            ]
+        )
+        for item in summary.get("topology_comparisons", []):
+            lines.append(
+                "| `{visible}` | {bucket} | {throughput} | {wait} |".format(
+                    visible=item.get("visible_devices") or "all",
+                    bucket=item.get("bucket_cap_mb") or "default",
+                    throughput=_number(item.get("throughput")),
+                    wait=_number(item.get("dataloader_wait_ms")),
+                )
+            )
+    best = summary.get("best_dataloader")
+    if isinstance(best, dict):
+        lines.extend(
+            [
+                "",
+                "Best dataloader candidate: `{run}` at {throughput} pairs/s, wait {wait} ms.".format(
+                    run=best.get("run_id", "n/a"),
+                    throughput=_number(best.get("throughput")),
+                    wait=_number(best.get("dataloader_wait_ms")),
+                ),
+            ]
+        )
+    lines.append("")
+    return lines
+
+
 def _evidence_links(
     report_root: Path,
     summaries: Dict[str, Dict[str, Any]],
@@ -353,6 +510,16 @@ def _bytes_to_gb(value: Any) -> str:
         return f"{float(value) / 1024**3:.3f}"
     except (TypeError, ValueError):
         return "n/a"
+
+
+def _measurement_window(value: Any) -> str:
+    if not isinstance(value, dict):
+        return "n/a"
+    warmup = value.get("warmup_steps_effective")
+    measured = value.get("measured_batches")
+    if warmup is None and measured is None:
+        return "n/a"
+    return f"{warmup or 0}/{measured or 0}"
 
 
 def _hardware_summary(summary: Dict[str, Any]) -> str:

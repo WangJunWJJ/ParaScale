@@ -32,6 +32,7 @@ from parascale.reporting import (
     build_backend_matrix_report,
     write_backend_matrix_markdown,
 )
+from parascale.runtime.evidence import attach_runtime_evidence
 from parascale.runtime.profiles import BenchmarkProfileStore
 
 BENCHMARK_MATRIX_EXAMPLES = """examples:
@@ -233,9 +234,11 @@ def run_benchmark_matrix_from_args(args: argparse.Namespace) -> Dict[str, Any]:
                         )
                     )
     if args.dry_run:
-        return {
+        return attach_runtime_evidence({
             "mode": "benchmark_matrix",
             "dry_run": True,
+            "runtime_status": "plan_only",
+            "capability_level": "dry_run",
             "scenario": scenario,
             "commands": commands,
             "batch_size_sweep": [size for size in batch_sizes if size is not None],
@@ -244,7 +247,7 @@ def run_benchmark_matrix_from_args(args: argparse.Namespace) -> Dict[str, Any]:
             "output_dir": str(output_dir),
             "summary": str(summary_path),
             "markdown": str(markdown_path),
-        }
+        })
     report = build_backend_matrix_report(
         output_dir,
         title=scenario_config["title"],
@@ -259,9 +262,11 @@ def run_benchmark_matrix_from_args(args: argparse.Namespace) -> Dict[str, Any]:
     )
     markdown_path.parent.mkdir(parents=True, exist_ok=True)
     write_backend_matrix_markdown(report, markdown_path)
-    return {
+    return attach_runtime_evidence({
         "mode": "benchmark_matrix",
         "dry_run": False,
+        "runtime_status": "real_matrix",
+        "capability_level": "backend_matrix",
         "scenario": scenario,
         "output_dir": str(output_dir),
         "summary": str(summary_path),
@@ -270,7 +275,7 @@ def run_benchmark_matrix_from_args(args: argparse.Namespace) -> Dict[str, Any]:
         "run_results": run_results,
         "retry_results": retry_results,
         "report": report,
-    }
+    })
 
 
 def attach_matrix_tuner_explanations(
