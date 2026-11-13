@@ -70,6 +70,15 @@ def run_train_from_config(
     workload_capability = describe_workload(config_data)
     data_type = workload_capability.data_type
     requested_backend = str(parascale_config.training_backend)
+    if parascale_config.quantization.enabled:
+        if parascale_config.quantization.mode != "qat":
+            raise ValueError("Use the quantize command for PTQ; train requires mode=qat.")
+        if requested_backend != "native" or is_distributed_launch():
+            raise ValueError("QAT currently requires a single-process native backend.")
+        if parascale_config.precision != "fp32":
+            raise ValueError("QAT currently requires precision=fp32.")
+        if parascale_config.adapter_only_checkpoint:
+            raise ValueError("QAT requires full checkpoints, not adapter_only_checkpoint.")
     if requested_backend not in {
         "native",
         "native_ddp",
@@ -142,6 +151,12 @@ def run_train_from_config(
     )
     flags = workload_capability.payload_flags()
     model, optimizer, dataloader, loss_fn = build_training_components(component_config)
+    quantizer = None
+    if parascale_config.quantization.enabled:
+        from parascale.quantization import QuantizationAwareTraining
+
+        quantizer = QuantizationAwareTraining(model, parascale_config.quantization)
+        model = quantizer.prepare()
     optimizer = build_optimizer_for_model(model, config_data)
     runtime_status = "synthetic" if flags["synthetic"] else "real_local"
     engine = TrainEngine(
@@ -185,6 +200,17 @@ def run_train_from_config(
             manager,
             engine.save_checkpoint(manager),
         )
+    quantization_result = None
+    if quantizer is not None:
+        output = str(training.get("quantized_output", Path(checkpoint_dir) / "quantized.pt"))
+        quantizer.freeze_observer()
+        quantizer.export(output)
+        quantization_result = {
+            "mode": "qat",
+            "bits": parascale_config.quantization.bits,
+            "checkpoint": output,
+            "execution": "dequantize_float_reference",
+        }
     return attach_runtime_evidence({
         "mode": "train",
         "dry_run": False,
@@ -207,6 +233,7 @@ def run_train_from_config(
         "checkpoint": str(final_manifest_path) if final_manifest_path else None,
         "checkpoint_validation": checkpoint_validation,
         "resumed_from": resumed_from,
+        "quantization": quantization_result,
         "strategy_plan": engine.plan().to_dict(),
         "config_artifacts": config_artifacts,
     })
