@@ -39,6 +39,29 @@ def _write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def test_distillation_report_distinguishes_smoke_from_quality():
+    from tests.benchmarks.tools.build_benchmark_report import _distillation_section
+
+    text = "\n".join(
+        _distillation_section(
+            {
+                "reports": [
+                    {
+                        "parameter_counts": {"teacher": 100, "student": 50},
+                        "distillation": {"after": {"perplexity": 64.0}},
+                        "ce_baseline": {"after": {"perplexity": 65.0}},
+                    }
+                ]
+            }
+        )
+    )
+    assert "synthetic" in text
+    assert "not pretrained" in text
+    assert "CE baseline" in text
+    assert "Distillation" in text
+    assert "excludes batch transfer" in text
+
+
 def test_benchmark_report_combines_suite_summaries(tmp_path):
     _write_json(
         tmp_path / "dual_4090_full_validation" / "summary.json",

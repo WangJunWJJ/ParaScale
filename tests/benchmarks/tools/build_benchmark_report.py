@@ -21,6 +21,7 @@ SUMMARY_FILES = {
     "rtx4090_precision": Path("rtx4090_clip_precision_datacomp/summary.json"),
     "a6000_native_ddp_scaling": Path("a6000_native_ddp_scaling/summary.json"),
     "llama_quantization": Path("llama_quantization/summary.json"),
+    "llama_distillation": Path("llama_distillation/summary.json"),
 }
 
 CONFIG_FILES = {
@@ -100,6 +101,7 @@ def build_report_markdown(
         _a6000_native_ddp_scaling_section(summaries["a6000_native_ddp_scaling"])
     )
     lines.extend(_quantization_section(summaries.get("llama_quantization", {})))
+    lines.extend(_distillation_section(summaries.get("llama_distillation", {})))
     lines.extend(_evidence_links(report_root, summaries))
     return "\n".join(lines).rstrip() + "\n"
 
@@ -120,6 +122,7 @@ def _overview_table(summaries: Dict[str, Dict[str, Any]]) -> List[str]:
         "rtx4090_precision": "RTX 4090 precision comparison",
         "a6000_native_ddp_scaling": "A6000 native-DDP scaling",
         "llama_quantization": "Llama reference PTQ/QAT smoke",
+        "llama_distillation": "Llama online distillation smoke",
     }
     for name, label in labels.items():
         summary = summaries.get(name, {"missing": True})
@@ -168,6 +171,61 @@ def _quantization_section(summary: Dict[str, Any]) -> List[str]:
             "",
             "See [summary and full measurements](llama_quantization/summary.json) "
             "and the [quantization guide](../../../docs/quantization.md).",
+            "",
+        ]
+    )
+    return lines
+
+
+def _distillation_section(summary: Dict[str, Any]) -> List[str]:
+    reports = summary.get("reports", [])
+    if not reports:
+        return []
+    lines = [
+        "## Llama Online Distillation",
+        "",
+        "Random Llama teacher/student, synthetic tokens: functional validation only, "
+        "not pretrained model quality evidence. Both runs share initialization and "
+        "training data; evaluation uses held-out batches. Pretrained validation remains pending.",
+        "",
+        "| Run | Teacher/student parameters | Held-out CE | PPL (synthetic) | KL (teacher to student) | Step ms | Nonzero gradient steps |",
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for report in reports:
+        counts = report.get("parameter_counts", {})
+        for mode, label in (
+            ("distillation", "Distillation"),
+            ("ce_baseline", "CE baseline"),
+        ):
+            result = report.get(mode, {})
+            after, training = result.get("after", {}), result.get("training", {})
+            seconds = training.get("mean_step_seconds")
+            lines.append(
+                f"| {label} | {counts.get('teacher', 'n/a')}/{counts.get('student', 'n/a')} "
+                f"| {_number(after.get('ce'))} | {_number(after.get('perplexity'))} "
+                f"| {_number(after.get('kl_teacher_to_student'), digits=6)} "
+                f"| {_number(seconds * 1000 if seconds is not None else None)} "
+                f"| {training.get('nonzero_gradient_steps', 'n/a')} |"
+            )
+        state = report.get("teacher_state", {})
+        lines.extend(
+            [
+                "",
+                f"Teacher unchanged: {bool(state.get('before') and state.get('before') == state.get('after'))}; "
+                f"no teacher gradients: {state.get('no_gradients', 'n/a')}; "
+                "student-only reload max error: "
+                f"{_number(report.get('student_export', {}).get('max_abs_error'), digits=6)}.",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "Timing includes forward/loss/backward, gradient checks and optimizer; "
+            "excludes batch transfer, with no warmup. This is verification-loop timing, "
+            "not production throughput. Teacher remains resident in both runs.",
+            "",
+            "See [full measurements](llama_distillation/summary.json) and the "
+            "[distillation guide](../../../docs/distillation.md).",
             "",
         ]
     )

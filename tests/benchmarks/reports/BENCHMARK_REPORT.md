@@ -25,6 +25,7 @@ python tests/benchmarks/tools/build_benchmark_report.py --report-root tests/benc
 | RTX 4090 precision comparison | recorded | dual RTX 4090D 24GB | `parascale-ci:cu121-torch24` | [rtx4090_clip_precision_datacomp/summary.json](rtx4090_clip_precision_datacomp/summary.json) |
 | A6000 native-DDP scaling | passed | 5x RTX A6000, measured with 1/2/4 visible GPUs | `parascale-ci:a6000-cu126-torch25` | [a6000_native_ddp_scaling/summary.json](a6000_native_ddp_scaling/summary.json) |
 | Llama reference PTQ/QAT smoke | passed | 1x NVIDIA RTX A6000 | `parascale-quantization:a6000-torch25-transformers451` | [llama_quantization/summary.json](llama_quantization/summary.json) |
+| Llama online distillation smoke | passed | 1x NVIDIA RTX A6000 (156 host) | `parascale-quantization:a6000-torch25-transformers451` | [llama_distillation/summary.json](llama_distillation/summary.json) |
 
 ## Evidence Quality
 
@@ -184,6 +185,21 @@ Random two-layer Llama, synthetic tokens: functional validation only, not pretra
 
 See [summary and full measurements](llama_quantization/summary.json) and the [quantization guide](../../../docs/quantization.md).
 
+## Llama Online Distillation
+
+Random Llama teacher/student, synthetic tokens: functional validation only, not pretrained model quality evidence. Both runs share initialization and training data; evaluation uses held-out batches. Pretrained validation remains pending.
+
+| Run | Teacher/student parameters | Held-out CE | PPL (synthetic) | KL (teacher to student) | Step ms | Nonzero gradient steps |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Distillation | 82240/13408 | 4.168 | 64.593 | 0.021149 | 15.225 | 32 |
+| CE baseline | 82240/13408 | 4.169 | 64.675 | 0.024388 | 7.087 | 32 |
+
+Teacher unchanged: True; no teacher gradients: True; student-only reload max error: 0.000000.
+
+Timing includes forward/loss/backward, gradient checks and optimizer; excludes batch transfer, with no warmup. This is verification-loop timing, not production throughput. Teacher remains resident in both runs.
+
+See [full measurements](llama_distillation/summary.json) and the [distillation guide](../../../docs/distillation.md).
+
 ## Evidence Files
 
 | Suite | Summary | Config snapshots |
@@ -196,3 +212,4 @@ See [summary and full measurements](llama_quantization/summary.json) and the [qu
 | rtx4090_precision | [rtx4090_clip_precision_datacomp/summary.json](rtx4090_clip_precision_datacomp/summary.json) | [rtx4090_clip_precision_datacomp/fp16/rtx4090_clip_datacomp_native_ddp_fp16.config.json](rtx4090_clip_precision_datacomp/fp16/rtx4090_clip_datacomp_native_ddp_fp16.config.json) |
 | a6000_native_ddp_scaling | [a6000_native_ddp_scaling/summary.json](a6000_native_ddp_scaling/summary.json) | n/a |
 | llama_quantization | [llama_quantization/summary.json](llama_quantization/summary.json) | n/a |
+| llama_distillation | [llama_distillation/summary.json](llama_distillation/summary.json) | n/a |
