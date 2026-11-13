@@ -1,16 +1,17 @@
 # -*- coding: utf-8 -*-
-# @Time : 2026/6/10 下午3:14
+# @Time : 2026/11/13 上午10:00
 # @Author : Wang Jun
 # @Email: wj_xd@foxmail.com
+"""Torch-free, canonical quantization configuration."""
 
-"""Quantization configuration primitives."""
-
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
 from typing import List, Literal, Optional
 
 
 @dataclass
 class QuantizationConfig:
+    """Configuration for float-compute reference PTQ/QAT."""
+
     enabled: bool = False
     mode: Literal["qat", "ptq"] = "qat"
     bits: int = 8
@@ -18,59 +19,51 @@ class QuantizationConfig:
     per_channel: bool = True
     observer_type: Literal["minmax", "moving_average"] = "minmax"
     moving_average_ratio: float = 0.9
-    fuse_modules: bool = True
+    fuse_modules: bool = False
     qat_epochs: int = 10
     calib_batches: int = 100
-    backend: Literal["fbgemm", "qnnpack"] = "fbgemm"
+    backend: str = "reference"
     quantizable_layers: Optional[List[str]] = None
+    exclude_modules: List[str] = field(default_factory=lambda: ["lm_head"])
+    quantize_activations: bool = False
 
     def __post_init__(self):
-        if self.bits not in [4, 8]:
-            raise ValueError(f"invalid quantization configuration{self.bits}")
-        if self.moving_average_ratio < 0 or self.moving_average_ratio > 1:
-            raise ValueError("invalid quantization configuration")
-        if self.qat_epochs < 1:
-            raise ValueError("invalid quantization configuration")
-        if self.calib_batches < 1:
-            raise ValueError("invalid quantization configuration")
+        for name in ("enabled", "per_channel", "quantize_activations", "fuse_modules"):
+            if not isinstance(getattr(self, name), bool):
+                raise ValueError(f"{name} must be a boolean")
+        if self.fuse_modules:
+            raise ValueError(
+                "automatic fusion is unsupported by reference quantization"
+            )
+        if self.backend != "reference":
+            raise ValueError("only the reference quantization backend is supported")
+        if self.bits not in (4, 8):
+            raise ValueError("bits must be 4 or 8")
+        if self.mode not in ("qat", "ptq"):
+            raise ValueError("mode must be qat or ptq")
+        if self.scheme not in ("symmetric", "asymmetric"):
+            raise ValueError("unsupported quantization scheme")
+        if self.observer_type not in ("minmax", "moving_average"):
+            raise ValueError("unsupported observer type")
+        if not 0 <= self.moving_average_ratio <= 1:
+            raise ValueError("moving_average_ratio must be in [0, 1]")
+        if self.qat_epochs < 1 or self.calib_batches < 1:
+            raise ValueError("epoch and calibration counts must be positive")
         if self.quantizable_layers is None:
-            self.quantizable_layers = ["Conv2d", "Linear", "ConvTranspose2d"]
+            self.quantizable_layers = ["Linear", "Conv2d"]
+        if not set(self.quantizable_layers) <= {"Linear", "Conv2d"}:
+            raise ValueError("only Linear and Conv2d selections are supported")
+        if not isinstance(self.exclude_modules, list) or not all(
+            isinstance(name, str) and name for name in self.exclude_modules
+        ):
+            raise ValueError("exclude_modules must be a list of nonempty names")
 
     def get_qmin_qmax(self) -> tuple:
-        if self.bits == 8:
-            return (-128, 127)
-        elif self.bits == 4:
-            return (-8, 7)
-        else:
-            raise ValueError(f"invalid quantization configuration{self.bits}")
+        return -(2 ** (self.bits - 1)), 2 ** (self.bits - 1) - 1
 
     def to_dict(self) -> dict:
-        return {
-            "enabled": self.enabled,
-            "mode": self.mode,
-            "bits": self.bits,
-            "scheme": self.scheme,
-            "per_channel": self.per_channel,
-            "observer_type": self.observer_type,
-            "moving_average_ratio": self.moving_average_ratio,
-            "fuse_modules": self.fuse_modules,
-            "qat_epochs": self.qat_epochs,
-            "calib_batches": self.calib_batches,
-            "backend": self.backend,
-        }
+        return asdict(self)
 
     @classmethod
     def from_dict(cls, config_dict: dict) -> "QuantizationConfig":
-        return cls(
-            enabled=config_dict.get("enabled", False),
-            mode=config_dict.get("mode", "qat"),
-            bits=config_dict.get("bits", 8),
-            scheme=config_dict.get("scheme", "symmetric"),
-            per_channel=config_dict.get("per_channel", True),
-            observer_type=config_dict.get("observer_type", "minmax"),
-            moving_average_ratio=config_dict.get("moving_average_ratio", 0.9),
-            fuse_modules=config_dict.get("fuse_modules", True),
-            qat_epochs=config_dict.get("qat_epochs", 10),
-            calib_batches=config_dict.get("calib_batches", 100),
-            backend=config_dict.get("backend", "fbgemm"),
-        )
+        return cls(**config_dict)

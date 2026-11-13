@@ -1,111 +1,76 @@
 # -*- coding: utf-8 -*-
-# @Time : 2026/6/10 下午3:14
+# @Time : 2026/11/13 上午10:00
 # @Author : Wang Jun
 # @Email: wj_xd@foxmail.com
-
-"""Quantization utility functions."""
-
-from typing import Optional, Tuple
+"""Numerical and module utilities for reference quantization."""
 
 import torch
-import torch.nn as nn
-
-from .base import QuantizationConfig
+from torch import nn
 
 
-def calculate_scale_zero_point(
-    min_val: torch.Tensor, max_val: torch.Tensor, config: QuantizationConfig
-) -> Tuple[torch.Tensor, torch.Tensor]:
+def calculate_scale_zero_point(min_val, max_val, config):
+    """Include zero in affine ranges and produce integral, valid zero points."""
+    if not torch.isfinite(min_val).all() or not torch.isfinite(max_val).all():
+        raise ValueError("quantization ranges must be finite")
+    if (min_val > max_val).any():
+        raise ValueError("minimum exceeds maximum")
+    low = torch.minimum(min_val.float(), torch.zeros_like(min_val).float())
+    high = torch.maximum(max_val.float(), torch.zeros_like(max_val).float())
     qmin, qmax = config.get_qmin_qmax()
     if config.scheme == "symmetric":
-        max_abs = torch.max(torch.abs(min_val), torch.abs(max_val))
-        scale = max_abs / qmax
-        zero_point = torch.zeros_like(scale)
+        scale = torch.maximum(low.abs(), high.abs()) / qmax
+        zp = torch.zeros_like(scale, dtype=torch.int32)
     else:
-        scale = (max_val - min_val) / (qmax - qmin)
-        zero_point = qmin - min_val / scale
-    scale = torch.clamp(scale, min=1e-08)
-    return (scale, zero_point)
+        scale = (high - low) / (qmax - qmin)
+        scale = scale.clamp_min(torch.finfo(torch.float32).eps)
+        zp = (qmin - torch.round(low / scale)).clamp(qmin, qmax).int()
+    scale = scale.clamp_min(torch.finfo(torch.float32).eps)
+    return scale, zp
 
 
-def quantize_tensor(
-    x: torch.Tensor,
-    scale: torch.Tensor,
-    zero_point: torch.Tensor,
-    config: QuantizationConfig,
-) -> torch.Tensor:
+def quantize_tensor(x, scale, zero_point, config):
+    """Return signed integer codes using the native affine rounding convention."""
+    if scale.numel() > 1 and scale.ndim == 1 and x.ndim > 1:
+        shape = (-1,) + (1,) * (x.ndim - 1)
+        scale, zero_point = scale.reshape(shape), zero_point.reshape(shape)
     qmin, qmax = config.get_qmin_qmax()
-    x_quant = torch.round(x / scale + zero_point)
-    x_quant = torch.clamp(x_quant, qmin, qmax)
-    return x_quant
+    # Native fake-quant kernels multiply by reciprocal scale before rounding.
+    return (
+        (torch.round(x.float() * scale.reciprocal()) + zero_point)
+        .clamp(qmin, qmax)
+        .to(torch.int8)
+    )
 
 
-def dequantize_tensor(
-    x_quant: torch.Tensor, scale: torch.Tensor, zero_point: torch.Tensor
-) -> torch.Tensor:
-    return (x_quant - zero_point) * scale
+def dequantize_tensor(x_quant, scale, zero_point):
+    if scale.numel() > 1 and scale.ndim == 1 and x_quant.ndim > 1:
+        shape = (-1,) + (1,) * (x_quant.ndim - 1)
+        scale, zero_point = scale.reshape(shape), zero_point.reshape(shape)
+    return (x_quant.float() - zero_point) * scale
 
 
-def fuse_modules(model: nn.Module, modules_to_fuse: Optional[list] = None) -> nn.Module:
-    if modules_to_fuse is None:
-        modules_to_fuse = []
-        for name, module in model.named_children():
-            if isinstance(module, nn.Sequential):
-                layers = list(module.children())
-                if len(layers) >= 3:
-                    if (
-                        isinstance(layers[0], (nn.Conv2d, nn.Conv1d))
-                        and isinstance(layers[1], nn.BatchNorm2d)
-                        and isinstance(layers[2], nn.ReLU)
-                    ):
-                        modules_to_fuse.append([f"{name}.0", f"{name}.1", f"{name}.2"])
+def fuse_modules(model, modules_to_fuse=None):
+    """Explicit fusion helper; reference preparation never changes model topology."""
     if modules_to_fuse:
-        try:
-            torch.quantization.fuse_modules(model, modules_to_fuse, inplace=True)
-        except Exception as e:
-            print(f"quantization utility message{e}")
+        torch.ao.quantization.fuse_modules(model, modules_to_fuse, inplace=True)
     return model
 
 
-def get_quantizable_layers(model: nn.Module) -> list:
-    quantizable_types = (nn.Conv2d, nn.Linear, nn.ConvTranspose2d)
-    quantizable_layers = []
-    for name, module in model.named_modules():
-        if isinstance(module, quantizable_types):
-            quantizable_layers.append(name)
-    return quantizable_layers
+def get_quantizable_layers(model):
+    return [
+        name
+        for name, module in model.named_modules()
+        if type(module) in (nn.Linear, nn.Conv2d)
+    ]
 
 
-def copy_model_weights(src_model: nn.Module, dst_model: nn.Module) -> None:
-    src_state = src_model.state_dict()
-    dst_state = dst_model.state_dict()
-    for name, param in src_state.items():
-        if name in dst_state:
-            if dst_state[name].shape == param.shape:
-                dst_state[name].copy_(param)
+def copy_model_weights(src_model, dst_model):
+    with torch.no_grad():
+        target = dst_model.state_dict()
+        for name, value in src_model.state_dict().items():
+            if name in target and value.shape == target[name].shape:
+                target[name].copy_(value)
 
 
-def print_quantization_info(model: nn.Module) -> None:
-    print("=" * 60)
-    print("quantization utility message")
-    print("=" * 60)
-    total_params = 0
-    quantized_params = 0
-    for name, module in model.named_modules():
-        if isinstance(module, (nn.Conv2d, nn.Linear)):
-            num_params = sum((p.numel() for p in module.parameters()))
-            total_params += num_params
-            if hasattr(module, "weight_fake_quant"):
-                quantized_params += num_params
-                print(
-                    f"{name}quantization utility message{num_params:,}quantization utility message"
-                )
-            else:
-                print(
-                    f"{name}quantization utility message{num_params:,}quantization utility message"
-                )
-    print("-" * 60)
-    print(f"quantization utility message{total_params:,}")
-    print(f"quantization utility message{quantized_params:,}")
-    print(f"quantization utility message{quantized_params / total_params * 100:.2f}%")
-    print("=" * 60)
+def print_quantization_info(model):
+    print("Reference float-compute quantization:", get_quantizable_layers(model))

@@ -1,107 +1,148 @@
 # -*- coding: utf-8 -*-
-# @Time : 2026/6/10 下午3:14
+# @Time : 2026/11/13 上午10:00
 # @Author : Wang Jun
 # @Email: wj_xd@foxmail.com
+"""Native fake-quantization STE and trainable reference layers."""
 
-"""Fake quantization layers for QAT and PTQ flows."""
-
-from typing import Optional
+import copy
+import hashlib
+import json
 
 import torch
-import torch.nn as nn
+from torch import nn
 
 from .base import QuantizationConfig
-from .observers import MinMaxObserver, MovingAverageObserver
+from .observers import MinMaxObserver, MovingAverageObserver, TensorStateModule
 
 
-class FakeQuantize(nn.Module):
+class FakeQuantize(TensorStateModule):
+    """Fake quantization with tensor-only observer and enable state."""
 
-    def __init__(self, config: QuantizationConfig):
+    def __init__(self, config):
         super().__init__()
-        self.config = config
-        if config.observer_type == "minmax":
-            self.observer = MinMaxObserver(config)
-        elif config.observer_type == "moving_average":
-            self.observer = MovingAverageObserver(config)
-        else:
-            raise ValueError(f"unsupported observer type{config.observer_type}")
-        self.register_buffer("scale", torch.tensor(1.0))
-        self.register_buffer("zero_point", torch.tensor(0.0))
-        self.fake_quant_enabled = True
-        self.observer_enabled = True
-        self._cache_interval = 100
-        self._global_step = 0
-        self._scale_cache = None
-        self._last_update_step = -1
+        self.config = copy.deepcopy(config)
+        observer = (
+            MinMaxObserver
+            if config.observer_type == "minmax"
+            else MovingAverageObserver
+        )
+        self.observer = observer(self.config)
+        self.register_buffer("scale", torch.ones(1))
+        self.register_buffer("zero_point", torch.zeros(1, dtype=torch.int32))
+        self.register_buffer("fake_quant_enabled", torch.tensor(True))
+        self.register_buffer("observer_enabled", torch.tensor(True))
+        numerical_config = {
+            name: getattr(config, name)
+            for name in (
+                "bits",
+                "scheme",
+                "per_channel",
+                "quantize_activations",
+                "observer_type",
+                "moving_average_ratio",
+            )
+        }
+        fingerprint = hashlib.sha256(
+            json.dumps(numerical_config, sort_keys=True, separators=(",", ":")).encode(
+                "ascii"
+            )
+        ).digest()
+        self.register_buffer(
+            "config_fingerprint", torch.tensor(list(fingerprint), dtype=torch.uint8)
+        )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def _load_from_state_dict(self, state_dict, prefix, *args, **kwargs):
+        incoming = state_dict.get(prefix + "config_fingerprint")
+        if (
+            not isinstance(incoming, torch.Tensor)
+            or incoming.dtype != self.config_fingerprint.dtype
+            or incoming.shape != self.config_fingerprint.shape
+            or not torch.equal(incoming.cpu(), self.config_fingerprint.cpu())
+        ):
+            raise RuntimeError(
+                f"quantization numerical configuration mismatch: {prefix}"
+            )
+        super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
+
+    def forward(self, x):
         if self.observer_enabled:
-            self.observer.update(x.detach())
+            self.observer.update(x)
+            scale, zp = self.observer.calculate_qparams()
+            self.scale = scale
+            self.zero_point = zp
         if not self.fake_quant_enabled:
             return x
-        self._global_step += 1
-        if self.training:
-            if (
-                self._global_step % self._cache_interval == 0
-                or self._last_update_step < 0
-            ):
-                scale, zero_point = self.observer.calculate_qparams()
-                self.scale = scale
-                self.zero_point = zero_point
-                self._scale_cache = (scale, zero_point)
-                self._last_update_step = self._global_step
+        if not self.observer.min_val.numel():
+            raise ValueError("fake quantizer has not been calibrated")
         return self._fake_quantize(x, self.scale, self.zero_point)
 
-    def _fake_quantize(
-        self, x: torch.Tensor, scale: torch.Tensor, zero_point: torch.Tensor
-    ) -> torch.Tensor:
+    def _fake_quantize(self, x, scale, zero_point):
         qmin, qmax = self.config.get_qmin_qmax()
-        scale_safe = torch.where(scale > 1e-08, scale, torch.ones_like(scale))
-        x_quant = torch.round(x / scale_safe + zero_point)
-        x_quant = torch.clamp(x_quant, qmin, qmax)
-        x_dequant = (x_quant - zero_point) * scale
-        return x_dequant
+        work = x.float()
+        if self.config.per_channel and x.ndim > 1:
+            result = torch.fake_quantize_per_channel_affine(
+                work,
+                scale.float().reshape(-1),
+                zero_point.int().reshape(-1),
+                0,
+                qmin,
+                qmax,
+            )
+        else:
+            result = torch.fake_quantize_per_tensor_affine(
+                work,
+                scale.float().reshape(()),
+                zero_point.int().reshape(()),
+                qmin,
+                qmax,
+            )
+        return result.to(x.dtype)
 
-    def enable_fake_quant(self, enabled: bool = True) -> None:
-        self.fake_quant_enabled = enabled
+    def enable_fake_quant(self, enabled=True):
+        self.fake_quant_enabled.fill_(enabled)
 
-    def enable_observer(self, enabled: bool = True) -> None:
-        self.observer_enabled = enabled
+    def enable_observer(self, enabled=True):
+        self.observer_enabled.fill_(enabled)
 
-    def calculate_qparams(self) -> tuple:
+    def calculate_qparams(self):
         return self.observer.calculate_qparams()
 
-    def reset_observer(self) -> None:
+    def reset_observer(self):
         self.observer.reset()
 
 
+def attach_quantizers(layer, config):
+    layer.weight_fake_quant = FakeQuantize(config).to(layer.weight.device)
+    activation_config = copy.deepcopy(config)
+    activation_config.per_channel = False
+    layer.activation_fake_quant = FakeQuantize(activation_config).to(
+        layer.weight.device
+    )
+    layer.quantize_activations = config.quantize_activations
+
+
 class FakeQuantizedLinear(nn.Linear):
+    """Linear with native STE for weights and optional input activations."""
 
-    def __init__(
-        self,
-        in_features: int,
-        out_features: int,
-        bias: bool = True,
-        config: Optional[QuantizationConfig] = None,
-    ):
+    def __init__(self, in_features, out_features, bias=True, config=None):
         super().__init__(in_features, out_features, bias)
-        if config is None:
-            config = QuantizationConfig()
-        self.activation_fake_quant = FakeQuantize(config)
-        self.weight_fake_quant = FakeQuantize(config)
+        attach_quantizers(self, config or QuantizationConfig())
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.activation_fake_quant(x)
-        w = self.weight_fake_quant(self.weight)
-        return nn.functional.linear(x, w, self.bias)
+    def forward(self, x):
+        if self.quantize_activations:
+            x = self.activation_fake_quant(x)
+        weight = self.weight_fake_quant(self.weight).to(x.dtype)
+        bias = self.bias.to(x.dtype) if self.bias is not None else None
+        return nn.functional.linear(x, weight, bias)
 
 
 class FakeQuantizedConv2d(nn.Conv2d):
+    """Conv2d retaining padding semantics with native STE."""
 
     def __init__(
         self,
-        in_channels: int,
-        out_channels: int,
+        in_channels,
+        out_channels,
         kernel_size,
         stride=1,
         padding=0,
@@ -109,7 +150,7 @@ class FakeQuantizedConv2d(nn.Conv2d):
         groups=1,
         bias=True,
         padding_mode="zeros",
-        config: Optional[QuantizationConfig] = None,
+        config=None,
     ):
         super().__init__(
             in_channels,
@@ -122,12 +163,11 @@ class FakeQuantizedConv2d(nn.Conv2d):
             bias,
             padding_mode,
         )
-        if config is None:
-            config = QuantizationConfig()
-        self.activation_fake_quant = FakeQuantize(config)
-        self.weight_fake_quant = FakeQuantize(config)
+        attach_quantizers(self, config or QuantizationConfig())
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.activation_fake_quant(x)
-        w = self.weight_fake_quant(self.weight)
-        return self._conv_forward(x, w, self.bias)
+    def forward(self, x):
+        if self.quantize_activations:
+            x = self.activation_fake_quant(x)
+        weight = self.weight_fake_quant(self.weight).to(x.dtype)
+        bias = self.bias.to(x.dtype) if self.bias is not None else None
+        return self._conv_forward(x, weight, bias)

@@ -8,33 +8,7 @@
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional
 
-try:
-    from .quantization.base import QuantizationConfig
-except ImportError:
-
-    @dataclass
-    class QuantizationConfig:
-        enabled: bool = False
-        mode: Literal["qat", "ptq"] = "qat"
-        bits: int = 8
-        scheme: Literal["symmetric", "asymmetric"] = "symmetric"
-        per_channel: bool = True
-        observer_type: Literal["minmax", "moving_average"] = "minmax"
-        moving_average_ratio: float = 0.9
-        fuse_modules: bool = True
-        qat_epochs: int = 10
-        calib_batches: int = 100
-        backend: Literal["fbgemm", "qnnpack"] = "fbgemm"
-
-        def to_dict(self) -> Dict[str, Any]:
-            return dict(self.__dict__)
-
-        @classmethod
-        def from_dict(cls, config_dict: Dict[str, Any]) -> "QuantizationConfig":
-            fields = cls.__dataclass_fields__
-            return cls(
-                **{key: value for key, value in config_dict.items() if key in fields}
-            )
+from .quantization.base import QuantizationConfig
 
 
 @dataclass
