@@ -12,6 +12,28 @@ from tests.benchmarks.tools.build_benchmark_report import (
 )
 
 
+def test_quantization_report_distinguishes_smoke_from_quality():
+    from tests.benchmarks.tools.build_benchmark_report import _quantization_section
+
+    text = "\n".join(
+        _quantization_section(
+            {
+                "reports": [
+                    {
+                        "arguments": {"bits": 4},
+                        "ptq": {"perplexity": 64.0, "roundtrip_max_abs_error": 0.0},
+                        "qat": {"training": {"nonzero_gradient_steps": 16}},
+                    }
+                ]
+            }
+        )
+    )
+    assert "synthetic" in text
+    assert "not pretrained" in text
+    assert "4-bit PTQ" in text
+    assert "4-bit QAT" in text
+
+
 def _write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")

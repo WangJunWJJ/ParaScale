@@ -1,0 +1,545 @@
+{
+  "schema_version": 1,
+  "passed": true,
+  "scope": "random Llama architecture smoke only",
+  "date": "2026-11-13",
+  "hardware": "1x NVIDIA RTX A6000",
+  "image": "parascale-quantization:a6000-torch25-transformers451",
+  "image_id": "sha256:c7fda2dca0f2ada0c3dea3bd36cce4c6c82442a4c72a40449feb401a287dfa41",
+  "base_commit": "29c9bfe0667c911d7cab4ec243d29d926d776d07",
+  "benchmark_source_archive_sha256": "a93120b8a5565855628f68e218415520d1cb484e27b20ca83a587e43c37ffadc",
+  "pretrained_validation": {
+    "status": "blocked",
+    "reason": "No cached pretrained Llama; Hugging Face direct refused, HF mirror and ModelScope model downloads timed out."
+  },
+  "limitations": [
+    "No pretrained model quality claim",
+    "Float dequantization reference compute; no integer kernel speedup claim",
+    "Single-GPU prefill timings only, not generation throughput",
+    "Independent random training/evaluation token batches"
+  ],
+  "reports": [
+    {
+      "status": "passed",
+      "compute": "reference floating compute; packed weights do not promise speedup",
+      "arguments": {
+        "tiny": true,
+        "model": null,
+        "revision": "main",
+        "local_files_only": false,
+        "calibration_text": null,
+        "evaluation_text": null,
+        "mode": "both",
+        "bits": 4,
+        "device": "cuda:0",
+        "seed": 42,
+        "seqlen": 128,
+        "batch_size": 1,
+        "batches": 8,
+        "qat_steps": 16,
+        "learning_rate": 0.0001,
+        "warmup": 5,
+        "repeats": 20,
+        "output": "/workspace/quantization_results/llama-int4-final"
+      },
+      "data": {
+        "kind": "synthetic smoke only",
+        "training_batch_sha256": [
+          "c767d9f9fcb2e0c421df28d2439f2ed535b4a45e1a96f609fb466586da845a2c",
+          "b584bd60caba6bee942b5bbfdb28d6b5161da75104be81e56314e2055eb9e123",
+          "2a70fe22f701d5e8888bf0999e0b6b9eeda611472bd5d67ecb61f9822b025b08",
+          "53a98490cc1a22fba53ed1094e963415ca40963fc23f61f46746fdbecf16b1a8",
+          "25f7da797977653c5ad28209dec6a9f7f332456676467bc2bf77304ed0cdf697",
+          "017de4ec024b8bbe4e5c089145c39a26c85740ed98688cf6e3bfe4fccf33d3aa",
+          "3d75abd3a96432ededd5fd353ecbb9ac149caff28cfb1e3b5f12153409d092bb",
+          "18aff16968aebee68364cc5a12296e8eaa30e39a59f1e0c09948d8605886e462"
+        ],
+        "evaluation_batch_sha256": [
+          "9466be2f5db06c2b3183c7be2984da2bece3412c0631182a01df5c5918b2385f",
+          "2dbe62859c78472bb5cfe086a9dc3dfebd56b1759b2c1af332d8619fb17256c4",
+          "5b508d030bf6d1a3a5d841c944a01d207ebd7b6dc7a865a6fa76f0d660ca2eec",
+          "6e0754ab817da98d460b56bc972ac1f6c647087c2ac5160d002aa63872954fac",
+          "a6006f463ce0ace0cb74dbf0da42cc9fee8397909d66c164acaa1a3c8ae6e73c",
+          "13dadabb5627a0138e6c665341e099dfc8e1f05d63f1824963c8a7de8820851c",
+          "f53ee9ebbaf7044a46a51804aa77a8db3ff6a4a22780e06559b01970756fee7f",
+          "12e3578aa0aa38cf18824b1dd8ce43b4e282755615e52b3712a04718d7f89df3"
+        ]
+      },
+      "torch": "2.5.0a0+872d972e41.nv24.08",
+      "transformers": "4.51.3",
+      "python": "3.10.12",
+      "device": "cuda:0",
+      "dtype": "float32",
+      "gpu_name": "NVIDIA RTX A6000",
+      "cuda_runtime": "12.6",
+      "model_source": {
+        "kind": "random_llama",
+        "model": null,
+        "requested_revision": null,
+        "resolved_model_commit": null,
+        "resolved_tokenizer_commit": null
+      },
+      "model_config": {
+        "vocab_size": 64,
+        "max_position_embeddings": 128,
+        "hidden_size": 32,
+        "intermediate_size": 64,
+        "num_hidden_layers": 2,
+        "num_attention_heads": 4,
+        "num_key_value_heads": 2,
+        "hidden_act": "silu",
+        "initializer_range": 0.02,
+        "rms_norm_eps": 1E-06,
+        "pretraining_tp": 1,
+        "use_cache": true,
+        "rope_theta": 10000.0,
+        "rope_scaling": null,
+        "attention_bias": false,
+        "attention_dropout": 0.0,
+        "mlp_bias": false,
+        "head_dim": 8,
+        "return_dict": true,
+        "output_hidden_states": false,
+        "output_attentions": false,
+        "torchscript": false,
+        "torch_dtype": null,
+        "use_bfloat16": false,
+        "tf_legacy_loss": false,
+        "pruned_heads": {},
+        "tie_word_embeddings": false,
+        "chunk_size_feed_forward": 0,
+        "is_encoder_decoder": false,
+        "is_decoder": false,
+        "cross_attention_hidden_size": null,
+        "add_cross_attention": false,
+        "tie_encoder_decoder": false,
+        "max_length": 20,
+        "min_length": 0,
+        "do_sample": false,
+        "early_stopping": false,
+        "num_beams": 1,
+        "num_beam_groups": 1,
+        "diversity_penalty": 0.0,
+        "temperature": 1.0,
+        "top_k": 50,
+        "top_p": 1.0,
+        "typical_p": 1.0,
+        "repetition_penalty": 1.0,
+        "length_penalty": 1.0,
+        "no_repeat_ngram_size": 0,
+        "encoder_no_repeat_ngram_size": 0,
+        "bad_words_ids": null,
+        "num_return_sequences": 1,
+        "output_scores": false,
+        "return_dict_in_generate": false,
+        "forced_bos_token_id": null,
+        "forced_eos_token_id": null,
+        "remove_invalid_values": false,
+        "exponential_decay_length_penalty": null,
+        "suppress_tokens": null,
+        "begin_suppress_tokens": null,
+        "architectures": null,
+        "finetuning_task": null,
+        "id2label": {
+          "0": "LABEL_0",
+          "1": "LABEL_1"
+        },
+        "label2id": {
+          "LABEL_0": 0,
+          "LABEL_1": 1
+        },
+        "tokenizer_class": null,
+        "prefix": null,
+        "bos_token_id": 1,
+        "pad_token_id": null,
+        "eos_token_id": 2,
+        "sep_token_id": null,
+        "decoder_start_token_id": null,
+        "task_specific_params": null,
+        "problem_type": null,
+        "_name_or_path": "",
+        "_attn_implementation_autoset": true,
+        "transformers_version": "4.51.3",
+        "model_type": "llama"
+      },
+      "baseline": {
+        "loss": 4.160884346548967,
+        "perplexity": 64.12820909139208,
+        "evaluated_tokens": 1016,
+        "logits_mae": 0.0,
+        "logits_max_abs_error": 0.0,
+        "model_state_bytes": 90752,
+        "checkpoint_bytes": 99248,
+        "checkpoint_sha256": "40f6daef88ccb716a739254f1d1f18db5092b0efdc7f1dc7ad395d4499702fdc",
+        "serialization_memory": {
+          "process_rss_peak_sampled_bytes": 1113149440,
+          "rss_sampling_interval_ms": 10,
+          "cuda_peak_allocated_bytes": 8612864,
+          "cuda_start_allocated_bytes": 8612864,
+          "cuda_incremental_peak_bytes": 0
+        },
+        "loading_memory": {
+          "process_rss_peak_sampled_bytes": 743669760,
+          "rss_sampling_interval_ms": 10,
+          "cuda_peak_allocated_bytes": 93184,
+          "cuda_start_allocated_bytes": 0,
+          "cuda_incremental_peak_bytes": 93184
+        },
+        "timing": {
+          "seconds_per_forward": 0.0019344918429851532,
+          "input_tokens_per_second": 66167.2472097275,
+          "warmup": 5,
+          "measured_forwards": 20,
+          "inference_memory": {
+            "process_rss_peak_sampled_bytes": 1113288704,
+            "rss_sampling_interval_ms": 10,
+            "cuda_peak_allocated_bytes": 8787968,
+            "cuda_start_allocated_bytes": 8614912,
+            "cuda_incremental_peak_bytes": 173056
+          },
+          "scope": "prefill forward only; excludes transfers, tokenization and loading"
+        }
+      },
+      "ptq": {
+        "loss": 4.160848121943436,
+        "perplexity": 64.12588611438909,
+        "evaluated_tokens": 1016,
+        "logits_mae": 0.0031540253839921206,
+        "logits_max_abs_error": 0.04071669280529022,
+        "model_state_bytes": 30336,
+        "checkpoint_bytes": 70809,
+        "checkpoint_sha256": "91ae7eb6e1af833ed4d233fdeea6d482c7ab2d517051fb921292ed5cc5e24e4d",
+        "timing": {
+          "seconds_per_forward": 0.003829346224665642,
+          "input_tokens_per_second": 33426.0713161752,
+          "warmup": 5,
+          "measured_forwards": 20,
+          "inference_memory": {
+            "process_rss_peak_sampled_bytes": 1244377088,
+            "rss_sampling_interval_ms": 10,
+            "cuda_peak_allocated_bytes": 8738816,
+            "cuda_start_allocated_bytes": 8565760,
+            "cuda_incremental_peak_bytes": 173056
+          },
+          "scope": "prefill forward only; excludes transfers, tokenization and loading"
+        },
+        "procedure_memory": {
+          "process_rss_peak_sampled_bytes": 1243652096,
+          "rss_sampling_interval_ms": 10,
+          "cuda_peak_allocated_bytes": 8921600,
+          "cuda_start_allocated_bytes": 8519680,
+          "cuda_incremental_peak_bytes": 401920
+        },
+        "roundtrip_max_abs_error": 0.0,
+        "roundtrip_metadata_type": "dict"
+      },
+      "qat": {
+        "loss": 4.160268227885089,
+        "perplexity": 64.08871067399537,
+        "evaluated_tokens": 1016,
+        "logits_mae": 0.008982082130387425,
+        "logits_max_abs_error": 0.07486472278833389,
+        "model_state_bytes": 30336,
+        "checkpoint_bytes": 70809,
+        "checkpoint_sha256": "b73a2c76a564d6edd20b4c7ab7c89e604e8774098445cd3eca064ceaa09b5204",
+        "timing": {
+          "seconds_per_forward": 0.0049306188710033895,
+          "input_tokens_per_second": 25960.230013469238,
+          "warmup": 5,
+          "measured_forwards": 20,
+          "inference_memory": {
+            "process_rss_peak_sampled_bytes": 1335721984,
+            "rss_sampling_interval_ms": 10,
+            "cuda_peak_allocated_bytes": 17258496,
+            "cuda_start_allocated_bytes": 17085440,
+            "cuda_incremental_peak_bytes": 173056
+          },
+          "scope": "prefill forward only; excludes transfers, tokenization and loading"
+        },
+        "training": {
+          "steps": 16,
+          "nonzero_gradient_steps": 16,
+          "changed_parameters": 14
+        },
+        "procedure_memory": {
+          "process_rss_peak_sampled_bytes": 1335721984,
+          "rss_sampling_interval_ms": 10,
+          "cuda_peak_allocated_bytes": 18283008,
+          "cuda_start_allocated_bytes": 8519680,
+          "cuda_incremental_peak_bytes": 9763328
+        },
+        "roundtrip_max_abs_error": 0.0,
+        "roundtrip_metadata_type": "dict"
+      }
+    },
+    {
+      "status": "passed",
+      "compute": "reference floating compute; packed weights do not promise speedup",
+      "arguments": {
+        "tiny": true,
+        "model": null,
+        "revision": "main",
+        "local_files_only": false,
+        "calibration_text": null,
+        "evaluation_text": null,
+        "mode": "both",
+        "bits": 8,
+        "device": "cuda:0",
+        "seed": 42,
+        "seqlen": 128,
+        "batch_size": 1,
+        "batches": 8,
+        "qat_steps": 16,
+        "learning_rate": 0.0001,
+        "warmup": 5,
+        "repeats": 20,
+        "output": "/workspace/quantization_results/llama-int8-final"
+      },
+      "data": {
+        "kind": "synthetic smoke only",
+        "training_batch_sha256": [
+          "c767d9f9fcb2e0c421df28d2439f2ed535b4a45e1a96f609fb466586da845a2c",
+          "b584bd60caba6bee942b5bbfdb28d6b5161da75104be81e56314e2055eb9e123",
+          "2a70fe22f701d5e8888bf0999e0b6b9eeda611472bd5d67ecb61f9822b025b08",
+          "53a98490cc1a22fba53ed1094e963415ca40963fc23f61f46746fdbecf16b1a8",
+          "25f7da797977653c5ad28209dec6a9f7f332456676467bc2bf77304ed0cdf697",
+          "017de4ec024b8bbe4e5c089145c39a26c85740ed98688cf6e3bfe4fccf33d3aa",
+          "3d75abd3a96432ededd5fd353ecbb9ac149caff28cfb1e3b5f12153409d092bb",
+          "18aff16968aebee68364cc5a12296e8eaa30e39a59f1e0c09948d8605886e462"
+        ],
+        "evaluation_batch_sha256": [
+          "9466be2f5db06c2b3183c7be2984da2bece3412c0631182a01df5c5918b2385f",
+          "2dbe62859c78472bb5cfe086a9dc3dfebd56b1759b2c1af332d8619fb17256c4",
+          "5b508d030bf6d1a3a5d841c944a01d207ebd7b6dc7a865a6fa76f0d660ca2eec",
+          "6e0754ab817da98d460b56bc972ac1f6c647087c2ac5160d002aa63872954fac",
+          "a6006f463ce0ace0cb74dbf0da42cc9fee8397909d66c164acaa1a3c8ae6e73c",
+          "13dadabb5627a0138e6c665341e099dfc8e1f05d63f1824963c8a7de8820851c",
+          "f53ee9ebbaf7044a46a51804aa77a8db3ff6a4a22780e06559b01970756fee7f",
+          "12e3578aa0aa38cf18824b1dd8ce43b4e282755615e52b3712a04718d7f89df3"
+        ]
+      },
+      "torch": "2.5.0a0+872d972e41.nv24.08",
+      "transformers": "4.51.3",
+      "python": "3.10.12",
+      "device": "cuda:0",
+      "dtype": "float32",
+      "gpu_name": "NVIDIA RTX A6000",
+      "cuda_runtime": "12.6",
+      "model_source": {
+        "kind": "random_llama",
+        "model": null,
+        "requested_revision": null,
+        "resolved_model_commit": null,
+        "resolved_tokenizer_commit": null
+      },
+      "model_config": {
+        "vocab_size": 64,
+        "max_position_embeddings": 128,
+        "hidden_size": 32,
+        "intermediate_size": 64,
+        "num_hidden_layers": 2,
+        "num_attention_heads": 4,
+        "num_key_value_heads": 2,
+        "hidden_act": "silu",
+        "initializer_range": 0.02,
+        "rms_norm_eps": 1E-06,
+        "pretraining_tp": 1,
+        "use_cache": true,
+        "rope_theta": 10000.0,
+        "rope_scaling": null,
+        "attention_bias": false,
+        "attention_dropout": 0.0,
+        "mlp_bias": false,
+        "head_dim": 8,
+        "return_dict": true,
+        "output_hidden_states": false,
+        "output_attentions": false,
+        "torchscript": false,
+        "torch_dtype": null,
+        "use_bfloat16": false,
+        "tf_legacy_loss": false,
+        "pruned_heads": {},
+        "tie_word_embeddings": false,
+        "chunk_size_feed_forward": 0,
+        "is_encoder_decoder": false,
+        "is_decoder": false,
+        "cross_attention_hidden_size": null,
+        "add_cross_attention": false,
+        "tie_encoder_decoder": false,
+        "max_length": 20,
+        "min_length": 0,
+        "do_sample": false,
+        "early_stopping": false,
+        "num_beams": 1,
+        "num_beam_groups": 1,
+        "diversity_penalty": 0.0,
+        "temperature": 1.0,
+        "top_k": 50,
+        "top_p": 1.0,
+        "typical_p": 1.0,
+        "repetition_penalty": 1.0,
+        "length_penalty": 1.0,
+        "no_repeat_ngram_size": 0,
+        "encoder_no_repeat_ngram_size": 0,
+        "bad_words_ids": null,
+        "num_return_sequences": 1,
+        "output_scores": false,
+        "return_dict_in_generate": false,
+        "forced_bos_token_id": null,
+        "forced_eos_token_id": null,
+        "remove_invalid_values": false,
+        "exponential_decay_length_penalty": null,
+        "suppress_tokens": null,
+        "begin_suppress_tokens": null,
+        "architectures": null,
+        "finetuning_task": null,
+        "id2label": {
+          "0": "LABEL_0",
+          "1": "LABEL_1"
+        },
+        "label2id": {
+          "LABEL_0": 0,
+          "LABEL_1": 1
+        },
+        "tokenizer_class": null,
+        "prefix": null,
+        "bos_token_id": 1,
+        "pad_token_id": null,
+        "eos_token_id": 2,
+        "sep_token_id": null,
+        "decoder_start_token_id": null,
+        "task_specific_params": null,
+        "problem_type": null,
+        "_name_or_path": "",
+        "_attn_implementation_autoset": true,
+        "transformers_version": "4.51.3",
+        "model_type": "llama"
+      },
+      "baseline": {
+        "loss": 4.160884346548967,
+        "perplexity": 64.12820909139208,
+        "evaluated_tokens": 1016,
+        "logits_mae": 0.0,
+        "logits_max_abs_error": 0.0,
+        "model_state_bytes": 90752,
+        "checkpoint_bytes": 99248,
+        "checkpoint_sha256": "40f6daef88ccb716a739254f1d1f18db5092b0efdc7f1dc7ad395d4499702fdc",
+        "serialization_memory": {
+          "process_rss_peak_sampled_bytes": 1112424448,
+          "rss_sampling_interval_ms": 10,
+          "cuda_peak_allocated_bytes": 8612864,
+          "cuda_start_allocated_bytes": 8612864,
+          "cuda_incremental_peak_bytes": 0
+        },
+        "loading_memory": {
+          "process_rss_peak_sampled_bytes": 743055360,
+          "rss_sampling_interval_ms": 10,
+          "cuda_peak_allocated_bytes": 93184,
+          "cuda_start_allocated_bytes": 0,
+          "cuda_incremental_peak_bytes": 93184
+        },
+        "timing": {
+          "seconds_per_forward": 0.0019509533420205116,
+          "input_tokens_per_second": 65608.94986214091,
+          "warmup": 5,
+          "measured_forwards": 20,
+          "inference_memory": {
+            "process_rss_peak_sampled_bytes": 1112662016,
+            "rss_sampling_interval_ms": 10,
+            "cuda_peak_allocated_bytes": 8787968,
+            "cuda_start_allocated_bytes": 8614912,
+            "cuda_incremental_peak_bytes": 173056
+          },
+          "scope": "prefill forward only; excludes transfers, tokenization and loading"
+        }
+      },
+      "ptq": {
+        "loss": 4.160896000899668,
+        "perplexity": 64.12895646838577,
+        "evaluated_tokens": 1016,
+        "logits_mae": 0.00016388217591156717,
+        "logits_max_abs_error": 0.0020939111709594727,
+        "model_state_bytes": 39552,
+        "checkpoint_bytes": 80025,
+        "checkpoint_sha256": "84e15c6ca672bf5871e3a7a4faae8191ed227323f6b63200a491384297dd6e42",
+        "timing": {
+          "seconds_per_forward": 0.0026443698443472385,
+          "input_tokens_per_second": 48404.7268477291,
+          "warmup": 5,
+          "measured_forwards": 20,
+          "inference_memory": {
+            "process_rss_peak_sampled_bytes": 1218363392,
+            "rss_sampling_interval_ms": 10,
+            "cuda_peak_allocated_bytes": 8747008,
+            "cuda_start_allocated_bytes": 8573952,
+            "cuda_incremental_peak_bytes": 173056
+          },
+          "scope": "prefill forward only; excludes transfers, tokenization and loading"
+        },
+        "procedure_memory": {
+          "process_rss_peak_sampled_bytes": 1217843200,
+          "rss_sampling_interval_ms": 10,
+          "cuda_peak_allocated_bytes": 8929792,
+          "cuda_start_allocated_bytes": 8519680,
+          "cuda_incremental_peak_bytes": 410112
+        },
+        "roundtrip_max_abs_error": 0.0,
+        "roundtrip_metadata_type": "dict"
+      },
+      "qat": {
+        "loss": 4.160402312992126,
+        "perplexity": 64.09730459177126,
+        "evaluated_tokens": 1016,
+        "logits_mae": 0.008236249908804893,
+        "logits_max_abs_error": 0.06516272574663162,
+        "model_state_bytes": 39552,
+        "checkpoint_bytes": 80025,
+        "checkpoint_sha256": "b94b41f0709e3c8636babcb205f5364f88ae3f8e32dc8684260aef926090ccc2",
+        "timing": {
+          "seconds_per_forward": 0.002655331790447235,
+          "input_tokens_per_second": 48204.89871001811,
+          "warmup": 5,
+          "measured_forwards": 20,
+          "inference_memory": {
+            "process_rss_peak_sampled_bytes": 1309958144,
+            "rss_sampling_interval_ms": 10,
+            "cuda_peak_allocated_bytes": 17266688,
+            "cuda_start_allocated_bytes": 17093632,
+            "cuda_incremental_peak_bytes": 173056
+          },
+          "scope": "prefill forward only; excludes transfers, tokenization and loading"
+        },
+        "training": {
+          "steps": 16,
+          "nonzero_gradient_steps": 16,
+          "changed_parameters": 14
+        },
+        "procedure_memory": {
+          "process_rss_peak_sampled_bytes": 1309687808,
+          "rss_sampling_interval_ms": 10,
+          "cuda_peak_allocated_bytes": 18283008,
+          "cuda_start_allocated_bytes": 8519680,
+          "cuda_incremental_peak_bytes": 9763328
+        },
+        "roundtrip_max_abs_error": 0.0,
+        "roundtrip_metadata_type": "dict"
+      }
+    }
+  ],
+  "validation": {
+    "local_no_torch": {
+      "passed": 319,
+      "skipped": 3
+    },
+    "local_cpu_quantization": {
+      "passed": 94,
+      "skipped": 1
+    },
+    "remote_a6000": {
+      "passed": 483,
+      "skipped_reason": "DeepSpeed not installed in dedicated native quantization image",
+      "skipped": 1
+    },
+    "final_test_delta_archive_sha256": "444b085463c26ad86a8197a2f28a454f5028d0603aa9fffa04fbbde3e0c3b171"
+  }
+}

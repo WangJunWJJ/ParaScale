@@ -20,6 +20,7 @@ SUMMARY_FILES = {
     "cross_hardware": Path("cross_hardware_clip_datacomp/summary.json"),
     "rtx4090_precision": Path("rtx4090_clip_precision_datacomp/summary.json"),
     "a6000_native_ddp_scaling": Path("a6000_native_ddp_scaling/summary.json"),
+    "llama_quantization": Path("llama_quantization/summary.json"),
 }
 
 CONFIG_FILES = {
@@ -95,7 +96,10 @@ def build_report_markdown(
     lines.extend(_ascend_matrix_section(summaries["ascend_matrix"]))
     lines.extend(_cross_hardware_section(summaries["cross_hardware"]))
     lines.extend(_precision_section(summaries["rtx4090_precision"]))
-    lines.extend(_a6000_native_ddp_scaling_section(summaries["a6000_native_ddp_scaling"]))
+    lines.extend(
+        _a6000_native_ddp_scaling_section(summaries["a6000_native_ddp_scaling"])
+    )
+    lines.extend(_quantization_section(summaries.get("llama_quantization", {})))
     lines.extend(_evidence_links(report_root, summaries))
     return "\n".join(lines).rstrip() + "\n"
 
@@ -115,9 +119,10 @@ def _overview_table(summaries: Dict[str, Dict[str, Any]]) -> List[str]:
         "cross_hardware": "Cross-hardware CLIP DataComp",
         "rtx4090_precision": "RTX 4090 precision comparison",
         "a6000_native_ddp_scaling": "A6000 native-DDP scaling",
+        "llama_quantization": "Llama reference PTQ/QAT smoke",
     }
     for name, label in labels.items():
-        summary = summaries[name]
+        summary = summaries.get(name, {"missing": True})
         status = _status(summary)
         hardware = summary.get("hardware") or _hardware_summary(summary)
         image = summary.get("image", "n/a")
@@ -126,6 +131,46 @@ def _overview_table(summaries: Dict[str, Dict[str, Any]]) -> List[str]:
             f"| {label} | {status} | {hardware} | `{image}` | [{summary_link}]({summary_link}) |"
         )
     lines.append("")
+    return lines
+
+
+def _quantization_section(summary: Dict[str, Any]) -> List[str]:
+    reports = summary.get("reports", [])
+    if not reports:
+        return []
+    lines = [
+        "## Llama Reference PTQ/QAT",
+        "",
+        "Random two-layer Llama, synthetic tokens: functional validation only, "
+        "not pretrained model quality evidence. Float dequantization compute; "
+        "packed weights do not promise acceleration. Pretrained validation remains pending.",
+        "",
+        "| Run | PPL (synthetic) | State bytes | Checkpoint bytes | Forward ms | Reload max error | Nonzero QAT steps |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    for report in reports:
+        bits = report.get("arguments", {}).get("bits")
+        for mode in ("baseline", "ptq", "qat"):
+            result = report.get(mode, {})
+            if not result:
+                continue
+            seconds = result.get("timing", {}).get("seconds_per_forward")
+            lines.append(
+                f"| {bits}-bit {mode.upper()} | {_number(result.get('perplexity'))} "
+                f"| {result.get('model_state_bytes', 'n/a')} "
+                f"| {result.get('checkpoint_bytes', 'n/a')} "
+                f"| {_number(seconds * 1000 if seconds is not None else None)} "
+                f"| {_number(result.get('roundtrip_max_abs_error'), digits=6)} "
+                f"| {result.get('training', {}).get('nonzero_gradient_steps', 'n/a')} |"
+            )
+    lines.extend(
+        [
+            "",
+            "See [summary and full measurements](llama_quantization/summary.json) "
+            "and the [quantization guide](../../../docs/quantization.md).",
+            "",
+        ]
+    )
     return lines
 
 
@@ -154,7 +199,7 @@ def _evidence_quality_section(summaries: Dict[str, Dict[str, Any]]) -> List[str]
 
 
 def _evidence_quality_rows(
-    summaries: Dict[str, Dict[str, Any]]
+    summaries: Dict[str, Dict[str, Any]],
 ) -> Iterable[Dict[str, str]]:
     for suite, summary in summaries.items():
         runs = summary.get("runs", [])
@@ -460,7 +505,9 @@ def _evidence_links(
         "| --- | --- | --- |",
     ]
     for name, summary in summaries.items():
-        summary_path = Path(summary.get("_summary_path", str(report_root / SUMMARY_FILES[name])))
+        summary_path = Path(
+            summary.get("_summary_path", str(report_root / SUMMARY_FILES[name]))
+        )
         configs = ", ".join(
             f"[{_posix_path(path)}]({_posix_path(path)})"
             for path in CONFIG_FILES.get(name, ())
