@@ -15,6 +15,10 @@ from typing import Any, Dict
 from parascale.checkpoint import CheckpointManager
 from parascale.config import ParaScaleConfig
 from parascale.optimizers.spec import OptimizerSpec
+from parascale.runtime.distillation import (
+    build_distillation_objective,
+    validate_distillation_request,
+)
 from parascale.runtime.evidence import attach_runtime_evidence
 from parascale.runtime.lifecycle import (
     distributed_rank,
@@ -70,6 +74,9 @@ def run_train_from_config(
     workload_capability = describe_workload(config_data)
     data_type = workload_capability.data_type
     requested_backend = str(parascale_config.training_backend)
+    distillation, teacher_spec = validate_distillation_request(
+        config_data, parascale_config
+    )
     if parascale_config.quantization.enabled:
         if parascale_config.quantization.mode != "qat":
             raise ValueError("Use the quantize command for PTQ; train requires mode=qat.")
@@ -158,11 +165,17 @@ def run_train_from_config(
         quantizer = QuantizationAwareTraining(model, parascale_config.quantization)
         model = quantizer.prepare()
     optimizer = build_optimizer_for_model(model, config_data)
+    objective_metadata = {}
+    if distillation.enabled:
+        loss_fn, objective_metadata = build_distillation_objective(
+            model, distillation, teacher_spec
+        )
     runtime_status = "synthetic" if flags["synthetic"] else "real_local"
     engine = TrainEngine(
         config=parascale_config,
         model_profile=_section(config_data, "model_profile"),
         hardware_profile=_section(config_data, "hardware_profile"),
+        objective_metadata=objective_metadata,
     )
     resumed_from = None
     if resume_step is not None:
@@ -234,6 +247,10 @@ def run_train_from_config(
         "checkpoint_validation": checkpoint_validation,
         "resumed_from": resumed_from,
         "quantization": quantization_result,
+        "distillation": {
+            "objective": objective_metadata,
+            "last_components": dict(loss_fn.last_metrics),
+        } if distillation.enabled else None,
         "strategy_plan": engine.plan().to_dict(),
         "config_artifacts": config_artifacts,
     })

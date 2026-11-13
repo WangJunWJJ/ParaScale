@@ -67,6 +67,7 @@ class TrainEngine:
     step_runner: Any = None
     fit_loop: Any = None
     data_resume: Any = None
+    objective_metadata: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.precision is None:

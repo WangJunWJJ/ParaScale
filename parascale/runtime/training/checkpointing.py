@@ -144,6 +144,9 @@ class CheckpointController:
                 **backend_metadata,
             },
         )
+        objective = dict(getattr(self.engine, "objective_metadata", {}) or {})
+        if objective:
+            manifest.metadata["objective"] = objective
         path = checkpoint_manager.write_manifest(manifest)
         self._barrier()
         return path
@@ -161,6 +164,11 @@ class CheckpointController:
 
         manifest = checkpoint_manager.read_manifest(step)
         self._validate_before_resume(checkpoint_manager, manifest)
+        objective = dict(getattr(self.engine, "objective_metadata", {}) or {})
+        if manifest.metadata.get("objective", {}) != objective:
+            raise ValueError(
+                "checkpoint training objective does not match the current teacher/configuration"
+            )
         self._validate_optimizer_metadata(manifest, optimizer)
         backend_state_loaded = False
         if model is not None or optimizer is not None:
