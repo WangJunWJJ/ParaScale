@@ -24,6 +24,7 @@ python tests/benchmarks/tools/build_benchmark_report.py --report-root tests/benc
 | Cross-hardware CLIP DataComp | passed | multiple | `n/a` | [cross_hardware_clip_datacomp/summary.json](cross_hardware_clip_datacomp/summary.json) |
 | RTX 4090 precision comparison | recorded | dual RTX 4090D 24GB | `parascale-ci:cu121-torch24` | [rtx4090_clip_precision_datacomp/summary.json](rtx4090_clip_precision_datacomp/summary.json) |
 | A6000 native-DDP scaling | passed | 5x RTX A6000, measured with 1/2/4 visible GPUs | `parascale-ci:a6000-cu126-torch25` | [a6000_native_ddp_scaling/summary.json](a6000_native_ddp_scaling/summary.json) |
+| Llama reference PTQ/QAT smoke | passed | 1x NVIDIA RTX A6000 | `parascale-quantization:a6000-torch25-transformers451` | [llama_quantization/summary.json](llama_quantization/summary.json) |
 
 ## Evidence Quality
 
@@ -168,6 +169,21 @@ python tests/benchmarks/tools/build_benchmark_report.py --report-root tests/benc
 
 Best dataloader candidate: `data_4gpu_bf16_none_b8_w2_p2` at 167.074 pairs/s, wait 6.754 ms.
 
+## Llama Reference PTQ/QAT
+
+Random two-layer Llama, synthetic tokens: functional validation only, not pretrained model quality evidence. Float dequantization compute; packed weights do not promise acceleration. Pretrained validation remains pending.
+
+| Run | PPL (synthetic) | State bytes | Checkpoint bytes | Forward ms | Reload max error | Nonzero QAT steps |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 4-bit BASELINE | 64.128 | 90752 | 99248 | 1.934 | n/a | n/a |
+| 4-bit PTQ | 64.126 | 30336 | 70809 | 3.829 | 0.000000 | n/a |
+| 4-bit QAT | 64.089 | 30336 | 70809 | 4.931 | 0.000000 | 16 |
+| 8-bit BASELINE | 64.128 | 90752 | 99248 | 1.951 | n/a | n/a |
+| 8-bit PTQ | 64.129 | 39552 | 80025 | 2.644 | 0.000000 | n/a |
+| 8-bit QAT | 64.097 | 39552 | 80025 | 2.655 | 0.000000 | 16 |
+
+See [summary and full measurements](llama_quantization/summary.json) and the [quantization guide](../../../docs/quantization.md).
+
 ## Evidence Files
 
 | Suite | Summary | Config snapshots |
@@ -179,3 +195,4 @@ Best dataloader candidate: `data_4gpu_bf16_none_b8_w2_p2` at 167.074 pairs/s, wa
 | cross_hardware | [cross_hardware_clip_datacomp/summary.json](cross_hardware_clip_datacomp/summary.json) | [cross_hardware_clip_datacomp/ascend/ascend_clip_datacomp_native_ddp_fp32.config.json](cross_hardware_clip_datacomp/ascend/ascend_clip_datacomp_native_ddp_fp32.config.json), [cross_hardware_clip_datacomp/rtx4090/rtx4090_clip_datacomp_native_ddp_fp32.config.json](cross_hardware_clip_datacomp/rtx4090/rtx4090_clip_datacomp_native_ddp_fp32.config.json) |
 | rtx4090_precision | [rtx4090_clip_precision_datacomp/summary.json](rtx4090_clip_precision_datacomp/summary.json) | [rtx4090_clip_precision_datacomp/fp16/rtx4090_clip_datacomp_native_ddp_fp16.config.json](rtx4090_clip_precision_datacomp/fp16/rtx4090_clip_datacomp_native_ddp_fp16.config.json) |
 | a6000_native_ddp_scaling | [a6000_native_ddp_scaling/summary.json](a6000_native_ddp_scaling/summary.json) | n/a |
+| llama_quantization | [llama_quantization/summary.json](llama_quantization/summary.json) | n/a |

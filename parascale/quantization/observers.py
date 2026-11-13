@@ -1,113 +1,121 @@
 # -*- coding: utf-8 -*-
-# @Time : 2026/6/10 下午3:14
+# @Time : 2026/11/13 上午10:00
 # @Author : Wang Jun
 # @Email: wj_xd@foxmail.com
+"""Serializable min/max observers for reference quantization."""
 
-"""Observers used to estimate quantization ranges."""
-
-from typing import Optional, Tuple
+import copy
 
 import torch
+from torch import nn
 
-from .base import QuantizationConfig
+
+class TensorStateModule(nn.Module):
+    """Allow observer buffers to acquire their channel shapes on strict reload."""
+
+    def _load_from_state_dict(self, state_dict, prefix, *args, **kwargs):
+        for name, value in self._buffers.items():
+            incoming = state_dict.get(prefix + name)
+            if (
+                value is not None
+                and incoming is not None
+                and value.shape != incoming.shape
+            ):
+                self._buffers[name] = torch.empty(
+                    incoming.shape, dtype=value.dtype, device=value.device
+                )
+        super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
+
+    def _apply(self, fn, recurse=True):
+        precise = {
+            name: value
+            for name, value in self._buffers.items()
+            if value is not None and value.dtype == torch.float32
+        }
+        super()._apply(fn, recurse)
+        for name, value in precise.items():
+            self._buffers[name] = value.to(device=self._buffers[name].device)
+        return self
 
 
-class BaseObserver:
+class BaseObserver(TensorStateModule):
+    """Track output-channel weight ranges or one activation range."""
 
-    def __init__(self, config: QuantizationConfig):
-        self.config = config
-        self.min_val: Optional[torch.Tensor] = None
-        self.max_val: Optional[torch.Tensor] = None
+    def __init__(self, config):
+        super().__init__()
+        self.config = copy.deepcopy(config)
+        self.register_buffer("min_val", torch.empty(0))
+        self.register_buffer("max_val", torch.empty(0))
 
-    def update(self, x: torch.Tensor) -> None:
-        raise NotImplementedError
-
-    def calculate_qparams(self) -> Tuple[torch.Tensor, torch.Tensor]:
-        if self.min_val is None or self.max_val is None:
+    def calculate_qparams(self):
+        if not self.min_val.numel():
             raise ValueError("observer has not seen any data")
-        qmin, qmax = self.config.get_qmin_qmax()
-        if self.config.scheme == "symmetric":
-            max_abs = torch.max(torch.abs(self.min_val), torch.abs(self.max_val))
-            scale = max_abs / qmax
-            zero_point = torch.zeros_like(scale)
-        else:
-            scale = (self.max_val - self.min_val) / (qmax - qmin)
-            zero_point = qmin - self.min_val / scale
-        scale = torch.clamp(scale, min=1e-08)
-        return (scale, zero_point)
+        from .utils import calculate_scale_zero_point
 
-    def reset(self) -> None:
-        self.min_val = None
-        self.max_val = None
+        return calculate_scale_zero_point(self.min_val, self.max_val, self.config)
+
+    def reset(self):
+        self.min_val = self.min_val.new_empty(0)
+        self.max_val = self.max_val.new_empty(0)
+
+    def _range(self, x):
+        if not x.numel() or not torch.isfinite(x).all():
+            raise ValueError("observer input must be nonempty and finite")
+        x = x.detach().float()
+        if self.config.per_channel and x.ndim > 1:
+            dims = tuple(range(1, x.ndim))
+            return x.amin(dims), x.amax(dims)
+        return x.amin().reshape(1), x.amax().reshape(1)
 
 
 class MinMaxObserver(BaseObserver):
+    """Cumulative ranges, or a serialized finite observation window."""
 
-    def __init__(self, config: QuantizationConfig, window_size: int = 0):
+    def __init__(self, config, window_size=0):
         super().__init__(config)
         self.window_size = window_size
-        self.history_min: list = []
-        self.history_max: list = []
+        self.register_buffer("_history_min", torch.empty(0))
+        self.register_buffer("_history_max", torch.empty(0))
 
-    def update(self, x: torch.Tensor) -> None:
-        if self.config.per_channel and x.dim() > 1:
-            dims = list(range(1, x.dim()))
-            min_val = torch.min(x, dim=dims[0], keepdim=True)[0]
-            max_val = torch.max(x, dim=dims[0], keepdim=True)[0]
-            for dim in dims[1:]:
-                min_val = torch.min(min_val, dim=dim, keepdim=True)[0]
-                max_val = torch.max(max_val, dim=dim, keepdim=True)[0]
-        else:
-            min_val = torch.min(x)
-            max_val = torch.max(x)
-        if self.window_size > 0:
-            self.history_min.append(min_val.detach().clone())
-            self.history_max.append(max_val.detach().clone())
-            if len(self.history_min) > self.window_size:
-                self.history_min.pop(0)
-                self.history_max.pop(0)
-            self.min_val = torch.stack(self.history_min).amin(dim=0)
-            self.max_val = torch.stack(self.history_max).amax(dim=0)
-        elif self.min_val is None:
-            self.min_val = min_val
-            self.max_val = max_val
-        else:
-            self.min_val = torch.min(self.min_val, min_val)
-            self.max_val = torch.max(self.max_val, max_val)
+    @property
+    def history_min(self):
+        return list(self._history_min.unbind()) if self._history_min.numel() else []
 
-    def reset(self) -> None:
+    @property
+    def history_max(self):
+        return list(self._history_max.unbind()) if self._history_max.numel() else []
+
+    def update(self, x):
+        low, high = self._range(x)
+        if self.window_size:
+            self._history_min = torch.stack(
+                (self.history_min + [low])[-self.window_size :]
+            )
+            self._history_max = torch.stack(
+                (self.history_max + [high])[-self.window_size :]
+            )
+            self.min_val = self._history_min.amin(0)
+            self.max_val = self._history_max.amax(0)
+        elif not self.min_val.numel():
+            self.min_val, self.max_val = low, high
+        else:
+            self.min_val = torch.minimum(self.min_val, low)
+            self.max_val = torch.maximum(self.max_val, high)
+
+    def reset(self):
         super().reset()
-        self.history_min = []
-        self.history_max = []
-
-    def calculate_qparams(self) -> Tuple[torch.Tensor, torch.Tensor]:
-        scale, zero_point = super().calculate_qparams()
-        if self.window_size > 0 and scale.numel() > 1:
-            scale = scale.max().reshape(())
-            zero_point = torch.zeros_like(scale)
-        return (scale, zero_point)
+        self._history_min = self._history_min.new_empty(0)
+        self._history_max = self._history_max.new_empty(0)
 
 
 class MovingAverageObserver(BaseObserver):
+    """Exponential moving ranges using ratio as new-observation weight."""
 
-    def __init__(self, config: QuantizationConfig):
-        super().__init__(config)
-        self.ratio = config.moving_average_ratio
-
-    def update(self, x: torch.Tensor) -> None:
-        if self.config.per_channel and x.dim() > 1:
-            dims = list(range(1, x.dim()))
-            min_val = torch.min(x, dim=dims[0], keepdim=True)[0]
-            max_val = torch.max(x, dim=dims[0], keepdim=True)[0]
-            for dim in dims[1:]:
-                min_val = torch.min(min_val, dim=dim, keepdim=True)[0]
-                max_val = torch.max(max_val, dim=dim, keepdim=True)[0]
+    def update(self, x):
+        low, high = self._range(x)
+        ratio = self.config.moving_average_ratio
+        if not self.min_val.numel():
+            self.min_val, self.max_val = low, high
         else:
-            min_val = torch.min(x)
-            max_val = torch.max(x)
-        if self.min_val is None:
-            self.min_val = min_val
-            self.max_val = max_val
-        else:
-            self.min_val = self.ratio * min_val + (1 - self.ratio) * self.min_val
-            self.max_val = self.ratio * max_val + (1 - self.ratio) * self.max_val
+            self.min_val = self.min_val * (1 - ratio) + low * ratio
+            self.max_val = self.max_val * (1 - ratio) + high * ratio

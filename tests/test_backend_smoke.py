@@ -435,9 +435,9 @@ def test_cli_native_tiny_torch_workload_runs_real_factory(tmp_path):
     payload = run_train_from_config(config)
 
     assert payload["dry_run"] is False
-    assert payload["synthetic"] is False
-    assert payload["runtime_status"] == "real_local"
-    assert payload["capability_level"] == "local_native_real_torch"
+    assert payload["synthetic"] is True
+    assert payload["runtime_status"] == "synthetic"
+    assert payload["capability_level"] == "local_native_synthetic"
     assert payload["global_step"] == 2
     assert payload["train_device"] in {"cpu", "cuda:0", "npu:0"}
     assert (Path(payload["checkpoint"]).parent / "backend_state.pt").is_file()

@@ -378,6 +378,16 @@ from parascale import (
 )
 ```
 
+## PTQ 与 QAT
+
+支持 Linear/Conv2d 的 4-bit、8-bit 参考量化，以及 Llama 架构验证。PTQ 用于校准后导出，QAT 使用可反向传播的伪量化进行训练，再导出整数权重。
+
+- `python -m parascale.cli quantize --config <配置文件> --output <量化文件.pt>`：使用现有 workload 的模型与数据执行 PTQ。
+- `train` 的 `parascale.quantization.enabled=true`、`mode=qat`：单进程 native、FP32 QAT，并分别保存训练检查点与量化推理文件。
+- 当前推理路径反量化后进行浮点计算，压缩存储不等于低比特算子加速；FSDP、DeepSpeed、分布式 QAT 与 AMP 组合尚未验收。
+
+配置、Python API、Llama 验证和限制见 [量化指南](docs/quantization.md)。
+
 ## 测试
 
 ```bash
@@ -405,6 +415,7 @@ CI 覆盖 Python 3.10、3.11、3.12 的源码测试，并在独立 Python 3.11 �
 | 文档 | 内容 |
 | --- | --- |
 | [docs/user_manual.md](docs/user_manual.md) | 用户手册：安装、配置、训练、benchmark、checkpoint 和 FAQ |
+| [docs/quantization.md](docs/quantization.md) | PTQ/QAT、整数权重导出加载与 Llama 验证 |
 | [docs/software_design_documentation.md](docs/software_design_documentation.md) | 产品目标、总体架构、模块边界、路线图 |
 | [docs/software_requirements_specification.md](docs/software_requirements_specification.md) | 功能需求、能力等级、验收标准 |
 | [docs/remote_server_test_guide.md](docs/remote_server_test_guide.md) | 远程 GPU/NPU 容器测试指南 |

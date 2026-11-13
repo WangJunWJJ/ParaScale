@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
-# @Time : 2026/6/10 下午3:15
+# @Time : 2026/11/13 上午10:00
 # @Author : Wang Jun
 # @Email: wj_xd@foxmail.com
 
 import os
 import tempfile
 
+import pytest
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
@@ -80,14 +81,19 @@ def test_ptq_basic_flow():
     assert output.shape == (32, 10)
 
 
-def test_ptq_with_module_fusion():
+def test_ptq_rejects_module_fusion():
+    with pytest.raises(ValueError, match="fusion"):
+        QuantizationConfig(mode="ptq", fuse_modules=True)
+
+
+def test_ptq_cnn_without_fusion():
     config = QuantizationConfig(
         mode="ptq",
         bits=8,
         scheme="symmetric",
         per_channel=True,
         calib_batches=10,
-        fuse_modules=True,
+        fuse_modules=False,
     )
     _ptq, quantized_model = _run_ptq(CNNModel(), config, create_cnn_calibration_data())
 

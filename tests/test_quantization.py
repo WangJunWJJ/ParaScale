@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# @Time : 2026/6/10 下午3:15
+# @Time : 2026/11/13 上午10:00
 # @Author : Wang Jun
 # @Email: wj_xd@foxmail.com
 
@@ -71,7 +71,7 @@ def test_observers_calculate_qparams():
     assert torch.all(zero_point == 0)
 
 
-def test_minmax_observer_window_returns_scalar_qparams():
+def test_minmax_observer_window_preserves_channel_qparams():
     config = QuantizationConfig(enabled=True, bits=8, scheme="symmetric")
     observer = MinMaxObserver(config, window_size=5)
 
@@ -81,8 +81,8 @@ def test_minmax_observer_window_returns_scalar_qparams():
     assert len(observer.history_min) <= 5
     assert len(observer.history_max) <= 5
     scale, zero_point = observer.calculate_qparams()
-    assert scale.numel() == 1
-    assert zero_point.numel() == 1
+    assert scale.numel() == 32
+    assert zero_point.numel() == 32
 
     observer.reset()
     assert observer.history_min == []

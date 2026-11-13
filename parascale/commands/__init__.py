@@ -11,6 +11,7 @@ from .common import emit_json, load_config_file
 from .configuration import register_config_parser
 from .doctor import build_doctor_payload, register_doctor_parser
 from .plan import register_plan_parser
+from .quantization import register_quantization_parser
 from .run import register_run_parsers
 from .smoke import register_smoke_parser
 from .stability import register_stability_parser
@@ -27,6 +28,7 @@ def register_command_parsers(subparsers) -> None:
     register_stability_parser(subparsers)
     register_vision_profile_parser(subparsers)
     register_checkpoint_parser(subparsers)
+    register_quantization_parser(subparsers)
 
 
 __all__ = [
