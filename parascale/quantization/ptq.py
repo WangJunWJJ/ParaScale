@@ -5,6 +5,7 @@
 """Post-training calibration and reference inference checkpoints."""
 
 import copy
+from collections.abc import Mapping
 from itertools import islice
 
 import torch
@@ -25,7 +26,7 @@ def _validate_batch(value):
     if isinstance(value, torch.Tensor):
         if not value.numel() or not torch.isfinite(value).all():
             raise ValueError("calibration tensors must be nonempty and finite")
-    elif isinstance(value, dict):
+    elif isinstance(value, Mapping):
         if not value:
             raise ValueError("empty calibration batch")
         for item in value.values():
@@ -78,7 +79,7 @@ class PostTrainingQuantization:
                 for batch in islice(calib_loader, self.config.calib_batches):
                     _validate_batch(batch)
                     inputs = batch[0] if isinstance(batch, (tuple, list)) else batch
-                    if isinstance(inputs, dict):
+                    if isinstance(inputs, Mapping):
                         self.calibrated_model(**inputs)
                     elif isinstance(inputs, torch.Tensor):
                         self.calibrated_model(inputs)
