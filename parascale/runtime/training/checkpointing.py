@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
+from parascale.checkpoint.io import atomic_binary_writer
+
 from .random_state import capture_rng_state, restore_rng_state
 
 
@@ -204,11 +206,19 @@ class CheckpointController:
                 scheduler,
             )
         elif backend_entry is not None and self.engine.training_backend is not None:
-            backend_state_loaded = self._load_portable_backend_state(
-                checkpoint_manager,
-                manifest,
-                backend_entry,
-                scheduler,
+
+            def load_portable():
+                return self._load_portable_backend_state(
+                    checkpoint_manager,
+                    manifest,
+                    backend_entry,
+                    scheduler,
+                )
+
+            backend_state_loaded = (
+                self._collective_call(load_portable)
+                if backend_name in {"native", "native_ddp"}
+                else load_portable()
             )
 
         self.engine.state.global_step = int(manifest.global_step or manifest.step)
@@ -379,7 +389,8 @@ class CheckpointController:
                 ),
                 "rng_state": self._capture_rng_state(torch),
             }
-            torch.save(payload, payload_path)
+            with atomic_binary_writer(payload_path) as stream:
+                torch.save(payload, stream)
             return (
                 [
                     {
@@ -537,18 +548,19 @@ class CheckpointController:
         capture_precision = getattr(precision, "state_dict", None)
         path = manager.payload_path(step, self._runtime_entry(self._rank())["path"])
         path.parent.mkdir(parents=True, exist_ok=True)
-        torch.save(
-            {
-                "version": 1,
-                "rank": self._rank(),
-                "world_size": self._world_size(),
-                "rng_state": self._capture_rng_state(torch),
-                "precision_state_dict": capture_precision()
-                if callable(capture_precision)
-                else None,
-            },
-            path,
-        )
+        with atomic_binary_writer(path) as stream:
+            torch.save(
+                {
+                    "version": 1,
+                    "rank": self._rank(),
+                    "world_size": self._world_size(),
+                    "rng_state": self._capture_rng_state(torch),
+                    "precision_state_dict": capture_precision()
+                    if callable(capture_precision)
+                    else None,
+                },
+                stream,
+            )
         return True
 
     def _read_runtime_state(self, manager: Any, manifest: Any) -> Any:

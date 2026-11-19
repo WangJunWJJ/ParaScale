@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List
+
+from parascale.checkpoint.io import atomic_binary_writer
 
 
 @dataclass
@@ -70,6 +71,8 @@ class CheckpointManifest:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "CheckpointManifest":
+        if not isinstance(data, dict) or not isinstance(data.get("metadata", {}), dict):
+            raise ValueError("checkpoint manifest and metadata must be JSON objects")
         return cls(
             step=int(data["step"]),
             format=str(data.get("format", "parascale_manifest_v1")),
@@ -126,14 +129,24 @@ class CheckpointManager:
         ]
         manifest.validate()
         path = self.manifest_path(manifest.step)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-        temp_path.write_text(
-            json.dumps(manifest.to_dict(), indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-        temp_path.replace(path)
+        with atomic_binary_writer(path) as stream:
+            stream.write(
+                (
+                    json.dumps(manifest.to_dict(), indent=2, ensure_ascii=False) + "\n"
+                ).encode("utf-8")
+            )
         return path
+
+    def latest_valid_training_checkpoint(
+        self,
+    ) -> tuple[CheckpointManifest, list[dict[str, Any]]]:
+        """Select a complete native checkpoint and describe skipped newer steps.
+
+        Raises FileNotFoundError when no eligible training checkpoint exists.
+        """
+        from parascale.checkpoint.recovery import latest_valid_training_checkpoint
+
+        return latest_valid_training_checkpoint(self)
 
     def read_manifest(self, step: int) -> CheckpointManifest:
         data = json.loads(self.manifest_path(step).read_text(encoding="utf-8"))

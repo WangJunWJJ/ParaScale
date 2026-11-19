@@ -36,12 +36,13 @@ class FakeTorch:
         self.cpu = state[:]
 
     def save(self, payload, path):
-        self.payloads[str(path)] = copy.deepcopy(payload)
-        path.write_bytes(b"fake torch payload")
+        token = str(len(self.payloads))
+        self.payloads[token] = copy.deepcopy(payload)
+        path.write(token.encode())
 
     def load(self, path, *, map_location, weights_only):
         assert map_location == "cpu" and weights_only is True
-        return copy.deepcopy(self.payloads[str(path)])
+        return copy.deepcopy(self.payloads[path.read_text()])
 
 
 def engine(rank=0, world_size=1):
@@ -169,9 +170,9 @@ def test_runtime_identity_validated_before_backend_load(
     target = engine()
     CheckpointController(target).save(manager)
     if corruption == "rank":
-        torch.payloads[str(manager.payload_path(3, "rank-00000/runtime_state.pt"))][
-            "rank"
-        ] = 9
+        torch.payloads[
+            manager.payload_path(3, "rank-00000/runtime_state.pt").read_text()
+        ]["rank"] = 9
     else:
         manifest = manager.read_manifest(3)
         entry = next(
@@ -284,3 +285,50 @@ def test_real_cpu_continuous_vs_resumed_scaler_training(tmp_path):
         torch.equal(value, model.state_dict()[key]) for key, value in expected.items()
     )
     assert target.amp_scaler.state_dict() == expected_scaler
+
+
+@pytest.mark.parametrize("payload", ["backend_state.pt", "rank-00000/runtime_state.pt"])
+def test_real_serialization_failure_preserves_payload(tmp_path, monkeypatch, payload):
+    torch = pytest.importorskip("torch")
+    manager = CheckpointManager(str(tmp_path))
+    controller = CheckpointController(engine())
+    controller.save(manager)
+    path = manager.payload_path(3, payload)
+    before = path.read_bytes()
+
+    def fail_save(value, stream):
+        stream.write(b"partial serialization")
+        raise OSError("disk full")
+
+    monkeypatch.setattr(torch, "save", fail_save)
+    with pytest.raises(OSError, match="disk full"):
+        if payload == "backend_state.pt":
+            controller._save_portable_backend_state(manager, 3, None)
+        else:
+            controller._save_runtime_state(manager, 3)
+    assert path.read_bytes() == before
+    assert manager.validate(3).ok
+    assert not list(path.parent.glob(".*.tmp"))
+
+
+def test_native_load_failure_is_synchronized_before_state_advances(
+    tmp_path, monkeypatch
+):
+    torch = FakeTorch()
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    target = engine()
+    manager = CheckpointManager(str(tmp_path))
+    controller = CheckpointController(target)
+    controller.save(manager)
+    target.state.global_step = 0
+    barriers = []
+    target._distributed_barrier = lambda: barriers.append("sync")
+
+    def fail_load(state):
+        raise OSError("local load failed")
+
+    target.training_backend.load_state_dict = fail_load
+    with pytest.raises(OSError, match="local load failed"):
+        controller.load(manager, 3)
+    assert barriers == ["sync", "sync"]
+    assert target.state.global_step == 0
