@@ -26,6 +26,9 @@ python tests/benchmarks/tools/build_benchmark_report.py --report-root tests/benc
 | A6000 native-DDP scaling | passed | 5x RTX A6000, measured with 1/2/4 visible GPUs | `parascale-ci:a6000-cu126-torch25` | [a6000_native_ddp_scaling/summary.json](a6000_native_ddp_scaling/summary.json) |
 | Llama reference PTQ/QAT smoke | passed | 1x NVIDIA RTX A6000 | `parascale-quantization:a6000-torch25-transformers451` | [llama_quantization/summary.json](llama_quantization/summary.json) |
 | Llama online distillation smoke | passed | 1x NVIDIA RTX A6000 (156 host) | `parascale-quantization:a6000-torch25-transformers451` | [llama_distillation/summary.json](llama_distillation/summary.json) |
+| A6000 architecture contracts | recorded | 2x RTX A6000, host 156, GPU 0/1 | `parascale-quantization:a6000-torch25-transformers451` | [architecture_contracts/summary.json](architecture_contracts/summary.json) |
+| Cross-model compression portability | recorded | Local CPU and 1x RTX A6000, host 156 | `parascale-quantization:a6000-torch25-transformers451` | [compression_portability/summary.json](compression_portability/summary.json) |
+| YOLO detection distillation | recorded | 192.168.8.156, single RTX A6000 (logical CUDA 0) | `parascale-detection:a6000-ultralytics83161` | [detection_distillation/summary.json](detection_distillation/summary.json) |
 
 ## Evidence Quality
 
@@ -200,6 +203,73 @@ Timing includes forward/loss/backward, gradient checks and optimizer; excludes b
 
 See [full measurements](llama_distillation/summary.json) and the [distillation guide](../../../docs/distillation.md).
 
+## YOLO Detection Distillation
+
+short real-data functional and training-cost validation
+
+| Mode | Step images/s (mean +/- sd) | End-to-end images/s | Peak allocated MiB | mAP50-95 (0-100) |
+| --- | ---: | ---: | ---: | ---: |
+| baseline | 105.46 +/- 4.91 | 66.91 | 291.5 | 37.14 |
+| kd | 88.72 +/- 2.22 | 61.70 | 356.1 | 37.31 |
+
+Configuration: YOLOv8s teacher -> YOLOv8n student; native FP32; 320x320; batch=4; AdamW lr=1e-5, weight_decay=0.0005; feature_weight=0.1; 200 steps/run, first 30 excluded, three timing repeats per mode.
+COCO128: sorted first 96 images for training, remaining 32 for evaluation. These subsets are disjoint for this fine-tuning run, but COCO-pretrained models have already seen this dataset; this is not an unseen-data generalization study.
+Initial teacher mAP50-95=51.23 and initial student=45.04. Final means: supervised=37.14, KD=37.31. Both decreased; the +0.17-point difference does not establish a reliable accuracy benefit. Do not deploy this short-run recipe on the strength of this result.
+End-to-end throughput includes measured data wait and is 7.78% lower with KD. Step-only throughput excludes data wait and checkpointing. Peak allocated memory rises from 291.5 to 356.1 MiB; this is allocated tensor memory, not total GPU reservation.
+All repeats use seed 42; non-deterministic GPU kernels remain enabled for timing. These repeats measure timing variability, not multi-seed quality confidence. Exact resume tests separately enable deterministic kernels.
+An earlier 40-step exploratory run using the generic default lr=1e-3 and weight_decay=0.01 caused severe accuracy degradation for both modes; its measurements are retained below, not presented as a successful training recipe.
+The adapter uses square resize and ParaScale's optimizer, without the full Ultralytics augmentation/EMA/scheduler recipe. It matches all foreground/background features equally, not FGD or classification/box-distribution distillation.
+Functional validation passed, but no accuracy-improvement claim is made. Raw configs, per-step metrics, input manifests, checkpoints and official validation output remain under the remote evidence root.
+
+[Full measurements and validation scope](detection_distillation/summary.json)
+
+## A6000 Architecture Contracts
+
+Synthetic two-layer 1024-wide MLP, native DDP, per-rank microbatch 64, GAS 2, 20 warmup and 500 measured optimizer updates, three repeats. Resident GPU inputs exclude dataloader and storage. Short-window runtime overhead measurements only; not end-to-end model training or quality evidence.
+
+| Precision | Baseline median samples/s | Fixed median samples/s | Change |
+| --- | ---: | ---: | ---: |
+| fp32 | 65645.2 | 63995.6 | -2.51% |
+| bf16 | 59568.1 | 57198.5 | -3.98% |
+
+Remote full suite: 707 passed, 1 skipped.
+Two-rank DDP, FSDP and DeepSpeed Stage 0 FP32 numerical contracts passed; maximum parameter error 3.73e-9 against concatenated global-batch reference.
+FP16 DDP checkpoint/resume: exact parameters, optimizer, GradScaler and rank-local RNG continuation.
+DeepSpeed correctness image: parascale-ci:a6000-cu126-torch25 (DeepSpeed 0.19.3). No ZeRO-2/3 or Ascend validation in this run.
+Performance clipping disabled in both revisions because the baseline ignored clipping. Synthetic FP32/BF16 throughput is not a real-workload speedup claim.
+
+### Normalization Performance Optimization
+
+Same 2x A6000 GPUs 0/1 and synthetic MLP as above; 20 warmup, 2000 measured updates, three repeats alternating async then source. Before is the correctness-fixed synchronous implementation, NOT original commit 9ce3737. Resident GPU inputs, no clipping, no checkpoints in timed region. Medians are observations, not statistically established speedups or real-model results.
+
+| Precision | Before samples/s | After samples/s | Change |
+| --- | ---: | ---: | ---: |
+| fp32 | 62894.0 | 64331.9 | +2.29% |
+| bf16 | 53471.1 | 57409.8 | +7.37% |
+
+Implementation: async global denominator reduction, wait after forward, retain denominator on device; no assumed equal-batch fast path.
+Correctness: DDP/FSDP/DeepSpeed Stage 0 unequal-batch tests passed, maximum parameter error 3.73e-9.
+Local full suite: 709 passed, 3 skipped; torch-free suite: 422 passed, 4 skipped.
+Per-run variance remains visible; do not compare these 2000-step medians directly to the earlier 500-step table.
+Final remote full suite: 711 passed, 1 skipped.
+Final async implementation: dual-GPU FP16 checkpoint continuation passed exactly for parameters, optimizer, scaler and per-rank RNG.
+
+### Accumulation Statistics Optimization
+
+Second round: async normalization baseline versus detached, pre-fence accumulated-loss statistics and per-window divisor reuse. Same synthetic MLP, 2x A6000 GPU0/1, microbatch64, GAS2, 20 warmup/2000 measured updates, three repeats alternating baseline and changed code. No profiler during throughput runs; medians are observations with visible variance, not real-model evidence.
+
+| Precision | Before samples/s | After samples/s | Change |
+| --- | ---: | ---: | ---: |
+| fp32 | 63159.7 | 62987.1 | -0.27% |
+| bf16 | 56090.3 | 56827.7 | +1.31% |
+
+Separate 30-update profiling: aten::div 240 -> 210; aten::add 60 -> 30; cudaDeviceSynchronize 61 -> 61. Profiling elapsed time is excluded from throughput comparisons.
+FP32 throughput is essentially unchanged; do not interpret sub-percent differences as a speedup.
+DDP/FSDP/DeepSpeed Stage 0 unequal-batch correctness passed with maximum parameter error 3.73e-9.
+Full suites: remote 712 passed, 1 skipped; local CPU Torch 710 passed, 3 skipped.
+Benchmark scope remains synthetic; no quality or real-dataset scaling claim.
+Dual-GPU FP16 checkpoint/resume passed exact parameter, optimizer, scaler and rank-local RNG continuation.
+
 ## Evidence Files
 
 | Suite | Summary | Config snapshots |
@@ -213,3 +283,24 @@ See [full measurements](llama_distillation/summary.json) and the [distillation g
 | a6000_native_ddp_scaling | [a6000_native_ddp_scaling/summary.json](a6000_native_ddp_scaling/summary.json) | n/a |
 | llama_quantization | [llama_quantization/summary.json](llama_quantization/summary.json) | n/a |
 | llama_distillation | [llama_distillation/summary.json](llama_distillation/summary.json) | n/a |
+| architecture_contracts | [architecture_contracts/summary.json](architecture_contracts/summary.json) | n/a |
+| compression_portability | [compression_portability/summary.json](compression_portability/summary.json) | n/a |
+| detection_distillation | [detection_distillation/summary.json](detection_distillation/summary.json) | n/a |
+
+## Cross-model Compression Portability
+
+Random small Transformers architectures, single-device FP32 Python APIs. Not pretrained quality, inference acceleration, complete CLI workload coverage, or distributed compression evidence.
+
+| Family | PTQ/QAT | Distillation |
+| --- | --- | --- |
+| BERT sequence classification | 4/8-bit PTQ/QAT and reload passed | Classification; different teacher/student widths passed |
+| ViT image classification | 4/8-bit PTQ/QAT and reload passed | Classification; different teacher/student widths passed |
+| ResNet image classification | 4/8-bit PTQ/QAT and reload passed | Classification; different teacher/student widths passed |
+| Qwen2 causal LM | 4/8-bit PTQ/QAT and reload passed | Causal LM; different teacher/student widths passed |
+
+Each QAT test asserts nonzero gradients, actual weight changes, frozen-observer conversion parity, reload parity and an unchanged source model; no convergence or accuracy claim.
+Distillation checks student updates and unchanged teacher weights/buffers with no teacher gradients; class/token alignment remains the caller's responsibility.
+GPT-2 default projection selection is explicitly rejected: Transformers Conv1D is unsupported. This does not imply GPT-2 logits are unsuitable for the separate causal distillation loss.
+PTQ now accepts Mapping calibration inputs, including tokenizer-style batches, with finite-value validation preserved.
+Storage-alias checking is indexed once. The 12-Linear regression reduces storage queries from 1152 to at most 48; this is preparation complexity evidence, not GPU inference throughput.
+Reproduce: PARASCALE_PORTABILITY_DEVICE=cuda:0 python -m pytest tests/test_compression_portability.py -q (PyTorch and Transformers required).
