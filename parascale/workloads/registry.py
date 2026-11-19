@@ -15,7 +15,7 @@ from parascale.workloads.specs.ground_dino import GroundDinoSpec
 from parascale.workloads.specs.tiny import TinyTorchWorkloadSpec
 from parascale.workloads.specs.vision import VisionSyntheticSpec
 from parascale.workloads.specs.vlm_lora import VlmLoraSpec
-from parascale.workloads.specs.yolo import YoloWorldSpec
+from parascale.workloads.specs.yolo import YoloDetectionSpec, YoloWorldSpec
 
 from .clip import build_clip_contrastive_components
 from .common import _require_torch, _section
@@ -26,7 +26,7 @@ from .optimizer import (
 from .tiny import build_tiny_torch_components
 from .vision import build_vision_synthetic_components
 from .vlm_lora import build_vlm_lora_components
-from .yolo import build_yolo_world_components
+from .yolo import build_yolo_detection_components, build_yolo_world_components
 
 
 def build_training_components(config_data: Dict[str, Any]):
@@ -58,6 +58,7 @@ def default_workload_registry() -> WorkloadRegistry:
         _build_yolo_world_from_config,
         aliases=("yolo_world_detection", "yoloworld"),
     )
+    registry.register("yolo_detection", _build_yolo_detection_from_config)
     registry.register(
         "ground_dino",
         _build_ground_dino_from_config,
@@ -93,6 +94,10 @@ def _build_vlm_lora_from_config(config_data: Dict[str, Any]):
 
 def _build_yolo_world_from_config(config_data: Dict[str, Any]):
     return build_yolo_world_components(YoloWorldSpec.from_config(config_data))
+
+
+def _build_yolo_detection_from_config(config_data: Dict[str, Any]):
+    return build_yolo_detection_components(YoloDetectionSpec.from_config(config_data))
 
 
 def _build_ground_dino_from_config(config_data: Dict[str, Any]):

@@ -14,14 +14,14 @@ from pathlib import Path
 from typing import Any
 
 from parascale.config import ParaScaleConfig
-from parascale.distillation import DistillationConfig
+from parascale.distillation import DetectionDistillationConfig, DistillationConfig
 from parascale.runtime.lifecycle import is_distributed_launch
 
 
 def validate_distillation_request(
     config_data: dict[str, Any],
     runtime: ParaScaleConfig,
-) -> tuple[DistillationConfig, dict[str, Any]]:
+) -> tuple[DistillationConfig | DetectionDistillationConfig, dict[str, Any]]:
     """Validate the CLI execution boundary before constructing any model.
 
     Returns the objective configuration and teacher source specification.
@@ -32,9 +32,17 @@ def validate_distillation_request(
         raise ValueError("distillation must be a mapping")
     options = dict(section)
     teacher = options.pop("teacher", {})
-    config = DistillationConfig.from_dict(options)
+    if options.get("task") == "detection":
+        config = DetectionDistillationConfig.from_dict(options)
+    else:
+        config = DistillationConfig.from_dict(options)
     if not config.enabled:
         return config, {}
+    if (
+        config.task == "detection"
+        and config_data.get("training", {}).get("workload") != "yolo_detection"
+    ):
+        raise ValueError("detection distillation requires workload=yolo_detection")
     if runtime.training_backend != "native" or is_distributed_launch():
         raise ValueError(
             "distillation currently requires a single-process native backend"
@@ -75,6 +83,11 @@ def validate_distillation_request(
         )
     if not Path(teacher["checkpoint"]).is_file():
         raise ValueError("distillation teacher checkpoint does not exist")
+    if (
+        config.task == "detection"
+        and teacher["config"].get("training", {}).get("workload") != "yolo_detection"
+    ):
+        raise ValueError("detection teacher requires workload=yolo_detection")
     return config, deepcopy(teacher)
 
 
@@ -89,9 +102,27 @@ def build_distillation_objective(
     Teacher state and optimizer are never embedded in student checkpoints.
     Invalid or incomplete teacher state raises ValueError or RuntimeError.
     """
+    from parascale.distillation import OnlineDistillationLoss
+
+    teacher, metadata = _load_teacher(student, teacher_spec)
+    objective = OnlineDistillationLoss(student, teacher, config)
+    metadata.update(kind="online_logits_distillation", config=config.to_dict())
+    return objective, metadata
+
+
+def build_detection_distillation_components(student, config, teacher_spec, loss_fn):
+    """Prepare trainable projections before constructing the student optimizer."""
+    from parascale.distillation.detection import create_detection_distillation
+
+    teacher, metadata = _load_teacher(student, teacher_spec)
+    model, objective = create_detection_distillation(student, teacher, config, loss_fn)
+    metadata.update(kind="yolo_feature_distillation", config=config.to_dict())
+    return model, objective, metadata
+
+
+def _load_teacher(student, teacher_spec):
     import torch
 
-    from parascale.distillation import OnlineDistillationLoss
     from parascale.workloads import build_training_components
 
     source = Path(teacher_spec["checkpoint"])
@@ -127,19 +158,23 @@ def build_distillation_objective(
             teacher_config
         )
     del teacher_optimizer, teacher_data
-    teacher.load_state_dict(state, strict=True)
+    if teacher_config.get("training", {}).get(
+        "workload"
+    ) == "yolo_detection" and not any(
+        key.startswith("wrapped_model.") for key in state
+    ):
+        teacher.wrapped_model.load_state_dict(state, strict=True)
+    else:
+        teacher.load_state_dict(state, strict=True)
     for model in (student, teacher):
         if any(
             p.is_floating_point() and p.dtype != torch.float32
             for p in model.parameters()
         ):
             raise ValueError("native distillation models must have fp32 parameters")
-    objective = OnlineDistillationLoss(student, teacher, config)
     metadata = {
-        "kind": "online_logits_distillation",
         "schema_version": 1,
-        "config": config.to_dict(),
         "teacher_checkpoint_sha256": digest.hexdigest(),
         "teacher_config_sha256": config_digest,
     }
-    return objective, metadata
+    return teacher, metadata

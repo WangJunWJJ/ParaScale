@@ -72,6 +72,7 @@ def workload_flags(workload: str) -> Dict[str, bool]:
         in {"vlm_lora", "vlm_lora_finetune", "tiny_vlm_lora"},
         "yolo_world": normalized
         in {"yolo_world", "yolo_world_detection", "yoloworld"},
+        "yolo_detection": normalized == "yolo_detection",
         "ground_dino": normalized
         in {"ground_dino", "grounding_dino", "groundingdino", "ground_dino_detection"},
     }
@@ -96,6 +97,8 @@ def _base_capability(flags: Dict[str, bool], data_type: str) -> str:
         if data_type in {"coco", "coco_cached"}:
             return "local_native_yolo_world_coco"
         return "local_native_yolo_world_detection"
+    if flags["yolo_detection"]:
+        return "local_native_yolo_detection"
     if flags["ground_dino"]:
         if data_type in {"phrase_grounding", "grounding_phrase", "ground_dino_json"}:
             return "local_native_ground_dino_phrase_grounding"

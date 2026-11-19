@@ -7,8 +7,11 @@
 from importlib import import_module
 
 from .config import DistillationConfig
+from .detection_config import DetectionDistillationConfig
 
 __all__ = [
+    "DetectionDistillationConfig",
+    "create_detection_distillation",
     "DistillationConfig",
     "DistillationLossOutput",
     "distillation_loss",
@@ -18,6 +21,7 @@ __all__ = [
 
 def __getattr__(name):
     modules = {
+        "create_detection_distillation": "detection",
         "DistillationLossOutput": "loss",
         "distillation_loss": "loss",
         "OnlineDistillationLoss": "online",

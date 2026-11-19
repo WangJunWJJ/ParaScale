@@ -35,6 +35,35 @@ it does not filter the loss. Use the optional sample-level `loss_mask[B]` for
 classification loss filtering. Causal LM instead uses `attention_mask[B, L]`
 to exclude prediction pairs with a masked source or target position.
 
+## Cross-model applicability
+
+The loss is architecture-independent within two explicit output contracts:
+classification `[B, C]` and causal next-token prediction `[B, L, V]`. Teacher
+and student may have different depths and hidden widths, but output positions
+and class/token identities must align. A smaller student reduces inference
+cost only if its architecture and deployment actually do less work; the loss
+alone does not compress an existing model.
+
+`tests/test_compression_portability.py` validates genuine student updates and
+unchanged frozen teachers for small random Transformers BERT classifiers, ViT,
+ResNet and Qwen2 models, with different teacher/student widths. It does not
+measure held-out quality, pretrained accuracy retention, or CLI workload support.
+
+- BERT/ViT/ResNet classification: align label meanings and order; provide the
+  correct teacher `input_keys`. Tensor outputs, `logits` mappings and `.logits`
+  model outputs are accepted. Raw tuple outputs require an adapter.
+- Llama/Qwen-style causal LM: use the same token-to-ID mapping and aligned
+  sequences, not merely equal vocabulary sizes. Different-tokenizer distillation
+  needs explicit alignment and is not implemented.
+- Encoder-decoder and masked LM losses cannot reuse the causal shift blindly.
+  Token classification, segmentation, general detection, CLIP contrastive outputs and
+  continuous-action policies do not match the current objective contract.
+- Standard same-family YOLO detection has a separate feature adapter described
+  below. Different class spaces and general cross-family feature matching are
+  not supported.
+- The existing single-process native FP32 CLI restrictions still apply. Python
+  API model coverage does not lift distributed, AMP, accumulation or QAT+KD guards.
+
 ## Python API
 
 Given independent loaded `student` and `teacher` models, a prepared `batch`, and
@@ -126,8 +155,130 @@ quantization, and `gradient_accumulation_steps != 1`. Correct token-weighted
 normalization across variable-length accumulated microbatches is not yet
 validated. QAT plus KD is not an available combined CLI workflow until validated.
 These are CLI/runtime guards, not guarantees enforced by the standalone loss
-API. Feature distillation, reverse distillation, offline cached logits, top-k
-targets, reinforcement learning, and detection distillation are outside scope.
+API. Reverse distillation, offline cached logits, top-k targets and reinforcement
+learning are outside scope. Detection uses the separate contract below.
+
+## YOLO Detection Distillation
+
+Use `training.workload: yolo_detection` and `distillation.task: detection`.
+This is a standard closed-set detector adapter, separate from `yolo_world`.
+It reuses ParaScale's image/label pipeline and Ultralytics' official detection
+loss. It does not replace that objective with classification KL or a proxy loss.
+
+Supported: same-family standard Ultralytics `DetectionModel` pairs with exactly
+three `Detect` input scales, identical class IDs/names and strides. Different
+student/teacher widths are handled by trainable 1x1 projections. YOLOv8 and
+YOLO11 have integration tests. Segmentation, pose, YOLO-World, end-to-end heads,
+GroundingDINO and cross-family pairs are rejected. The validated upstream version
+is Ultralytics 8.3.161; other versions are not implicitly certified.
+
+The feature objective is intentionally simple, not an FGD implementation:
+
+```text
+normalize(F) = F / sqrt(mean_CHW(F^2) + 1e-6)  # separately per image
+feature_loss = mean_scales MSE(normalize(project(student_neck)), normalize(teacher_neck))
+total = official_detection_loss + feature_weight * batch_size * feature_loss
+```
+
+The batch-size factor follows Ultralytics' batch-summed detection objective.
+Foreground and background have equal weight; classification-logit and box/DFL
+distribution distillation are not implemented. The teacher sees exactly the
+student's preprocessed images in eval/no-grad mode. Teacher weights and BatchNorm
+statistics stay fixed. DFL's fixed integral convolution is not trained.
+`feature_weight: 0` bypasses feature capture, projection and teacher inference.
+
+Install the detection dependency with `pip install ultralytics==8.3.161`.
+The following complete YAML example assumes trusted local pretrained model files,
+a YOLO-format directory (`images/*.jpg`, `labels/*.txt`), and an existing teacher
+tensor state dictionary. Empty label files represent background-only images;
+images without a matching label file are skipped by the workload.
+
+```yaml
+backend: &backend
+  training_backend: native
+  precision: fp32
+model:
+  path: /models/yolov8n.pt
+data: &data
+  data_dir: /datasets/detection/train
+  image_size: 320
+  batch_size: 4
+  num_samples: 96
+  num_workers: 0
+optimizer:
+  type: adamw
+  lr: 0.00001
+  weight_decay: 0.0005
+training:
+  workload: yolo_detection
+  max_steps: 40
+  checkpoint_interval: 20
+  checkpoint_dir: /outputs/yolo-kd
+  seed: 42
+distillation:
+  enabled: true
+  task: detection
+  feature_weight: 0.1
+  teacher:
+    checkpoint: /models/teacher_state.pt
+    config:
+      backend: *backend
+      model:
+        path: /models/yolov8s.pt
+      data: *data
+      training:
+        workload: yolo_detection
+        max_steps: 1
+```
+
+Prepare the tensor-only teacher state from a **trusted** Ultralytics checkpoint:
+
+```python
+import torch
+from ultralytics import YOLO
+
+torch.save(YOLO("/models/yolov8s.pt").model.state_dict(), "/models/teacher_state.pt")
+```
+
+Teacher loading also accepts ParaScale YOLO proxy state dictionaries and native
+`backend_state.pt` files. Strict shape/key checks and teacher/configuration hashes
+protect resume. Class-name agreement does not prove dataset label semantics;
+ensure labels use the same mapping before training.
+
+```bash
+python -m parascale.cli train --config detection-kd.yaml --output result.json
+```
+
+Full checkpoints include student, projections, optimizer and runtime state;
+they exclude teacher tensors. The default `checkpoint_dir/student.pt` export
+(overridable via `training.student_output`) contains **only raw student weights**,
+without projections or teacher. It is for inference, not resuming training:
+
+```python
+student = YOLO("/models/yolov8n.pt")
+student.model.load_state_dict(torch.load("/outputs/yolo-kd/student.pt", weights_only=True))
+student.predict("test.jpg")
+```
+
+Native FP32, one process, accumulation=1 and full checkpoints are required.
+AMP, distributed KD and QAT+KD remain guarded. Exact parameter comparisons on
+CUDA require deterministic kernels (`CUBLAS_WORKSPACE_CONFIG=:4096:8` and
+`torch.use_deterministic_algorithms(True)`) plus repeatable input order.
+
+Validation uses `tests/test_detection_distillation.py` (ownership, gradients,
+shape/class/family guards, hook cleanup, empty targets and zero weight) and
+`tests/test_detection_training.py` (actual YOLOv8/YOLO11 CLI, resume, export and
+changed-teacher rejection). The reusable real-data benchmark is
+`tests/benchmarks/scripts/validate_detection_distillation.py`; it compares paired
+initializations, hashes model/data inputs, records step and end-to-end throughput,
+and optionally invokes official mAP evaluation with `--evaluation-data`.
+See the [unified report](../tests/benchmarks/reports/BENCHMARK_REPORT.md).
+
+This workload uses square resizing and the configured ParaScale optimizer, not
+Ultralytics' complete augmentation/EMA/scheduler recipe. A short smoke run and
+finite gradients are not evidence of quality improvement. Use an explicit
+fine-tuning learning rate and compare against a same-budget supervised student
+on a sufficiently large held-out set before deployment.
 
 ## Llama Verification
 

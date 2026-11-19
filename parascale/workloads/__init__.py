@@ -19,7 +19,12 @@ from .serving import build_serving_model_from_checkpoint
 from .tiny import TinyTorchWorkloadSpec, build_tiny_torch_components
 from .vision import VisionSyntheticSpec, build_vision_synthetic_components
 from .vlm_lora import VlmLoraSpec, build_vlm_lora_components
-from .yolo import YoloWorldSpec, build_yolo_world_components
+from .yolo import (
+    YoloDetectionSpec,
+    YoloWorldSpec,
+    build_yolo_detection_components,
+    build_yolo_world_components,
+)
 
 __all__ = [
     "ClipContrastiveSpec",
@@ -28,6 +33,7 @@ __all__ = [
     "VisionSyntheticSpec",
     "VlmLoraSpec",
     "YoloWorldSpec",
+    "YoloDetectionSpec",
     "_iter_datacomp_tar_entries",
     "_looks_like_supported_image",
     "build_clip_contrastive_components",
@@ -39,5 +45,6 @@ __all__ = [
     "build_vision_synthetic_components",
     "build_vlm_lora_components",
     "build_yolo_world_components",
+    "build_yolo_detection_components",
     "default_workload_registry",
 ]

@@ -16,6 +16,7 @@ from parascale.checkpoint import CheckpointManager
 from parascale.configuration import normalize_execution_config
 from parascale.optimizers.spec import OptimizerSpec
 from parascale.runtime.distillation import (
+    build_detection_distillation_components,
     build_distillation_objective,
     validate_distillation_request,
 )
@@ -161,6 +162,29 @@ def run_train_from_config(
     checkpoint_dir = str(
         training.get("checkpoint_dir", parascale_config.checkpoint_save_path)
     )
+    student_output = None
+    if distillation.enabled and distillation.task == "detection":
+        student_output = Path(
+            training.get("student_output", Path(checkpoint_dir) / "student.pt")
+        )
+        resolved_output = student_output.resolve()
+        checkpoint_root = Path(checkpoint_dir).resolve()
+        if resolved_output.is_relative_to(checkpoint_root):
+            relative = resolved_output.relative_to(checkpoint_root)
+            if relative.parts and relative.parts[0].startswith("step-"):
+                raise ValueError(
+                    "student_output must not be inside checkpoint step directories"
+                )
+        protected = [teacher_spec["checkpoint"]]
+        for source_config in (config_data, teacher_spec["config"]):
+            source_model = _section(source_config, "model")
+            source_path = source_model.get("path", source_model.get("model_path"))
+            if source_path:
+                protected.append(source_path)
+        if any(student_output.resolve() == Path(path).resolve() for path in protected):
+            raise ValueError(
+                "student_output must not overwrite a source model or teacher checkpoint"
+            )
     checkpoint_interval = int(
         training.get("checkpoint_interval", parascale_config.checkpoint_save_interval)
         or max_steps
@@ -189,12 +213,19 @@ def run_train_from_config(
 
         quantizer = QuantizationAwareTraining(model, parascale_config.quantization)
         model = quantizer.prepare()
-    optimizer = build_optimizer_for_model(model, config_data)
     objective_metadata = {}
     if distillation.enabled:
-        loss_fn, objective_metadata = build_distillation_objective(
-            model, distillation, teacher_spec
-        )
+        if distillation.task == "detection":
+            model, loss_fn, objective_metadata = (
+                build_detection_distillation_components(
+                    model, distillation, teacher_spec, loss_fn
+                )
+            )
+        else:
+            loss_fn, objective_metadata = build_distillation_objective(
+                model, distillation, teacher_spec
+            )
+    optimizer = build_optimizer_for_model(model, config_data)
     runtime_status = "synthetic" if flags["synthetic"] else "real_local"
     engine = TrainEngine(
         config=parascale_config,
@@ -239,6 +270,20 @@ def run_train_from_config(
             engine.save_checkpoint(manager),
         )
     quantization_result = None
+    student_checkpoint = None
+    if student_output is not None:
+        import torch
+
+        output = student_output
+        output.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(
+            {
+                key: value.detach().cpu()
+                for key, value in model.student.wrapped_model.state_dict().items()
+            },
+            output,
+        )
+        student_checkpoint = str(output)
     if quantizer is not None:
         output = str(
             training.get("quantized_output", Path(checkpoint_dir) / "quantized.pt")
@@ -278,6 +323,7 @@ def run_train_from_config(
             "distillation": {
                 "objective": objective_metadata,
                 "last_components": dict(loss_fn.last_metrics),
+                "student_checkpoint": student_checkpoint,
             }
             if distillation.enabled
             else None,
