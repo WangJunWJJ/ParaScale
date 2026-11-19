@@ -29,6 +29,7 @@ python tests/benchmarks/tools/build_benchmark_report.py --report-root tests/benc
 | A6000 architecture contracts | recorded | 2x RTX A6000, host 156, GPU 0/1 | `parascale-quantization:a6000-torch25-transformers451` | [architecture_contracts/summary.json](architecture_contracts/summary.json) |
 | Cross-model compression portability | recorded | Local CPU and 1x RTX A6000, host 156 | `parascale-quantization:a6000-torch25-transformers451` | [compression_portability/summary.json](compression_portability/summary.json) |
 | YOLO detection distillation | recorded | 192.168.8.156, single RTX A6000 (logical CUDA 0) | `parascale-detection:a6000-ultralytics83161` | [detection_distillation/summary.json](detection_distillation/summary.json) |
+| Runnable compression examples | recorded | Windows CPU and one NVIDIA RTX A6000 (host 156, physical GPU 0) | `parascale-detection:a6000-ultralytics83161` | [compression_examples/summary.json](compression_examples/summary.json) |
 
 ## Evidence Quality
 
@@ -270,6 +271,34 @@ Full suites: remote 712 passed, 1 skipped; local CPU Torch 710 passed, 3 skipped
 Benchmark scope remains synthetic; no quality or real-dataset scaling claim.
 Dual-GPU FP16 checkpoint/resume passed exact parameter, optimizer, scaler and rank-local RNG continuation.
 
+## Runnable Compression Examples
+
+Actual example shell entrypoints executed on CPU/CUDA. Llama uses random models and synthetic tokens; only YOLO uses pretrained weights and real images. Bounded functional checks, not a quality or production-performance claim.
+
+| Example | Device | Model/data source | Status |
+| --- | --- | --- | --- |
+| Llama PTQ 8-bit | cpu | random Llama / synthetic tokens | passed |
+| Llama QAT 8-bit | cpu | random Llama / synthetic tokens | passed |
+| Llama distillation | cpu | random Llama / synthetic tokens | passed |
+| Llama PTQ 4-bit | cuda | random Llama / synthetic tokens | passed |
+| Llama PTQ 8-bit | cuda | random Llama / synthetic tokens | passed |
+| Llama QAT 4-bit | cuda | random Llama / synthetic tokens | passed |
+| Llama QAT 8-bit | cuda | random Llama / synthetic tokens | passed |
+| Llama distillation | cuda | random Llama / synthetic tokens | passed |
+| YOLOv8s -> YOLOv8n distillation | cuda | pretrained YOLO / COCO128 train96-val32 | passed |
+
+Validation date: 2026-11-19. All four launchers were executed, not merely inspected or dry-run.
+CPU: 8-bit PTQ, 8-bit QAT (16 updates), and Llama KD/CE baseline (16 updates each) passed. A6000: 4/8-bit PTQ/QAT and Llama KD passed; export roundtrip max absolute error was 0 for all six PTQ/QAT runs and both KD student exports.
+Pretrained Llama execution/quality was not evaluated in this run. Local-pretrained-model commands are documented, but are not substituted by the random-model results.
+YOLO: trusted pretrained YOLOv8s -> YOLOv8n, COCO128 fixed train96/val32, 320 pixels, batch 4, FP32 native, 40 updates, 10 warmup, 3 same-seed repeats, AdamW lr=1e-5. COCO128 is not unseen during COCO pretraining.
+YOLO baseline/KD step throughput: 105.20/81.51 images/s; including data wait: 67.34/58.17 images/s. These short-window numbers exclude setup/checkpoint/evaluation from the data-wait-inclusive denominator; wall time is separately retained.
+YOLO mAP50-95 (0-100): initial student 45.04, supervised mean 41.56, KD mean 41.37. No demonstrated accuracy gain; both fine-tuned results are below the initial student.
+YOLO validates saved checkpoint contents and student export, but this example does not execute resume. Do not reinterpret its pass status as a resume test.
+Llama timing scopes differ from YOLO and are not cross-model throughput comparisons. Reference weight storage is not an optimized integer inference backend.
+Raw reports and logs remain in /home/user/wangjun/parascale_examples_20261119/results; the source archive and report SHA-256 values identify the executed evidence. Models and checkpoints are not committed.
+Post-review safeguards: PTQ/QAT reject nonempty output directories before model loading or failure-report writing. All six quantization runs were repeated after this change; 19 launcher/layout tests passed on both Windows and the A6000 container.
+Final local source validation: 796 passed, 7 skipped. CPU timing overlapped local test activity and is retained only as diagnostic data, not a performance comparison.
+
 ## Evidence Files
 
 | Suite | Summary | Config snapshots |
@@ -286,6 +315,7 @@ Dual-GPU FP16 checkpoint/resume passed exact parameter, optimizer, scaler and ra
 | architecture_contracts | [architecture_contracts/summary.json](architecture_contracts/summary.json) | n/a |
 | compression_portability | [compression_portability/summary.json](compression_portability/summary.json) | n/a |
 | detection_distillation | [detection_distillation/summary.json](detection_distillation/summary.json) | n/a |
+| compression_examples | [compression_examples/summary.json](compression_examples/summary.json) | n/a |
 
 ## Cross-model Compression Portability
 

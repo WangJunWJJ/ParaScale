@@ -25,6 +25,7 @@ SUMMARY_FILES = {
     "architecture_contracts": Path("architecture_contracts/summary.json"),
     "compression_portability": Path("compression_portability/summary.json"),
     "detection_distillation": Path("detection_distillation/summary.json"),
+    "compression_examples": Path("compression_examples/summary.json"),
 }
 
 CONFIG_FILES = {
@@ -111,6 +112,9 @@ def build_report_markdown(
     lines.extend(
         _architecture_contracts_section(summaries.get("architecture_contracts", {}))
     )
+    lines.extend(
+        _compression_examples_section(summaries.get("compression_examples", {}))
+    )
     lines.extend(_evidence_links(report_root, summaries))
     portability = summaries.get("compression_portability", {})
     if portability.get("families"):
@@ -152,6 +156,7 @@ def _overview_table(summaries: Dict[str, Dict[str, Any]]) -> List[str]:
         "architecture_contracts": "A6000 architecture contracts",
         "compression_portability": "Cross-model compression portability",
         "detection_distillation": "YOLO detection distillation",
+        "compression_examples": "Runnable compression examples",
     }
     for name, label in labels.items():
         summary = summaries.get(name, {"missing": True})
@@ -163,6 +168,25 @@ def _overview_table(summaries: Dict[str, Dict[str, Any]]) -> List[str]:
             f"| {label} | {status} | {hardware} | `{image}` | [{summary_link}]({summary_link}) |"
         )
     lines.append("")
+    return lines
+
+
+def _compression_examples_section(summary: Dict[str, Any]) -> List[str]:
+    if not summary.get("runs"):
+        return []
+    lines = [
+        "## Runnable Compression Examples",
+        "",
+        summary["scope"],
+        "",
+        "| Example | Device | Model/data source | Status |",
+        "| --- | --- | --- | --- |",
+    ]
+    for run in summary["runs"]:
+        lines.append(
+            f"| {run['example']} | {run['device']} | {run['source']} | {run['status']} |"
+        )
+    lines.extend(["", *summary.get("notes", []), ""])
     return lines
 
 

@@ -39,6 +39,40 @@ def _write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def test_compression_examples_report_keeps_random_and_real_data_scope():
+    from tests.benchmarks.tools.build_benchmark_report import (
+        _compression_examples_section,
+    )
+
+    text = "\n".join(
+        _compression_examples_section(
+            {
+                "scope": "Entry-point validation, not a quality claim.",
+                "runs": [
+                    {
+                        "example": "Llama PTQ",
+                        "device": "cuda",
+                        "source": "random Llama / synthetic tokens",
+                        "status": "passed",
+                    },
+                    {
+                        "example": "YOLO KD",
+                        "device": "cuda",
+                        "source": "pretrained YOLO / COCO128",
+                        "status": "passed",
+                    },
+                ],
+                "notes": ["Pretrained Llama quality was not evaluated."],
+            }
+        )
+    )
+    assert "random Llama / synthetic tokens" in text
+    assert "pretrained YOLO / COCO128" in text
+    assert "Pretrained Llama quality was not evaluated." in text
+    assert "not a quality claim" in text
+    assert _compression_examples_section({}) == []
+
+
 def test_normalization_optimization_report_keeps_comparison_scope():
     from tests.benchmarks.tools.build_benchmark_report import (
         _architecture_contracts_section,
