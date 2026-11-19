@@ -55,8 +55,14 @@ def register_run_parsers(subparsers: argparse._SubParsersAction) -> None:
         action="store_true",
         help="Validate config and print the execution plan.",
     )
-    train_parser.add_argument(
+    resume = train_parser.add_mutually_exclusive_group()
+    resume.add_argument(
         "--resume-step", type=int, help="Resume from a ParaScale manifest step."
+    )
+    resume.add_argument(
+        "--resume-latest",
+        action="store_true",
+        help="Resume the latest complete native/native_ddp checkpoint, reporting skipped candidates.",
     )
     train_parser.add_argument(
         "--output", help="Optional path to write the dry-run JSON."
@@ -114,7 +120,13 @@ def register_run_parsers(subparsers: argparse._SubParsersAction) -> None:
 def run_train_from_config(
     config_data: Dict[str, Any],
     resume_step: int | None = None,
+    *,
+    resume_latest: bool = False,
 ) -> Dict[str, Any]:
+    if resume_latest:
+        return _run_train_from_config(
+            config_data, resume_step=resume_step, resume_latest=True
+        )
     return _run_train_from_config(config_data, resume_step=resume_step)
 
 
@@ -279,13 +291,22 @@ def cmd_train(args: argparse.Namespace) -> int:
     )
     if not args.dry_run:
         try:
-            payload = run_train_from_config(config_data, args.resume_step)
+            payload = (
+                run_train_from_config(config_data, args.resume_step, resume_latest=True)
+                if getattr(args, "resume_latest", False)
+                else run_train_from_config(config_data, args.resume_step)
+            )
             payload.setdefault("config_artifacts", config_artifacts)
             emit_json(payload, args.output)
         finally:
             destroy_distributed_runtime()
         return 0
     payload = build_train_dry_run_payload(config_data)
+    payload["resume_request"] = {
+        "latest": bool(getattr(args, "resume_latest", False)),
+        "step": args.resume_step,
+        "validated": False,
+    }
     payload["config_artifacts"] = config_artifacts
     attach_runtime_evidence(payload)
     emit_json(payload, args.output)

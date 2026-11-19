@@ -12,7 +12,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict
 
-from parascale.checkpoint import CheckpointManager
+from parascale.checkpoint import CheckpointManager, CheckpointManifest
 from parascale.configuration import normalize_execution_config
 from parascale.optimizers.spec import OptimizerSpec
 from parascale.runtime.distillation import (
@@ -74,10 +74,17 @@ def _rank_component_config(
 
 
 def run_train_from_config(
-    config_data: Dict[str, Any], resume_step: int | None = None
+    config_data: Dict[str, Any],
+    resume_step: int | None = None,
+    *,
+    resume_latest: bool = False,
 ) -> Dict[str, Any]:
     config_data, parascale_config = normalize_execution_config(config_data)
     training = _section(config_data, "training")
+    if resume_step is None and training.get("resume_step") is not None:
+        resume_step = int(training["resume_step"])
+    if resume_latest and resume_step is not None:
+        raise ValueError("resume_latest and resume_step are mutually exclusive")
     workload = str(training.get("workload", "synthetic_regression"))
     workload_capability = describe_workload(config_data)
     data_type = workload_capability.data_type
@@ -122,6 +129,11 @@ def run_train_from_config(
         "fsdp",
         "deepspeed",
     }
+    if resume_latest and parascale_config.training_backend not in {
+        "native",
+        "native_ddp",
+    }:
+        raise ValueError("resume_latest requires the native or native_ddp backend")
     if distributed_requested and not is_distributed_launch():
         raise ValueError(
             f"CLI backend '{parascale_config.training_backend}' requires a "
@@ -190,11 +202,21 @@ def run_train_from_config(
         or max_steps
     )
     manager = CheckpointManager(checkpoint_dir)
-    if resume_step is None and training.get("resume_step") is not None:
-        resume_step = int(training["resume_step"])
-    resume_manifest = (
-        manager.read_manifest(int(resume_step)) if resume_step is not None else None
-    )
+    checkpoint_recovery = None
+    if resume_latest:
+        resume_manifest, skipped = _select_latest_checkpoint(
+            manager, distributed=distributed_requested
+        )
+        resume_step = resume_manifest.step
+        checkpoint_recovery = {
+            "strategy": "latest_valid",
+            "selected_step": resume_step,
+            "skipped": skipped,
+        }
+    else:
+        resume_manifest = (
+            manager.read_manifest(int(resume_step)) if resume_step is not None else None
+        )
     component_config = (
         _resume_component_config(config_data, resume_manifest, max_steps=max_steps)
         if resume_manifest is not None
@@ -319,6 +341,7 @@ def run_train_from_config(
             "checkpoint": str(final_manifest_path) if final_manifest_path else None,
             "checkpoint_validation": checkpoint_validation,
             "resumed_from": resumed_from,
+            "checkpoint_recovery": checkpoint_recovery,
             "quantization": quantization_result,
             "distillation": {
                 "objective": objective_metadata,
@@ -331,6 +354,31 @@ def run_train_from_config(
             "config_artifacts": config_artifacts,
         }
     )
+
+
+def _select_latest_checkpoint(
+    manager: CheckpointManager,
+    *,
+    distributed: bool,
+) -> tuple[CheckpointManifest, list[dict[str, Any]]]:
+    if not distributed:
+        return manager.latest_valid_training_checkpoint()
+    import torch.distributed as dist
+
+    # Publish selection failures too, so peers do not wait for a missing result.
+    packet = None
+    if dist.get_rank() == 0:
+        try:
+            manifest, skipped = manager.latest_valid_training_checkpoint()
+            packet = {"manifest": manifest.to_dict(), "skipped": skipped, "error": None}
+        except Exception as exc:
+            packet = {"error": str(exc)}
+    objects = [packet]
+    dist.broadcast_object_list(objects, src=0)
+    result = objects[0]
+    if result["error"] is not None:
+        raise RuntimeError(f"Checkpoint recovery selection failed: {result['error']}")
+    return CheckpointManifest.from_dict(result["manifest"]), result["skipped"]
 
 
 def _validate_final_checkpoint_result(
