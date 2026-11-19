@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict
 
-from .common import _section
+from .common import _section, training_micro_batches
 
 
 @dataclass
@@ -44,9 +44,7 @@ class TinyTorchWorkloadSpec:
                 )
             ),
             batch_size=int(data.get("batch_size", training.get("batch_size", 2))),
-            num_batches=int(
-                training.get("max_steps", training.get("num_batches", 2)) or 2
-            ),
+            num_batches=training_micro_batches(config_data),
             lr=float(optimizer.get("lr", training.get("lr", 0.01))),
             seed=int(training.get("seed", data.get("seed", 42))),
             device=str(runtime.get("device", training.get("device", "auto"))),

@@ -8,7 +8,11 @@
 from .artifacts import config_artifact_overrides, write_config_artifacts
 from .environment import expand_environment_references
 from .resolved import ConfigIssue, ResolvedConfig, ResolvedField
-from .resolver import build_deepspeed_final_config, resolve_config
+from .resolver import (
+    build_deepspeed_final_config,
+    normalize_execution_config,
+    resolve_config,
+)
 from .schema import (
     CURRENT_CONFIG_SCHEMA_VERSION,
     LEGACY_CONFIG_SCHEMA_VERSION,
@@ -26,6 +30,7 @@ __all__ = [
     "config_artifact_overrides",
     "expand_environment_references",
     "migrate_config_schema",
+    "normalize_execution_config",
     "resolve_config",
     "validate_config_schema",
     "write_config_artifacts",

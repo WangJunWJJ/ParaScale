@@ -14,6 +14,7 @@ from typing import Any, Callable, Dict, Iterable, List
 from parascale.runtime.backends.devices import move_batch_to_device
 from parascale.runtime.training.memory import RuntimeMemoryTracker
 
+from .execution import inference_execution
 from .tasks import InferenceTaskAdapter, default_inference_task_registry
 
 
@@ -119,8 +120,9 @@ class InferenceRunner:
         return move_batch_to_device(batch, self.device)
 
     def _predict(self, batch: Any) -> Any:
-        output = self.task_adapter.predict(self.model, batch)
-        return self.task_adapter.postprocess(output)
+        with inference_execution(self.model):
+            output = self.task_adapter.predict(self.model, batch)
+            return self.task_adapter.postprocess(output)
 
     @staticmethod
     def _metrics(

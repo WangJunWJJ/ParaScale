@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from parascale.checkpoint import CheckpointManager
-from parascale.config import ParaScaleConfig
+from parascale.configuration import normalize_execution_config
 from parascale.optimizers.spec import OptimizerSpec
 from parascale.runtime.distillation import (
     build_distillation_objective,
@@ -50,7 +50,13 @@ def _resume_component_config(
         return config_data
     component_config = deepcopy(config_data)
     component_training = component_config.setdefault("training", {})
-    component_training["max_steps"] = consumed + max(0, int(max_steps))
+    _, runtime_config = normalize_execution_config(config_data)
+    accumulation = runtime_config.gradient_accumulation_steps
+    if consumed % accumulation:
+        raise ValueError(
+            "resume consumed_micro_batches must end at an accumulation boundary"
+        )
+    component_training["max_steps"] = consumed // accumulation + max(0, int(max_steps))
     return component_config
 
 
@@ -65,10 +71,11 @@ def _rank_component_config(
     training["seed"] = int(training.get("seed", 42) or 42) + int(rank)
     return component_config
 
+
 def run_train_from_config(
     config_data: Dict[str, Any], resume_step: int | None = None
 ) -> Dict[str, Any]:
-    parascale_config = ParaScaleConfig.from_dict(_section(config_data, "parascale"))
+    config_data, parascale_config = normalize_execution_config(config_data)
     training = _section(config_data, "training")
     workload = str(training.get("workload", "synthetic_regression"))
     workload_capability = describe_workload(config_data)
@@ -79,13 +86,17 @@ def run_train_from_config(
     )
     if parascale_config.quantization.enabled:
         if parascale_config.quantization.mode != "qat":
-            raise ValueError("Use the quantize command for PTQ; train requires mode=qat.")
+            raise ValueError(
+                "Use the quantize command for PTQ; train requires mode=qat."
+            )
         if requested_backend != "native" or is_distributed_launch():
             raise ValueError("QAT currently requires a single-process native backend.")
         if parascale_config.precision != "fp32":
             raise ValueError("QAT currently requires precision=fp32.")
         if parascale_config.adapter_only_checkpoint:
-            raise ValueError("QAT requires full checkpoints, not adapter_only_checkpoint.")
+            raise ValueError(
+                "QAT requires full checkpoints, not adapter_only_checkpoint."
+            )
     if requested_backend not in {
         "native",
         "native_ddp",
@@ -120,6 +131,20 @@ def run_train_from_config(
         validate_distributed_topology(config_data)
         initialize_distributed_for_backend(parascale_config.training_backend)
 
+    if requested_backend == "auto":
+        from parascale.config import flat_config_fields_by_section
+
+        _, initial_config = normalize_execution_config(config_data)
+        updates = {
+            ("backend.precision" if key == "precision" else f"{section}.{key}"): value
+            for section, keys in flat_config_fields_by_section().items()
+            for key in keys
+            if (value := getattr(parascale_config, key)) != getattr(initial_config, key)
+        }
+        config_data, parascale_config = normalize_execution_config(
+            config_data, strategy_updates=updates
+        )
+        training = _section(config_data, "training")
     optimizer_spec = OptimizerSpec.from_config(config_data)
     optimizer_spec.validate_backend(
         parascale_config.training_backend,
@@ -215,7 +240,9 @@ def run_train_from_config(
         )
     quantization_result = None
     if quantizer is not None:
-        output = str(training.get("quantized_output", Path(checkpoint_dir) / "quantized.pt"))
+        output = str(
+            training.get("quantized_output", Path(checkpoint_dir) / "quantized.pt")
+        )
         quantizer.freeze_observer()
         quantizer.export(output)
         quantization_result = {
@@ -224,36 +251,41 @@ def run_train_from_config(
             "checkpoint": output,
             "execution": "dequantize_float_reference",
         }
-    return attach_runtime_evidence({
-        "mode": "train",
-        "dry_run": False,
-        "runtime_status": runtime_status,
-        "capability_level": workload_capability.capability_level,
-        **flags,
-        "mock": False,
-        "workload": workload,
-        "data_type": data_type,
-        "backend": parascale_config.training_backend,
-        "optimizer": dict(
-            getattr(optimizer, "_parascale_optimizer_metadata", {}) or {}
-        ),
-        "global_step": state.global_step,
-        "last_metrics": dict(state.last_metrics),
-        "metrics_history": list(state.metrics_history),
-        "train_device": model_device(model),
-        "elapsed_seconds": elapsed,
-        "steps_per_second": max_steps / elapsed,
-        "checkpoint": str(final_manifest_path) if final_manifest_path else None,
-        "checkpoint_validation": checkpoint_validation,
-        "resumed_from": resumed_from,
-        "quantization": quantization_result,
-        "distillation": {
-            "objective": objective_metadata,
-            "last_components": dict(loss_fn.last_metrics),
-        } if distillation.enabled else None,
-        "strategy_plan": engine.plan().to_dict(),
-        "config_artifacts": config_artifacts,
-    })
+    return attach_runtime_evidence(
+        {
+            "mode": "train",
+            "dry_run": False,
+            "runtime_status": runtime_status,
+            "capability_level": workload_capability.capability_level,
+            **flags,
+            "mock": False,
+            "workload": workload,
+            "data_type": data_type,
+            "backend": parascale_config.training_backend,
+            "optimizer": dict(
+                getattr(optimizer, "_parascale_optimizer_metadata", {}) or {}
+            ),
+            "global_step": state.global_step,
+            "last_metrics": dict(state.last_metrics),
+            "metrics_history": list(state.metrics_history),
+            "train_device": model_device(model),
+            "elapsed_seconds": elapsed,
+            "steps_per_second": max_steps / elapsed,
+            "checkpoint": str(final_manifest_path) if final_manifest_path else None,
+            "checkpoint_validation": checkpoint_validation,
+            "resumed_from": resumed_from,
+            "quantization": quantization_result,
+            "distillation": {
+                "objective": objective_metadata,
+                "last_components": dict(loss_fn.last_metrics),
+            }
+            if distillation.enabled
+            else None,
+            "strategy_plan": engine.plan().to_dict(),
+            "config_artifacts": config_artifacts,
+        }
+    )
+
 
 def _validate_final_checkpoint_result(
     manager: CheckpointManager,
@@ -274,6 +306,7 @@ def _validate_final_checkpoint_result(
     raise TypeError(
         "checkpoint save must return a manifest path or a rank-skipped result"
     )
+
 
 def _capability_level_for_scope(base_level: str, config_data: Dict[str, Any]) -> str:
     return capability_level_for_scope(base_level, config_data)

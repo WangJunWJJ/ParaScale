@@ -17,6 +17,7 @@ def _section(data: Dict[str, Any], name: str) -> Dict[str, Any]:
     value = data.get(name, {})
     return value if isinstance(value, dict) else {}
 
+
 def _write_runtime_config_artifacts(
     config_data: Dict[str, Any],
     runtime_config: ParaScaleConfig,
@@ -40,13 +41,18 @@ def _write_runtime_config_artifacts(
             "backend.precision": runtime_config.precision,
         }
     overrides = config_artifact_overrides(config_data)
+    strategy_updates = {
+        **overrides.get("strategy_updates", {}),
+        **(strategy_updates or {}),
+    }
     return write_config_artifacts(
         config_data,
         run_dir,
         cli_overrides=overrides.get("cli_overrides"),
-        strategy_updates=strategy_updates or overrides.get("strategy_updates"),
+        strategy_updates=strategy_updates,
         emergency_overrides=overrides.get("emergency_overrides"),
     )
+
 
 def _apply_strategy_plan_to_config(config: ParaScaleConfig, plan: Any) -> None:
     config.training_backend = plan.backend

@@ -14,6 +14,7 @@ from typing import Any, Dict, Optional, Tuple
 
 class TrainingBackend:
     name = "base"
+    manages_gradient_accumulation = False
 
     def __init__(
         self,
@@ -59,15 +60,24 @@ class TrainingBackend:
         if callable(backward):
             backward()
 
-    def step(self, optimizer: Any = None) -> None:
+    def step(self, optimizer: Any = None) -> bool:
         optimizer = optimizer if optimizer is not None else self.optimizer
         if optimizer is None:
-            return None
+            return False
         if hasattr(optimizer, "step"):
             optimizer.step()
         if hasattr(optimizer, "zero_grad"):
             optimizer.zero_grad()
-        return None
+        return True
+
+    def clip_gradients(self, max_norm: float, optimizer: Any = None) -> None:
+        """Clip unscaled gradients owned by the active optimizer."""
+        torch = _require_torch()
+        optimizer = optimizer if optimizer is not None else self.optimizer
+        if optimizer is None:
+            raise RuntimeError("gradient clipping requires an optimizer")
+        parameters = [p for group in optimizer.param_groups for p in group["params"]]
+        torch.nn.utils.clip_grad_norm_(parameters, max_norm)
 
     def no_sync(self):
         return nullcontext()

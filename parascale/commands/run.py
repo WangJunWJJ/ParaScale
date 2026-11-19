@@ -13,7 +13,11 @@ from typing import Any, Dict
 
 from parascale.commands.common import emit_json, load_config_file
 from parascale.commands.plan import build_plan_payload, section
-from parascale.configuration import resolve_config, write_config_artifacts
+from parascale.configuration import (
+    normalize_execution_config,
+    resolve_config,
+    write_config_artifacts,
+)
 from parascale.runtime import build_benchmark_plan, build_runtime_context
 from parascale.runtime.backends.devices import set_current_device
 from parascale.runtime.benchmark_runner import (
@@ -139,15 +143,17 @@ def run_inference_from_config(config_data: Dict[str, Any]) -> Dict[str, Any]:
         batches,
         warmup_steps=int(inference.get("warmup_steps", 1) or 0),
     )
-    return attach_runtime_evidence({
-        "mode": "infer",
-        "dry_run": False,
-        "runtime_status": "real_local" if device != "cpu" else "local_cpu",
-        "capability_level": _inference_capability(task, device),
-        "task": task,
-        "workload": str(inference.get("workload", "clip_synthetic")),
-        **payload,
-    })
+    return attach_runtime_evidence(
+        {
+            "mode": "infer",
+            "dry_run": False,
+            "runtime_status": "real_local" if device != "cpu" else "local_cpu",
+            "capability_level": _inference_capability(task, device),
+            "task": task,
+            "workload": str(inference.get("workload", "clip_synthetic")),
+            **payload,
+        }
+    )
 
 
 def _resolve_inference_device(runtime: Dict[str, Any]) -> tuple[str, Any]:
@@ -170,7 +176,9 @@ def _resolve_inference_device(runtime: Dict[str, Any]) -> tuple[str, Any]:
     memory = (
         (lambda: torch.cuda)
         if device_text.startswith("cuda")
-        else (lambda: torch.npu) if device_text.startswith("npu") else (lambda: None)
+        else (lambda: torch.npu)
+        if device_text.startswith("npu")
+        else (lambda: None)
     )
     return device_text, memory
 
@@ -184,10 +192,10 @@ def _inference_capability(task: str, device: str) -> str:
 
 
 def build_train_dry_run_payload(config_data: Dict[str, Any]) -> Dict[str, Any]:
+    config_data, effective = normalize_execution_config(config_data)
     payload = build_plan_payload(config_data)
     resolved_config = resolve_config(config_data, dry_run=True)
     runtime = section(config_data, "runtime")
-    training = section(config_data, "training")
     payload.update(
         {
             "mode": "train",
@@ -196,8 +204,7 @@ def build_train_dry_run_payload(config_data: Dict[str, Any]) -> Dict[str, Any]:
             "capability_level": "dry_run",
             "synthetic": False,
             "mock": False,
-            "backend": training.get("backend")
-            or section(config_data, "parascale").get("training_backend", "auto"),
+            "backend": effective.training_backend,
             "entrypoint_status": "dry_run_only",
             "next_step": (
                 "Provide model, optimizer, dataloader and step_fn to TrainEngine "

@@ -297,7 +297,7 @@ def test_accumulation_controller_merges_micro_batches_without_torch():
 
     assert engine.backward_calls == 2
     assert engine.step_calls == 1
-    assert metrics["loss"] == 6.0
+    assert metrics["loss"] == pytest.approx((4.0 * 2 + 8.0 * 3) / 5)
     assert metrics["gradient_accumulation_steps"] == 2
     assert metrics["images"] == 5
     assert metrics["images_per_second"] == 10.0

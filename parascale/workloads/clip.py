@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import io
 import warnings
 from typing import Any, Dict, Iterable, List
 
@@ -16,6 +17,7 @@ from parascale.workloads.specs.clip import ClipContrastiveSpec
 
 from .common import (
     _patchify,
+    _require_pil_image,
     _require_torch,
     _suppress_activation_checkpointing_future_warning,
 )
@@ -250,7 +252,7 @@ def build_clip_contrastive_components(spec: ClipContrastiveSpec):
 
 def _build_hf_clip_contrastive_components(torch: Any, spec: ClipContrastiveSpec):
     try:
-        from transformers import AutoModel
+        from transformers import AutoModel, AutoProcessor
     except Exception as exc:
         raise ImportError(
             "Pretrained CLIP/SigLIP workloads require transformers. "
@@ -260,10 +262,16 @@ def _build_hf_clip_contrastive_components(torch: Any, spec: ClipContrastiveSpec)
         raise ValueError(
             "model.pretrained_model_name_or_path is required for hf_clip/hf_siglip workloads."
         )
+    if spec.data_type not in {"datacomp_wds", "webdataset", "wds"}:
+        raise ValueError(
+            "Pretrained CLIP/SigLIP requires original images and captions from "
+            "DataComp WebDataset; synthetic and metadata-only sources are unsupported."
+        )
     import torch.nn as nn
     import torch.optim as optim
 
     hf_model = AutoModel.from_pretrained(spec.pretrained_model_name_or_path)
+    processor = AutoProcessor.from_pretrained(spec.pretrained_model_name_or_path)
     if spec.activation_checkpointing and hasattr(
         hf_model, "gradient_checkpointing_enable"
     ):
@@ -285,12 +293,31 @@ def _build_hf_clip_contrastive_components(torch: Any, spec: ClipContrastiveSpec)
 
     model = HFContrastiveWrapper(hf_model)
     optimizer = optim.AdamW(model.parameters(), lr=spec.lr)
-    collator = MultiModalCollator(max_length=spec.text_length, return_tensors="pt")
 
     def dataloader() -> Iterable[Dict[str, Any]]:
         yielded = 0
         for samples in _clip_sample_batches(torch, spec):
-            batch = collator(samples)
+            Image = _require_pil_image()
+            images = []
+            captions = []
+            for sample in samples:
+                if "image" not in sample or not isinstance(sample.get("text"), str):
+                    raise ValueError(
+                        "Pretrained CLIP/SigLIP requires original images and captions."
+                    )
+                # Decode only: the checkpoint processor owns all spatial and numeric transforms.
+                with Image.open(io.BytesIO(sample["image"])) as image:
+                    images.append(image.convert("RGB"))
+                captions.append(sample["text"])
+            batch = dict(
+                processor(
+                    images=images,
+                    text=captions,
+                    padding="max_length",
+                    truncation=True,
+                    return_tensors="pt",
+                )
+            )
             batch["labels"] = torch.arange(
                 batch["input_ids"].shape[0], dtype=torch.long
             )

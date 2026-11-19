@@ -40,6 +40,7 @@ def test_checkpoint_controller_rejects_corruption_before_backend_setup():
     with pytest.raises(RuntimeError, match="validation failed before resume"):
         CheckpointController(Engine()).load(manager, 3)
 
+
 def test_checkpoint_controller_rejects_world_size_change_by_default():
     from parascale.runtime.training.checkpointing import CheckpointController
 
@@ -61,8 +62,11 @@ def test_checkpoint_controller_rejects_world_size_change_by_default():
         def _distributed_world_size(self):
             return 1
 
-    with pytest.raises(ValueError, match="world_size mismatch.*checkpoint=2.*runtime=1"):
+    with pytest.raises(
+        ValueError, match="world_size mismatch.*checkpoint=2.*runtime=1"
+    ):
         CheckpointController(Engine()).load(manager, 4)
+
 
 def test_checkpoint_controller_skips_manifest_write_on_nonzero_rank_without_torch():
     from parascale.runtime.training.checkpointing import CheckpointController
@@ -119,6 +123,7 @@ def test_checkpoint_controller_skips_manifest_write_on_nonzero_rank_without_torc
     assert result["world_size"] == 2
     assert manager.written is False
     assert engine.barrier_called is True
+
 
 def test_checkpoint_controller_deepspeed_all_ranks_save_rank0_manifest_only():
     from parascale.runtime.training.checkpointing import CheckpointController
@@ -186,6 +191,7 @@ def test_checkpoint_controller_deepspeed_all_ranks_save_rank0_manifest_only():
     assert result["rank"] == 1
     assert result["files"][0]["role"] == "deepspeed_checkpoint"
     assert engine.barrier_called is True
+
 
 def test_checkpoint_controller_allows_nonzero_rank_fsdp_shard_without_manifest():
     from parascale.runtime.training.checkpointing import CheckpointController
@@ -255,6 +261,7 @@ def test_checkpoint_controller_allows_nonzero_rank_fsdp_shard_without_manifest()
     assert result["files"][0]["path"] == "rank-00001/fsdp_state.pt"
     assert engine.barrier_called is True
 
+
 def test_checkpoint_controller_full_fsdp_save_runs_on_nonzero_rank():
     from parascale.runtime.training.checkpointing import CheckpointController
 
@@ -315,6 +322,7 @@ def test_checkpoint_controller_full_fsdp_save_runs_on_nonzero_rank():
     )
     assert engine.barrier_called is True
 
+
 def test_fsdp_full_checkpoint_nonzero_rank_participates_without_writing(
     monkeypatch,
 ):
@@ -348,6 +356,7 @@ def test_fsdp_full_checkpoint_nonzero_rank_participates_without_writing(
     assert saved_paths == []
     assert result["files"] == []
     assert result["metadata"]["rank"] == 1
+
 
 def test_checkpoint_controller_rank0_manifest_lists_expected_fsdp_shards():
     from parascale.runtime.training.checkpointing import CheckpointController
@@ -409,7 +418,11 @@ def test_checkpoint_controller_rank0_manifest_lists_expected_fsdp_shards():
 
     CheckpointController(Engine()).save(manager)
 
-    paths = [entry["path"] for entry in manager.manifest.files]
+    paths = [
+        entry["path"]
+        for entry in manager.manifest.files
+        if entry["role"] == "fsdp_state"
+    ]
     assert paths == ["rank-00000/fsdp_state.pt", "rank-00001/fsdp_state.pt"]
     assert manager.manifest.metadata["shard_count"] == 2
     assert manager.manifest.metadata["checkpoint_write_policy"] == "rank_sharded"

@@ -11,6 +11,7 @@ import time
 from contextlib import nullcontext
 from typing import Any, Dict
 
+from .loss_weight import global_normalization, normalization_weight
 from .metrics import merge_accumulated_batches, metric_value
 
 
@@ -60,7 +61,15 @@ class AccumulationController:
                 "steps are forbidden because distributed ranks may diverge."
             )
         actual_steps = max(1, len(batches))
+        backend = self.engine.training_backend
+        managed = bool(getattr(backend, "manages_gradient_accumulation", False))
+        weights = [normalization_weight(loss_fn, batch) for batch in batches]
+        denominator, replicas, normalization_work = global_normalization(
+            sum(weights), backend, model
+        )
         losses = []
+        divisors = {}
+        updated = False
         for micro_index, batch in enumerate(batches):
             batch = self._prepare_batch(batch)
             batches[micro_index] = batch
@@ -69,23 +78,46 @@ class AccumulationController:
                 if (
                     micro_index < actual_steps - 1
                     and self.engine.training_backend is not None
+                    and not managed
                 )
                 else nullcontext()
             )
             with sync_context:
                 with self.engine.precision.autocast_context():
                     output = model(**batch) if isinstance(batch, dict) else model(batch)
-                    loss = loss_fn(output, batch) / float(actual_steps)
-                self.engine.backward(loss)
-                losses.append(loss)
+                    if normalization_work is not None:
+                        normalization_work.wait()
+                        normalization_work = None
+                    weight = weights[micro_index]
+                    if weight not in divisors:
+                        divisors[weight] = denominator / (weight * replicas)
+                    loss = loss_fn(output, batch) / divisors[weight]
+                # DeepSpeed divides backward losses by GAS itself.
+                backward_loss = loss / (1.0 / actual_steps) if managed else loss
+                self.engine.backward(backward_loss)
+                detach = getattr(loss, "detach", None)
+                losses.append(detach() if callable(detach) else loss)
+            if managed:
+                updated = self.engine.step(optimizer) is not False
+                if updated and micro_index != actual_steps - 1:
+                    raise RuntimeError(
+                        "backend optimizer boundary differs from configured accumulation"
+                    )
 
-        self.engine.step(optimizer)
-        self.engine.step_scheduler(scheduler)
+        if not managed:
+            updated = self.engine.step(optimizer) is not False
+        if updated:
+            self.engine.step_scheduler(scheduler)
+        # Queue statistics before the existing completion fence, without
+        # retaining the backward graphs or adding a scalar zero on-device.
+        total_loss = sum(losses[1:], losses[0])
         self.engine.memory.synchronize_device()
         elapsed = self.engine.memory.elapsed_since(start, synchronized=True)
         metrics: Dict[str, Any] = {
-            "loss": metric_value(sum(losses)),
+            "loss": metric_value(total_loss),
             "gradient_accumulation_steps": actual_steps,
+            "optimizer_updated": updated,
+            "loss_normalization_weight": sum(weights),
         }
         metrics = self.engine._with_throughput_metrics(
             metrics,

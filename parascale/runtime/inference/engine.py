@@ -17,6 +17,7 @@ from parascale.core import (
     MockCollectiveBackend,
 )
 
+from .execution import inference_execution
 from .tasks import InferenceTaskAdapter
 
 
@@ -60,17 +61,19 @@ class InferenceEngine:
         self._require_model("generate")
         generate = getattr(self.model, "generate", None)
         if callable(generate):
-            return {
-                "requests": requests,
-                "outputs": generate(requests),
-                "mode": "model",
-            }
+            with inference_execution(self.model):
+                return {
+                    "requests": requests,
+                    "outputs": generate(requests),
+                    "mode": "model",
+                }
         if callable(self.model):
-            return {
-                "requests": requests,
-                "outputs": self.model(requests),
-                "mode": "callable",
-            }
+            with inference_execution(self.model):
+                return {
+                    "requests": requests,
+                    "outputs": self.model(requests),
+                    "mode": "callable",
+                }
         raise RuntimeError(
             "Loaded model does not provide generate(requests) or __call__(requests)."
         )
@@ -87,13 +90,14 @@ class InferenceEngine:
                 "task": self.task_adapter.name,
             }
         self._require_model("infer")
-        prepared = self.task_adapter.prepare_batch(batch)
-        output = self.task_adapter.predict(self.model, prepared)
-        return {
-            "outputs": self.task_adapter.postprocess(output),
-            "mode": "task",
-            "task": self.task_adapter.name,
-        }
+        with inference_execution(self.model):
+            prepared = self.task_adapter.prepare_batch(batch)
+            output = self.task_adapter.predict(self.model, prepared)
+            return {
+                "outputs": self.task_adapter.postprocess(output),
+                "mode": "task",
+                "task": self.task_adapter.name,
+            }
 
     def embed(self, requests: Any) -> Dict[str, Any]:
         self.record_request()
@@ -106,11 +110,12 @@ class InferenceEngine:
         self._require_model("embed")
         embed = getattr(self.model, "embed", None)
         if callable(embed):
-            return {
-                "requests": requests,
-                "embeddings": embed(requests),
-                "mode": "model",
-            }
+            with inference_execution(self.model):
+                return {
+                    "requests": requests,
+                    "embeddings": embed(requests),
+                    "mode": "model",
+                }
         raise RuntimeError("Loaded model does not provide embed(requests).")
 
     def prefill(self, batch: Any) -> Dict[str, Any]:
@@ -118,7 +123,8 @@ class InferenceEngine:
             return {"batch": batch, "state": "prefilled", "mode": "mock"}
         prefill = getattr(self.model, "prefill", None)
         if callable(prefill):
-            return {"batch": batch, "state": prefill(batch), "mode": "model"}
+            with inference_execution(self.model):
+                return {"batch": batch, "state": prefill(batch), "mode": "model"}
         return {"batch": batch, "state": "prefilled", "mode": "fallback"}
 
     def decode(self, batch: Any) -> Dict[str, Any]:
@@ -126,7 +132,8 @@ class InferenceEngine:
             return {"batch": batch, "state": "decoded", "mode": "mock"}
         decode = getattr(self.model, "decode", None)
         if callable(decode):
-            return {"batch": batch, "state": decode(batch), "mode": "model"}
+            with inference_execution(self.model):
+                return {"batch": batch, "state": decode(batch), "mode": "model"}
         return {"batch": batch, "state": "decoded", "mode": "fallback"}
 
     def record_request(self, latency_ms: float = 0.0) -> InferenceState:

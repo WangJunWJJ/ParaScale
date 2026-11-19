@@ -11,6 +11,8 @@ import json
 import warnings
 from typing import Any, Dict, Iterator, Optional, Tuple
 
+from .random_state import preserve_rng_state
+
 
 class DataResumeController:
     """Track consumed batches and restore a dataloader cursor after checkpoint load."""
@@ -25,6 +27,13 @@ class DataResumeController:
         data_state = dict(getattr(self.engine.state, "data_state", {}) or {})
         if self._resume_applied or not data_state:
             return iter(dataloader)
+
+        with preserve_rng_state():
+            return self._restore_iterator(dataloader, data_state)
+
+    def _restore_iterator(
+        self, dataloader: Any, data_state: Dict[str, Any]
+    ) -> Iterator[Any]:
 
         mode = str(data_state.get("resume_mode", "replay_skip"))
         if mode == "state_dict":

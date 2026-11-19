@@ -78,9 +78,12 @@ class TokenBudgetBatchSampler:
         self.shuffle = shuffle
 
     def __iter__(self) -> Iterator[List[int]]:
+        return self._iter_batches(random)
+
+    def _iter_batches(self, rng: Any) -> Iterator[List[int]]:
         indices = list(range(len(self.dataset)))
         if self.shuffle:
-            random.shuffle(indices)
+            rng.shuffle(indices)
         indices.sort(key=lambda idx: self.length_fn(self.dataset[idx]))
 
         batch: List[int] = []
@@ -129,34 +132,39 @@ class DistributedTokenBudgetBatchSampler:
         self.shuffle = shuffle
         self.seed = seed
         self.drop_last = drop_last
+        self.epoch = 0
 
-    def __iter__(self) -> Iterator[List[int]]:
+    def set_epoch(self, epoch: int) -> None:
+        """Select a repeatable shuffle shared by all ranks for this epoch."""
+        self.epoch = epoch
+
+    def _global_batches(self) -> List[List[int]]:
+        rng = random.Random(self.seed + self.epoch)
         sampler = TokenBudgetBatchSampler(
             self.dataset,
             self.max_tokens,
             length_fn=self.length_fn,
             shuffle=self.shuffle,
         )
-        batches = list(sampler)
+        batches = list(sampler._iter_batches(rng))
         if self.shuffle:
-            rng = random.Random(self.seed)
             rng.shuffle(batches)
+        return batches
 
-        if not self.drop_last:
-            remainder = len(batches) % self.world_size
-            if remainder:
-                batches.extend(batches[: self.world_size - remainder])
-
-        for batch_idx, batch in enumerate(batches):
-            if batch_idx % self.world_size == self.rank:
-                yield batch
+    def __iter__(self) -> Iterator[List[int]]:
+        batches = self._global_batches()
+        count = len(batches)
+        if not count:
+            return
+        if self.drop_last:
+            total = count - count % self.world_size
+        else:
+            total = ((count + self.world_size - 1) // self.world_size) * self.world_size
+        for index in range(self.rank, total, self.world_size):
+            yield list(batches[index % count])
 
     def __len__(self) -> int:
-        base_len = len(
-            TokenBudgetBatchSampler(
-                self.dataset, self.max_tokens, self.length_fn, self.shuffle
-            )
-        )
+        base_len = len(self._global_batches())
         if self.drop_last:
             return base_len // self.world_size
         return (base_len + self.world_size - 1) // self.world_size

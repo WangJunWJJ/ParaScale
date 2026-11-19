@@ -49,12 +49,11 @@ class FitLoopRunner:
             try:
                 batch = next(iterator)
             except StopIteration:
+                if max_steps is not None and index < max_steps:
+                    raise RuntimeError("Dataloader exhausted before requested optimizer updates completed")
                 break
             dataloader_wait_seconds = time.perf_counter() - wait_start
-            if (
-                self.engine._gradient_accumulation_steps() > 1
-                and self.engine._backend_name() != "deepspeed"
-            ):
+            if self.engine._gradient_accumulation_steps() > 1:
                 metrics = self.engine._run_accumulated_step(
                     batch,
                     iterator,
@@ -79,6 +78,8 @@ class FitLoopRunner:
             self.engine.memory.add_peak_memory_metrics(metrics)
             if data_resume is not None:
                 data_resume.record_consumption(metrics)
+            if not metrics.get("optimizer_updated", True):
+                continue
             self.engine.record_step(metrics)
             if checkpoint_manager is not None and checkpoint_interval:
                 if self.engine.state.global_step % int(checkpoint_interval) == 0:
@@ -105,8 +106,6 @@ class FitLoopRunner:
         except (TypeError, AttributeError):
             return
         accumulation_steps = max(1, int(self.engine._gradient_accumulation_steps()))
-        if self.engine._backend_name() == "deepspeed":
-            accumulation_steps = 1
         required = int(max_steps) * accumulation_steps
         state = getattr(self.engine, "state", None)
         data_state = dict(getattr(state, "data_state", {}) or {})

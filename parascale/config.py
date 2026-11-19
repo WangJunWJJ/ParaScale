@@ -6,6 +6,7 @@
 """Typed configuration objects for ParaScale."""
 
 from dataclasses import dataclass, field
+from math import isfinite
 from typing import Any, Dict, List, Literal, Optional
 
 from .quantization.base import QuantizationConfig
@@ -237,10 +238,17 @@ class ParaScaleConfig:
         quantization = config_dict.pop("quantization", defaults.pop("quantization"))
         unknown = sorted(set(config_dict) - set(defaults))
         if unknown:
-            raise TypeError(
-                "unexpected ParaScaleConfig fields: " + ", ".join(unknown)
-            )
+            raise TypeError("unexpected ParaScaleConfig fields: " + ", ".join(unknown))
         values = {**defaults, **config_dict}
+        ds = values.get("deepspeed_config") or {}
+        ds_defaults = {
+            "zero_stage": (ds.get("zero_optimization") or {}).get("stage"),
+            "batch_size": ds.get("train_micro_batch_size_per_gpu"),
+            "gradient_accumulation_steps": ds.get("gradient_accumulation_steps"),
+        }
+        for key, value in ds_defaults.items():
+            if key not in explicit_fields and value is not None:
+                values[key] = value
         for key, value in values.items():
             setattr(self, key, _copy_config_value(value))
         if isinstance(quantization, QuantizationConfig):
@@ -348,8 +356,7 @@ class ParaScaleConfig:
             )
         if self.ddp_bucket_cap_mb is not None and self.ddp_bucket_cap_mb < 1:
             raise ValueError(
-                "ddp_bucket_cap_mb must be >= 1 when set, got "
-                f"{self.ddp_bucket_cap_mb}"
+                f"ddp_bucket_cap_mb must be >= 1 when set, got {self.ddp_bucket_cap_mb}"
             )
         if not 0 < self.strategy_memory_margin <= 1:
             raise ValueError(
@@ -377,9 +384,11 @@ class ParaScaleConfig:
             raise ValueError(
                 f"precision must be fp32, fp16, or bf16, got {self.precision}"
             )
-        if self.grad_clip_norm is not None and self.grad_clip_norm <= 0:
+        if self.grad_clip_norm is not None and (
+            not isfinite(self.grad_clip_norm) or self.grad_clip_norm <= 0
+        ):
             raise ValueError(
-                f"grad_clip_norm must be positive when set, got {self.grad_clip_norm}"
+                f"grad_clip_norm must be finite and positive when set, got {self.grad_clip_norm}"
             )
         if self.log_interval < 1:
             raise ValueError(f"log_interval must be >= 1, got {self.log_interval}")
@@ -491,8 +500,14 @@ class ParaScaleConfig:
         flat: Dict[str, Any] = {}
         for key in layered_keys:
             section = config_dict.get(key, {})
-            if isinstance(section, dict):
-                flat.update(section)
+            if not isinstance(section, dict):
+                raise TypeError(f"parascale.{key} must be a mapping")
+            unknown = set(section) - set(flat_config_fields_by_section()[key])
+            if unknown:
+                raise ValueError(
+                    f"parascale.{key} does not own: {', '.join(sorted(unknown))}"
+                )
+            flat.update(section)
         if "quantization" in config_dict:
             flat["quantization"] = config_dict["quantization"]
         for key, value in config_dict.items():

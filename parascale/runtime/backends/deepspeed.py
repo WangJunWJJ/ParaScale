@@ -17,6 +17,7 @@ from .base import TrainingBackend
 
 class DeepSpeedTrainingBackend(TrainingBackend):
     name = "deepspeed"
+    manages_gradient_accumulation = True
 
     def __init__(
         self,
@@ -119,10 +120,13 @@ class DeepSpeedTrainingBackend(TrainingBackend):
             raise RuntimeError("DeepSpeed backend is not initialized")
         self.engine.backward(loss)
 
-    def step(self, optimizer: Any = None) -> None:
+    def step(self, optimizer: Any = None) -> bool:
         if self.engine is None:
             raise RuntimeError("DeepSpeed backend is not initialized")
+        boundary = bool(self.engine.is_gradient_accumulation_boundary())
+        skipped = int(getattr(self.engine, "skipped_steps", 0))
         self.engine.step()
+        return boundary and int(getattr(self.engine, "skipped_steps", 0)) == skipped
 
     def state_dict(self) -> Dict[str, Any]:
         return {"backend": self.name, "deepspeed_engine": self.engine is not None}
