@@ -569,7 +569,12 @@ def run(args):
 
 
 def main():
-    args = parser().parse_args()
+    cli = parser()
+    args = cli.parse_args()
+    if args.output.exists() and (
+        not args.output.is_dir() or any(args.output.iterdir())
+    ):
+        cli.error("Output directory must be empty; choose a fresh output directory")
     try:
         report = run(args)
     except Exception as error:
