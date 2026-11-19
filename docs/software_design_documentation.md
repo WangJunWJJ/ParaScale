@@ -1,815 +1,207 @@
 # ParaScale 软件设计文档
 
-版本：v1.1-rebuild  
-日期：2026-06-10  
-状态：重构后主设计文档，用于指导后续架构实现、代码审查和功能验收。
+文档基线：2026-11-19
 
-## 0. P0 已验证执行路径
+状态：对应当前开发分支的架构修复、参考量化、在线蒸馏和检测蒸馏实现；不是软件发布版本号。
 
-本阶段优先把已经在远程双卡 4090 环境中验证过的有效路径产品化，而不是泛化实现所有并行形态。
+## 1. 定位与范围
 
-已固化策略如下：
+ParaScale 是面向视觉与图文多模态任务、以训练为主的轻量控制层，复用 PyTorch native/DDP、FSDP、DeepSpeed 等后端。项目不替代这些后端，不是通用 RL/具身智能 actor-learner 框架，也不是 Megatron 级超大规模预训练系统。
 
-- CLIP/DataComp WDS 与 VLM-style 对比学习：在单机多卡、中小模型、无显存压力场景下，`training_backend=auto` 应优先选择 `native_ddp`，并在 bf16 精度下启用 `bf16_compress` DDP communication hook。
-- YOLO-World/Object365 与中小视觉检测训练：在单机多卡、中小模型、无显存压力场景下，`training_backend=auto` 应优先选择 `native_ddp`，默认不启用梯度压缩 hook，避免在 detection 场景中过早引入未验证通信压缩。
-- FSDP/DeepSpeed 继续作为大模型、显存压力、ZeRO-3/offload 与生产 fallback 路径；所有性能优势声明必须通过同硬件、同数据、同 batch budget 的 benchmark 报告验证。
-- `python -m parascale.cli benchmark-matrix` 是当前推荐的统一矩阵入口，负责运行 VLM LoRA HF CLIP 与 YOLO-World native-DDP/FSDP/DeepSpeed 同口径 benchmark，并生成吞吐、peak GPU memory、推荐后端和配置更新建议。
+训练和推理位于同一工程，复用部分配置、设备、检查点和指标基础设施，但当前不是完整的生产级训推一体平台。训练 checkpoint 到内置 `serve` 的直接加载仅覆盖 tiny 模型；真实 CLIP、YOLO-World 的 `infer` 与标准 YOLO 蒸馏导出是不同路径。
 
-## 0.1 P1 已验证功能闭环
+历史硬件数字、阶段性试验和原始摘要统一进入[测试报告](../tests/benchmarks/reports/BENCHMARK_REPORT.md)，不在设计文档重复维护。未来目标不得写成当前交付能力。
 
-P1 的核心目标不是继续追求单点吞吐，而是证明 ParaScale 的最小生产训练闭环可重复执行：`plan -> train -> checkpoint -> validate -> resume -> serve/benchmark report`。
-
-当前验收入口为：
-
-```bash
-bash tests/benchmarks/scripts/run_p1_functional_validation_suite.sh
-```
-
-2026-06-12 远程双卡 4090 容器验收结果：
-
-- `server_tiny_torch` smoke 通过 doctor、plan、train、checkpoint validate、resume 和 real serve。
-- DataComp WDS CLIP native-DDP 通过 checkpoint 校验和 resume 验证，resume 从 step 4 恢复到 step 5，backend state 成功加载，吞吐约 129.46 pairs/s。
-- YOLO-World Object365 native-DDP 通过 checkpoint 校验和 resume 验证，resume 从 step 3 恢复到 step 4，backend state 成功加载，吞吐约 88.57 images/s。
-- `parascale benchmark` 支持 `training.validate_resume=true`，可在功能验收场景下把 resume 结果写入 `validation.resume`，性能基准默认不启用该额外步骤。
-
-P1 之后的优化应继续围绕真实生产风险推进：更长训练的 checkpoint/resume stress、多 worker dataloader 稳定性、异常中断恢复、配置可复现性和报告可审计性。
-
-### 0.2.0 P1 真实 VLM LoRA 升级状态
-
-真实 VLM LoRA 已从 “HF CLIP frozen encoder + adapter” 推进到独立主路径：
-
-- 模型入口：`hf_vlm_lora`、`qwen2_vl_lora`、`llava_onevision_lora`、`internvl_lora`。
-- 默认首选小规格场景：LLaVA-OneVision 0.5B，用于在双卡 4090 上建立真实 VLM LoRA smoke 和 benchmark。
-- Processor adapter：支持 HuggingFace `AutoProcessor`，将 image processor、tokenizer 和 conversation template 合并为训练 batch。
-- LoRA 注入：优先使用 PEFT 对 `q_proj/k_proj/v_proj/o_proj` 等 target modules 注入 LoRA，而不是外接 fusion adapter。
-- Checkpoint：新增 `adapter_only_checkpoint`，native/DDP 可只保存 LoRA adapter state、optimizer state、scheduler state 和 RNG state。
-- Benchmark：`benchmark-matrix --scenario vlm-lora-real` 支持 native-DDP、FSDP、DeepSpeed ZeRO-2、DeepSpeed ZeRO-3 同口径矩阵。
-- Batch-size sweep：`benchmark-matrix --batch-size-sweep ...` 必须自动展开 batch 维度，run_id 中保留 batch 标识，保证报告可审查。
-- OOM retry：`benchmark-matrix --oom-retry` 必须捕获 launcher 日志，在 OOM 类失败后自动降低 batch、启用 activation checkpointing，并按同后端、FSDP、DeepSpeed ZeRO-2、DeepSpeed ZeRO-3 顺序尝试 fallback。
-- 指标：输出 tokens/s、images/s、loss、peak memory、adapter params、trainable params、trainable ratio 和 LoRA rank。
-
-当前远程已构建 `parascale-vlm:cu121-torch24-transformers451-peft` 镜像，并完成 tiny VLM LoRA adapter-only checkpoint smoke。真实 LLaVA/Qwen/InternVL 权重尚未在远程缓存，实权重训练矩阵需在权重放入 `/home/wangjun/work/vlm_models` 后执行。
-
-## 0.2 P2 已验证 Profile/Tuner 可解释调优
-
-P2 的核心目标是让自动策略具备可审计解释能力。`parascale plan` 当前输出 `explain` 字段，包含：
-
-- `selected_backend`：最终后端选择。
-- `static_reasons`：静态策略选择依据。
-- `runtime_decisions`：runtime profile 驱动的结构化调优决策。
-- `recommended_config_updates`：建议写回配置的字段。
-
-每条 runtime decision 必须包含：
-
-- `action`：建议动作。
-- `reason`：人可读原因。
-- `evidence`：观测到的指标。
-- `threshold`：触发阈值。
-- `config_updates`：建议配置变更。
-
-当前验收入口为：
-
-```bash
-bash tests/benchmarks/scripts/run_p2_profile_tuner_validation.sh
-```
-
-2026-06-12 远程容器验收结果：
-
-- memory pressure 场景通过：当 peak memory 超出 memory budget 时，输出 `reduce_memory_pressure` 决策，并建议 `enable_activation_checkpointing=true`。
-- padding + dataloader wait 场景通过：当 padding ratio=0.5 且 dataloader_wait_ms=60 高于阈值时，输出 `switch_to_token_budget_batching` 和 `increase_dataloader_parallelism` 决策。
-- P2 验收报告见 `tests/reports/archive/p2_profile_tuner_validation_report.md`。
-
-## 0.3 P3 已验证混合精度、ZeRO-3 与真实权重稳定性
-
-P3 的核心目标是验证更接近生产训练的稳定性边界：bf16/AMP、activation checkpointing、DeepSpeed ZeRO-3、checkpoint/resume stress，以及真实 HF CLIP 离线预训练权重加载。
-
-当前验收入口为：
-
-```bash
-bash tests/benchmarks/scripts/run_p3_checkpoint_resume_stress.sh
-```
-
-2026-06-15 远程双卡 4090 容器验收结果：
-
-- native bf16 + activation checkpointing train 通过，global_step=4，checkpoint 校验通过。
-- native bf16 + activation checkpointing resume 通过，从 step 2 恢复并继续到 global_step=6。
-- DeepSpeed ZeRO-3 bf16 train 通过，global_step=4，checkpoint 校验通过。
-- DeepSpeed ZeRO-3 bf16 resume 通过，从 step 2 恢复并继续到 global_step=6。
-- DeepSpeed ZeRO-3 + activation checkpointing train-only smoke 通过。
-- HF `openai/clip-vit-base-patch32` 离线真实权重 + DataComp WDS one-step train 通过，checkpoint 校验通过。
-
-P3 后续边界：
-
-- DeepSpeed ZeRO-3 + activation checkpointing 仍只声明 train-only smoke，不作为长跑 resume 默认路径。
-- HF 权重 smoke 已覆盖 native，FSDP/DeepSpeed 下的真实 HF 权重长跑仍需后续单独验收。
-- LoRA/QLoRA adapter 保存、恢复和继续训练尚未纳入本阶段验收。
-
-## 1. 设计定位
-
-ParaScale 面向百卡以下的小规模生成环境，目标是成为一个高效、易用、可扩展的分布式训练与推理框架。核心场景是视觉、多模态和中小规模生成式模型，首批重点包括 VLM LoRA、CLIP-style 对比学习、ViT/vision tower 训练和训练到推理闭环。
-
-ParaScale 不应只是 DeepSpeed、FSDP 或 torchrun 的薄封装。短期必须可靠复用这些成熟后端作为 baseline 和 fallback；中长期应在通用框架不敏感的场景形成优势：
-
-- 视觉训练中的 resolution bucket、patch-token batch 调度和数据管线 profile。
-- 多模态训练中的 modality-aware token estimator、padding ratio profile 和 processor adapter。
-- 基于 warmup profile、OOM retry、显存峰值和 dataloader wait 的闭环调优。
-- 训练、checkpoint、恢复、benchmark、推理共用一套 runtime contract。
-- 在 Nvidia CUDA/NCCL 和 Huawei Ascend NPU/HCCL 之间保持一致的工程抽象。
-
-设计原则是极简、真实、可测、渐进。先把骨干接口打稳，再逐步实现真实子模块；不为了展示功能而堆叠无法验证的抽象。
-
-## 2. 三层目标
-
-### 2.1 P0/P1：不输 baseline
-
-ParaScale 必须先做到能稳定运行 native、FSDP、DeepSpeed 基线路径，并具备 plan、train、checkpoint、resume、serve、benchmark 的最小闭环。
-
-验收要求：
-
-- 本地 `python tests/run_tests.py` 全量通过。
-- 远程双卡 GPU 容器中 FSDP 和 DeepSpeed smoke 通过。
-- 所有 dry-run、mock、synthetic 输出显式标记。
-- checkpoint manifest 可保存、校验、恢复，并可被 serving runtime 读取。
-- 错误信息可操作，不能静默 fallback 到虚假成功。
-
-### 2.2 P2/P3：赢目标场景
-
-ParaScale 的差异化优先来自数据与 runtime，而不是重新实现所有通用分布式能力。
-
-视觉路径：
-
-- 按 patch token 而不是 sample 数组织 batch。
-- 支持真实 ImageFolder profile，输出 images/sec、patch_tokens/sec、decode、augment、host-to-device 指标。
-- 让 RuntimeTuner 能根据吞吐、显存和数据等待时间调整 batch budget。
-
-图文多模态路径：
-
-- 标准 batch schema 覆盖 text、image、label、metadata。
-- 支持 VLM LoRA 和 CLIP-style 对比学习优先场景。
-- 不扩展视频理解、音频理解和复杂多模态 agent 数据协议。
-- processor adapter、token estimator、padding ratio profile 必须逐步接入真实模型和数据。
-
-### 2.3 P4/P5：赢系统闭环
-
-长期目标是在训练、checkpoint、推理、评估、benchmark 的系统效率上超过通用训练框架。
-
-重点能力：
-
-- 训练产物可直接进入 serving runtime。
-- 推理 runtime 不依赖 DeepSpeed。
-- 支持连续 batching、有界 KV cache、后续 paged KV、流式输出和服务端 admission control。
-- 逐步建设 ParaScale native shard backend，覆盖 optimizer-state sharding、gradient sharding、parameter sharding 和通信计算 overlap。
-- Ascend 路线先做独立同构 NPU 训练，最后再做 GPU 训练 + Ascend 推理/评估协同。
-
-## 3. 当前工程结构
-
-当前工程以 `parascale/` 为唯一主包。旧 `Engine/ParaEngine`、旧 eager `DataParallel`、`ModelParallel`、`TensorParallel`、`PipelineParallel`、`HybridParallel` 不再作为兼容目标。
+## 2. 模块边界
 
 ```text
-parascale/
-  config.py              # 统一配置模型
-  cli.py                 # plan / train / serve / benchmark / smoke / doctor
-  core/                  # device、collective、cluster topology
-  data/                  # text、vision、multimodal 数据 schema 与 pipeline
-  strategy/              # 静态规划、profile、tuner、异构规划
-  runtime/               # context、launcher、benchmark、train、infer、backend、factory
-  checkpoint/            # manifest、manager、validator、converter
-  serving/               # request/response、scheduler、KV cache、sampling、engine
-  parallel/              # ParallelPlan、TP/PP/SP、communication compression
-  optimizers/            # optimizer 兼容、4bit optimizer、native ZeRO Stage 1
-  quantization/          # QAT/PTQ、fake quant、observer、quantized layers
-  utils/                 # logging、rank、distributed init
-tests/
-  run_tests.py           # 一键验证入口
+CLI -> commands -> configuration / strategy
+                    |
+                    +-> workloads/specs + workload builders
+                    |        |
+                    |        +-> data/vision, data/multimodal, optimizers
+                    |
+                    +-> runtime/train_runner -> runtime/training -> runtime/backends
+                    |        +-> quantization / distillation
+                    |        +-> checkpoint
+                    |
+                    +-> workloads/inference -> runtime/inference
+                    +-> workloads/serving -> runtime/serve_runner -> serving
+                    +-> reporting -> tests/benchmarks/reports
 ```
 
-主干对象：
-
-- `ParaScaleConfig`
-- `RuntimeContext`
-- `StrategyPlan`
-- `LaunchPlan`
-- `BenchmarkPlan`
-- `BenchmarkResult`
-- `TrainEngine`
-- `InferenceEngine`
-- `TrainingBackend`
-- `CheckpointManifest`
-- `ParallelPlan`
-
-新能力必须优先进入这些主干对象或其清晰下游，不能旁路形成第二套框架。
-
-## 4. 架构总览
-
-ParaScale v1 采用“配置事实源 + 策略规划 + runtime 执行 + profile 反馈”的闭环架构。
-
-```text
-User Config / CLI
-        |
-        v
-RuntimeContext
-  - workload descriptor
-  - model and data profile
-  - hardware and topology
-  - strategy plan
-  - budget constraints
-        |
-        +--> LaunchPlan
-        +--> DataPlan
-        +--> BenchmarkPlan
-        +--> ParallelPlan
-        |
-        v
-Runtime Execution
-  - TrainEngine
-  - InferenceEngine
-  - TrainingBackend
-  - CheckpointManager
-        |
-        v
-Profile / Metrics / Tuning
-  - throughput
-  - memory
-  - padding ratio
-  - dataloader wait
-  - decode / augment / transfer
-  - checkpoint / restore / serve latency
-```
-
-## 5. 配置模型
-
-`ParaScaleConfig` 是配置入口，必须保持小而明确。
-
-关键字段：
-
-- `task_type`: `generic`、`llm`、`vision`、`multimodal`
-- `model_family`: `vit`、`clip`、`vlm`、`llm` 等
-- `target_scale`: `local`、`single_node`、`small_cluster`、`sub_100_gpus`
-- `optimize_for`: `throughput`、`memory`、`latency`、`balanced`
-- `training_backend`: `native`、`fsdp`、`deepspeed`、`auto`
-- `tensor_parallel_size`
-- `pipeline_parallel_size`
-- `zero_stage`
-- `max_tokens_per_batch`
-- `max_patch_tokens_per_batch`
-- `resolution_buckets`
-
-约束：
-
-- 配置必须可由 JSON/YAML 表达。
-- CLI 输出必须可 JSON 序列化。
-- 默认配置必须保守可运行。
-- 新字段必须有明确使用者和测试。
-- 不允许为了未来想象添加无调用者字段。
-
-## 6. Core 层
-
-`core/` 屏蔽硬件和通信基础能力。
-
-### 6.1 DeviceBackend
-
-目标是统一 CPU、CUDA、NPU 的设备能力访问。
-
-职责：
-
-- 发现设备数量、名称、显存和能力。
-- 设置当前设备。
-- 查询 bf16、flash attention 等能力。
-- 提供 CPU fallback，保证本地轻量测试可运行。
-
-后续重点：
-
-- 完善 Nvidia CUDA capability 与 torch.cuda 诊断。
-- 完善 Ascend capability 与 torch_npu 诊断。
-- 将设备能力接入 `StrategyPlan`，避免策略层散落硬件分支。
-
-### 6.2 CollectiveBackend
-
-训练和推理必须共用通信抽象。
-
-接口能力：
-
-- `all_reduce`
-- `reduce_scatter`
-- `all_gather`
-- `all_to_all`
-- `broadcast`
-- `barrier`
-- `new_group`
-
-规则：
-
-- `MockCollectiveBackend` 保持无 torch 测试可用。
-- `TorchDistributedCollectiveBackend` 对接 Gloo/NCCL。
-- HCCL 通过 torch_npu 或独立 adapter 接入。
-- TP、SP、sharding、serving TP 都必须复用这一层。
-
-### 6.3 ClusterTopology
-
-目标是显式表达节点、设备、rank、通信 backend 和异构分组。
-
-设计规则：
-
-- 高频同步组优先同构，例如 TP、FSDP/ZeRO shard group、高频 all-reduce DP group。
-- 多型号 GPU 可进入 weighted DP，但 batch/token 分配必须受慢卡或小显存卡约束。
-- GPU + Ascend 默认分组协同，不默认混入同一高频同步组。
-- 异构 pipeline stage 必须显式配置并由 profile 验证。
-
-## 7. Strategy 层
-
-`strategy/` 是 ParaScale 从“能跑”走向“跑得好”的关键层。
-
-模块：
-
-- `plan.py`: `StrategyPlan`
-- `planner.py`: 静态策略规划
-- `profiler.py`: runtime profile 数据结构
-- `tuner.py`: profile-driven tuning 与 OOM retry
-- `hetero.py`: 异构规划
-
-规划输入：
-
-- `ParaScaleConfig`
-- model profile
-- hardware profile
-- topology
-- task type
-
-规划输出：
-
-- backend
-- DP/TP/PP/SP 建议
-- ZeRO/FSDP stage
-- offload
-- precision
-- activation checkpointing
-- batch policy
-- checkpoint policy
-- reasons / warnings
-
-策略必须可解释。每一项自动决策都应写入 `reasons` 或 `warnings`。
-
-## 8. Data 层
-
-数据层是 ParaScale 相对通用分布式框架的主要优势来源。
-
-### 8.1 通用数据合同
-
-标准 batch schema 应覆盖：
-
-- `input_ids`
-- `attention_mask`
-- `pixel_values`
-- `labels`
-- `metadata`
-- `num_images`
-- `patch_tokens`
-- `token_count`
-
-### 8.2 视觉数据
-
-当前已有：
-
-- `ImageFolderDataset`
-- `PatchTokenBatchSampler`
-- `VisionCollator`
-- `ImageDecodeCache`
-- `VisionThroughputProfiler`
-- real image profile smoke
-- tensor-ready vision collator，支持不同分辨率 padding、label tensor 化、`image_sizes`、`num_images` 和 `patch_tokens` 指标输出
-
-目标能力：
-
-- 按分辨率分桶，减少 resize/padding 浪费。
-- 按 patch-token budget 控制 batch。
-- 输出 images/sec、patch_tokens/sec、decode、augment、transfer 等指标。
-- 与 sample-based batching 做可复现 benchmark。
-
-### 8.3 图文多模态数据
-
-当前版本多模态边界收敛为图文多模态，不再扩展视频、音频和复杂多模态 agent 数据协议；这些内容不作为当前版本验收项，也不作为后续主线扩展方向。
-
-优先目标：
-
-- VLM LoRA/QLoRA 风格 finetune。
-- CLIP-style 图文对比学习。
-- 先以 tiny CLIP-style synthetic image-text contrastive workload 验证 schema、collator、loss、metrics、checkpoint 和 benchmark contract。
-- DataComp WDS 作为第一条真实图文数据路径：从 `.tar` shard 读取 image bytes、caption text 和 JSON metadata，直接进入 CLIP-style train/benchmark。
-- DataComp parquet metadata 作为真实元数据入口：先验证 parquet/json 元数据读取和 text schema，后续再扩展到可复现采样、过滤、去重和 image retrieval/cache。
-- ImageFolder+caption 或 HuggingFace datasets 作为后续通用 adapter，而不是当前首要闭环。
-
-明确不扩展、不验收：
-
-- 视频理解数据协议。
-- 音频理解数据协议。
-- 复杂多模态 agent 数据协议。
-
-## 9. Runtime 层
-
-`runtime/` 是 v1 主干。
-
-### 9.1 RuntimeContext
-
-`RuntimeContext` 是 plan、train、serve、benchmark 的共享事实源。所有 CLI plan 输出和 benchmark 报告都应围绕它组织。
-
-### 9.2 LaunchPlan
-
-`LaunchPlan` 给出保守启动建议：
-
-- `python`
-- `torchrun`
-- `deepspeed`
-- `manual`
-
-它只输出命令、环境变量、world size、nproc、reasons、warnings，不直接启动进程，便于本地、远程和容器环境审查。
-
-### 9.3 TrainEngine
-
-`TrainEngine` 只做编排，不内嵌大量 backend 细节。
-
-职责：
-
-- 初始化策略。
-- 调用 backend setup。
-- 执行 train step。
-- 记录 metrics。
-- 保存和加载 checkpoint。
-- 暴露 strategy plan。
-
-真实分布式执行由 `TrainingBackend` 负责。
-
-### 9.4 TrainingBackend
-
-当前后端：
-
-- `NativeTrainingBackend`
-- `FSDPTrainingBackend`
-- `DeepSpeedTrainingBackend`
-
-规则：
-
-- FSDP/DeepSpeed 是 baseline 和 fallback。
-- native backend 可用于本地真实训练和 ZeRO Stage 1。
-- native ZeRO Stage 2/3 不做虚假支持。
-- 后端必须暴露统一 `setup`、`backward`、`step`、`state_dict`、`save_checkpoint`、`load_checkpoint` 契约。
-
-## 10. Checkpoint 设计
-
-`checkpoint/` 必须独立成体系，不散落在 engine/backend 中。
-
-Manifest 应包含：
-
-- step / global_step
-- backend
-- parallel plan
-- file entries
-- payload metadata
-- validation status
-- last metrics
-
-目标：
-
-- 训练 checkpoint 可直接被 serving runtime 校验和加载。
-- 支持 Native/FSDP/DeepSpeed/HF/Ascend 格式转换。
-- checkpoint validation 能在 smoke 和 benchmark 中自动运行。
-
-## 11. Serving 设计
-
-推理 runtime 不依赖 DeepSpeed。训练和推理继续放在同一个工程内，因为二者需要复用 device、collective、topology、checkpoint、profile、data schema 和配置系统。
-
-当前已有：
-
-- `InferenceEngine` real/mock mode 边界。
-- `ServingEngine` batched request execution。
-- request-level error isolation。
-- `ContinuousBatchScheduler` 队列与指标。
-- `KVCacheManager` 有界缓存和 LRU 行为。
-- `SamplingConfig` 结构化导出。
-- tiny torch checkpoint 到 real serving smoke。
-
-下一步：
-
-- tokenizer 与 HuggingFace/vLLM/TGI adapter。
-- prefill/decode 分离。
-- paged KV cache 和 GPU block allocator。
-- HTTP server lifecycle、admission control、streaming token output。
-- train checkpoint 到 serving benchmark。
-
-## 12. Parallel 与 Optimizer 设计
-
-旧 eager parallel wrapper 不再恢复。并行能力通过 `ParallelPlan` 表达，通过 runtime backend 或显式 adapter 执行。
-
-当前已有：
-
-- `ParallelPlan`
-- `TensorParallelAdapter`
-- `column_parallel_linear`
-- `row_parallel_linear`
-- `build_pipeline_stages`
-- `LocalPipelineExecutor`
-- `SequenceParallelAdapter`
-- gradient compression helpers
-- native ZeRO Stage 1
-- 4bit optimizer 兼容模块
-
-生产边界：
-
-- 分布式 TP/PP 不默认静默启用。
-- 模型必须显式集成 TP/PP adapter。
-- TP/PP 必须通过 benchmark 验证后才能声明生产支持。
-- native ZeRO 当前只支持 Stage 1 optimizer-state sharding。
-- gradient/parameter sharding 继续委托 DeepSpeed/FSDP，直到 ParaScale 有真实 native kernel。
-
-## 13. Benchmark 设计
-
-性能声明必须通过 benchmark 支撑。
-
-当前已有：
-
-- `BenchmarkPlan`
-- `BenchmarkScenario`
-- `BenchmarkResult`
-- `BenchmarkComparison`
-- `compare_benchmark_results`
-- CLI benchmark 输出 `benchmark_result` 和 comparison contract
-- CLI `benchmark-matrix` 统一执行 native-DDP/FSDP/DeepSpeed 矩阵，不再为每个场景维护单独执行脚本
-
-Benchmark 必须记录：
-
-- 配置文件或配置快照。
-- 硬件 profile。
-- backend。
-- strategy plan。
-- batch policy。
-- throughput。
-- peak memory。
-- dataloader wait。
-- checkpoint/restore/serve latency。
-
-对比要求：
-
-- 同硬件。
-- 同配置。
-- 同数据口径。
-- 同 batch budget 或明确说明差异。
-- 不允许用 smoke 结果宣称性能优势。
-
-## 14. CLI 设计
-
-当前 CLI 命令：
-
-- `doctor`
-- `plan`
-- `train`
-- `serve`
-- `benchmark`
-- `benchmark-matrix`
-- `smoke`
-- `vision-profile`
-- `checkpoint validate`
-
-要求：
-
-- 所有命令输出 JSON 或可写 JSON 文件。
-- dry-run 必须明确标记 `dry_run`、`runtime_status`、`capability_level`。
-- mock 结果必须显式标记 `mock: true`。
-- plan 输出必须包含 strategy、launch、benchmark、dataloader。
-- benchmark 必须记录硬件、配置、backend、策略和指标。
-- benchmark-matrix 必须自动生成派生配置、执行同口径后端矩阵、输出 JSON summary 与中文 markdown report。
-- benchmark-matrix 的 OOM retry 必须显式记录 retry_of、batch_size、log path、失败原因和最终采用的 fallback，不允许静默降级。
-
-## 15. 异构资源设计
-
-支持两类异构资源：
-
-- 多型号 Nvidia GPU，例如 H100、A100、L20、4090。
-- Nvidia GPU 与 Huawei Ascend NPU 协同。
-
-默认策略：
-
-| 并行维度 | 多型号 GPU | GPU + Ascend |
+| 模块 | 职责 | 不应承担的职责 |
 | --- | --- | --- |
-| DP | 可 weighted DP | 默认分组，不做高频同步混用 |
-| TP | 同型号、同节点优先 | 默认禁止混用 |
-| PP | 可跨型号，必须 profile | 可显式配置，必须记录转换成本 |
-| FSDP/ZeRO shard | 同型号、同 backend 优先 | 默认禁止混用 |
-| 推理 TP | 同型号优先 | 默认禁止混用 |
-| 数据预处理 | 可混用 | 可混用 |
-| 评估/推理协同 | 可混用 | 推荐支持 |
+| `cli.py`、`commands/` | 根 parser、模块化命令注册、错误分类、启动编排 | 不实现模型训练循环 |
+| `configuration/`、`config.py` | 配置来源解析、规范化、运行时配置投影 | 不在 step 热路径重复解析 |
+| `contracts/` | batch、backend、workload、指标等跨模块协议 | 不引入逐步深拷贝与序列化 |
+| `workloads/specs/` | 按 tiny、vision、CLIP、VLM LoRA、YOLO、GroundDINO 解析场景配置 | 不持有设备通信实现 |
+| `workloads/` | 装配 model、optimizer、dataloader、loss callable | 不另起训练引擎 |
+| `data/` | 预处理、采样、缓存、collator、数据等待观测 | 不拥有训练/服务生命周期 |
+| `runtime/training/` | fit、累积、精度、指标、恢复协作 | 不实现另一个 DeepSpeed |
+| `runtime/backends/` | native、DDP、FSDP、DeepSpeed、Ascend 执行适配 | 不反向拥有 CLI |
+| `quantization/`、`distillation/` | 模型变换与目标函数 | 不承担分布式调度 |
+| `checkpoint/` | manifest、路径、校验和、格式契约 | 不把推理权重当作可恢复训练状态 |
+| `runtime/inference/`、`serving/` | 推理上下文、任务适配、请求调度和结果隔离 | 不等同于完整网络服务平台 |
+| `reporting/`、`tests/benchmarks/` | 运行证据、对照实验、统一报告 | 不将实验脚本变成生产入口 |
 
-优先级：
+设备能力由 `core/device/` 表达，collective/process group 由 `core/distributed/` 表达，DDP hook 与 bucket 规划属于 `communication/`。GPU/NPU 类型与训练策略是不同维度。
 
-1. 同构 Nvidia / 同构 Ascend 稳定训练。
-2. 多型号 GPU node group 与 weighted DP。
-3. GPU 训练 + Ascend 推理/评估协同。
-4. 异构 pipeline stage。
-5. 更细粒度 GPU+Ascend 混训仅作为研究路径。
+## 3. 配置解析
 
-Ascend 实机验证本阶段暂缓，但架构抽象必须保留。
+当前仍存在 `parascale` 配置入口以及职责分组后的顶层配置，不能描述为已完全删除平铺模型。训练和规划通过 `normalize_execution_config`、`resolve_config` 收敛为同一有效配置，`ParaScaleConfig` 承载运行时字段。
 
-## 16. 当前实现状态
+| 配置节 | 所有权 |
+| --- | --- |
+| `backend` | training_backend、precision、后端策略 |
+| `training` | workload、max_steps、累积步数、checkpoint/resume 和训练输出 |
+| `optimizer` | optimizer 类型、lr、betas、weight_decay 等 |
+| `data` | batch_size、数据路径、worker、cache、processor 参数 |
+| `model`、`task`、`lora` | workload 专属模型与任务语义 |
+| `runtime`、`hardware_profile`、`launch` | 设备请求、硬件事实、启动拓扑 |
+| `parascale.quantization` | 参考 PTQ/QAT 配置 |
+| `distillation` | 蒸馏目标和教师来源，独立于量化配置 |
+| `serving`、`inference` | 各自执行入口的工作负载与请求设置 |
 
-已具备：
+resolver 记录字段来源，优先级从低到高为默认值（0）、DeepSpeed 原生字段（35）、用户配置（40）、strategy/tuner（80）、CLI（90）、emergency override（100）。由规范化生成的副本必须保留来源，不得在重复解析时被误当成新的用户覆盖。DeepSpeed 冲突在执行前报错，最终执行配置由后端契约消费。
 
-- `ParaScaleConfig` 基础字段与校验。
-- `RuntimeContext`、`LaunchPlan`、`BenchmarkPlan`。
-- `parascale plan` 输出 runtime、launch、benchmark、strategy、dataloader。
-- `TrainEngine` 本地训练、checkpoint 保存、恢复。
-- `FSDPTrainingBackend` 和 `DeepSpeedTrainingBackend` smoke。
-- `InferenceEngine` mock/real mode 边界。
-- `ServingEngine` 连续微批处理、错误隔离、KV cache、metrics。
-- `vision_synthetic` 工作负载与 patch-token 指标。
-- 真实 ImageFolder profile smoke。
-- `ParallelPlan`、TP/PP 本地原语、sequence/compression 实验资产。
-- native ZeRO Stage 1。
-- `BenchmarkResult` 与 `BenchmarkComparison`。
-- no-torch 测试、本地 smoke 测试和远程双卡容器 smoke。
-- 代码与文档统一 UTF-8；代码注释/docstring 使用英文；主文档使用中文。
+训练使用规范化后的 workload 参数，避免 plan 的 batch、precision、学习率与实际执行不一致。PTQ 命令目前直接读取 `parascale`，不能据此宣称所有命令已共享完全相同的 resolver 链路。推荐量化配置仍按[量化指南](quantization.md)填写。
 
-尚未完成：
+## 4. 训练执行与性能
 
-- HuggingFace/vLLM/TGI serving adapter。
-- paged KV cache 和流式输出。
-- 分布式 TP/PP 真实通信执行。
-- native ZeRO Stage 2/3。
-- VLM LoRA 真实 processor adapter 已接入，packing 与更长训练 loop 继续完善。
-- CLIP-style DataComp WDS 真实数据 adapter 已接入 benchmark 路径，生产长跑与数据治理仍需继续完善。
-- checkpoint converter 的真实格式转换。
-- Ascend NPU 实机验证。
-- 与 DeepSpeed/FSDP 的系统化性能对比报告已形成统一入口，后续继续扩大模型、数据和长跑规模。
+`run_train_from_config` 的顺序为：
 
-## 17. 开发路线
+1. 规范化配置、检查后端/精度/并行和量化/蒸馏组合。
+2. 解析恢复位置，扩展 workload 的 replay 窗口，派生 rank 数据配置。
+3. 构建 workload；必要时进行 QAT prepare 或检测蒸馏包装。
+4. 在模型变换之后创建最终 optimizer，确保量化参数或投影层被纳入。
+5. 创建 TrainEngine，恢复检查点，执行训练并保存、校验训练状态。
+6. 按任务导出量化模型或纯学生权重，输出指标及目标函数元数据。
 
-### P0：主干稳定
+`training.max_steps` 表示本次要求执行的 optimizer 更新预算，不是累计 microbatch 数。workload 供给量需覆盖累积窗口；恢复时还需覆盖已消费的数据位置。DeepSpeed 返回是否真正完成更新，global_step 只在更新边界递增。
 
-- 固化 `RuntimeContext`、`LaunchPlan`、`BenchmarkPlan` schema。
-- 保持 `tests/run_tests.py` 全量通过。
-- 所有 mock/dry-run 明确标记。
-- 代码注释英文、文档中文、UTF-8 编码。
+累积逻辑在 `runtime/training/accumulation.py` 和 `loss_weight.py` 收敛。各 workload 明确 loss 的归一化权重；对可按该权重组合的损失，按有效样本/目标总量校正，而不是简单平均不同大小的 microbatch。该契约不意味着 CLIP 的跨 batch 负样本集合可由累积自动复现，也不自动使 token-level 蒸馏支持累积。
 
-### P1：生产训练最小闭环
+native 路径先完成反向传播和必要的 AMP unscale，再执行梯度裁剪、优化器更新。DeepSpeed 使用自身更新边界与配置。归一化归约尽量与计算重叠，累积窗口复用分母并在设备端汇总 detached loss；性能结论必须引用对照实验，不能仅依据减少同步的代码推断。
 
-- 本地 native 与远程 2-GPU FSDP/DeepSpeed smoke。
-- checkpoint save/resume/validate。
-- benchmark 输出统一 JSON。
-- remote container 流程可重复执行。
+## 5. 数据契约
 
-### P2：视觉优势路径
+- `DistributedSampler` 的 rank 长度需要一致，尾部填充/丢弃按策略处理，避免 collective 次数不匹配。
+- `workloads/specs/common.py` 统一换算训练 microbatch 供给量。
+- 真实 HF CLIP 使用与模型匹配的 AutoProcessor，不使用仅在 tiny 模型中适用的任意 token ID 代替真实 tokenizer。
+- 通用视觉预处理、cache 与 collator 属于 `data/vision/`；YOLO 标签和官方 batch 字段转换属于 `workloads/adapters/yolo.py`。
+- `yolo_detection` 复用 YOLO 数据管道，但只接受官方检测损失，不允许 proxy loss。标准 Detect 的 DFL 固定积分卷积保持冻结。
+- 当前 YOLO 图像路径采用 square resize，不等同于 Ultralytics 完整 augmentation/letterbox/EMA/scheduler 训练配方。
+- 数据异常必须传播，不允许 DataLoader 失败后静默更换实现而继续输出原策略的性能结论。
 
-- 完善 resolution bucket。
-- 完善 patch-token batch。
-- 接入真实 image decode/cache/augment。
-- 加入 dataloader wait、decode、augment、transfer profile。
-- 与 sample-based baseline 做 benchmark。
+## 6. 检查点与恢复
 
-### P3：多模态优势路径
+`CheckpointManager` 管理 `step-XXXXXXXX/manifest.json` 和 payload；`runtime/training/checkpointing.py` 协调后端状态、各 rank 的运行时侧文件及 manifest 发布。
 
-- 固化 multimodal batch schema。
-- 实现 modality-aware token estimator。
-- 接入 VLM LoRA processor adapter。
-- 接入 CLIP-style 对比学习数据流。
-- 实现 padding ratio profile。
+恢复状态包括模型、optimizer、可选 scheduler、精度 scaler、随机数和数据消费位置。随机数处理集中在 `random_state.py`，rank-local 状态不得用 rank 0 的状态代替所有 rank。分布式写入/读取错误需要协调传播，校验和、world size、后端布局、optimizer 和训练目标契约必须在恢复时验证。
 
-### P4：推理 runtime
+数据实现有 state_dict 协议时优先恢复该状态；否则明确警告并 replay-skip。恢复数据迭代位置时保护训练随机数状态。精确恢复还要求可重复的数据顺序、worker 行为和确定性算子，不能把恢复了 RNG 等同于任意输入管道均逐位一致。
 
-- HuggingFace/vLLM/TGI adapter。
-- prefill/decode 分离。
-- paged KV cache。
-- HTTP server 与 streaming。
-- train checkpoint 到 serve 的端到端 benchmark。
+检测蒸馏保存 student、projectors 和 optimizer，教师仅通过 checkpoint/config 哈希描述。纯学生导出不可覆盖源模型、教师 checkpoint 或训练目录下的 step 子目录；部署文件不包含 optimizer，不能用于恢复训练。
 
-### P5：Native 高性能后端
+## 7. 参考 PTQ/QAT
 
-- native ZeRO Stage 2/3。
-- 通信计算 overlap。
-- 分布式 TP/PP 执行。
-- 异构 weighted DP 与 pipeline stage。
+| 对象 | 设计职责 |
+| --- | --- |
+| QuantizationConfig | 验证位宽、reference 后端及受支持组合 |
+| PostTrainingQuantization | prepare、校准、convert、export |
+| QuantizationAwareTraining | fake quant、真实梯度更新、observer 冻结与转换 |
+| 量化层 / load_quantized_model | packed 存储、浮点反量化执行、匹配浮点模板的重载 |
+| `core.py` | 层选择、存储别名索引、参数共享拒绝与序列化辅助 |
 
-## 18. 设计约束
+当前验证重点为 weight-only 4/8 位、FP32 reference 执行，不提供 GPTQ/AWQ 或融合 INT4/INT8 加速 kernel。精确支持的模块类型为 PyTorch Linear/Conv2d；共享的选中参数、自定义子类和 GPT-2 Conv1D 等边界需拒绝或单独适配。
 
-- 新接口必须有测试或 smoke。
-- 新模块必须说明服务哪个主干目标。
-- 不新增无调用者的抽象。
-- 不让旧兼容 API 成为新能力入口。
-- 不把 mock 输出包装成真实能力。
-- 硬件相关测试必须可 clean skip，并给出原因。
-- benchmark 结果必须可复现，至少包含配置、硬件、backend、策略、指标。
-- 删除冗余文件优先于维护过期文档和示例。
+校准接收 Tensor、约定的输入/标签对和 Mapping（含 BatchEncoding）。存储别名预索引避免逐个选中参数再次扫描全模型。QAT optimizer 必须在 prepare 后建立。
 
-## 19. 审查问题
+单进程 native FP32 QAT 使用完整 checkpoint；AMP、FSDP/DeepSpeed、分布式 QAT 以及 QAT+KD 不属于已验收组合。4-bit optimizer、模型权重量化和 DDP 梯度通信压缩是三种不同能力。
 
-后续审查建议重点看：
+## 8. 在线蒸馏
 
-- 真实 VLM LoRA 首个模型适配选择 Qwen-VL、LLaVA 还是更小的内部 toy VLM。
-- CLIP-style 对比学习先接 ImageFolder+caption，还是 HuggingFace datasets。
-- serving adapter 先接 HuggingFace generate，还是直接对接 vLLM/TGI。
-- benchmark runner 已收敛到 CLI 子命令；后续应继续减少一次性远程脚本，保留专项验收脚本即可。
-- Ascend 同构 NPU 训练选择 torch_npu 原生路径还是先做 HCCL smoke。
+### 8.1 分类与因果语言模型
 
-## 20. 总结
-
-ParaScale v1 的核心不是堆叠所有分布式训练功能，而是建立一个可审查、可测试、可演进的 runtime 主干。短期用 FSDP/DeepSpeed/native 建立可靠 baseline；中期用视觉 patch-token、多模态 token-aware 数据 runtime 和训练到推理闭环形成差异化；长期再通过 native sharding、通信重叠、异构规划和独立推理 runtime 建立系统级优势。
-
-本文档是后续代码开发的主设计依据。若代码结构、CLI 输出、能力边界或验收目标发生变化，应同步更新本文档。
-
-### 20.1 试用版发布门禁
-
-ParaScale 的发布控制面由单一版本源、PEP 517/621 wheel、strict doctor、稳定 CLI 退出码和 CI 组成。源码测试覆盖 Python 3.10-3.12，clean-install 在独立 Python 3.11 环境通过安装后的 `parascale` console entrypoint 完成 tiny 训练与 checkpoint 校验。
-
-doctor 的事实采集与要求判断保持分离：普通模式只报告环境，strict 模式默认要求 core 与 Torch，`--require` 可声明 distributed、CUDA、DeepSpeed 或 NPU。失败结果必须包含 JSON evidence，不能通过日志文本猜测原因。
-
-CLI 只在命令分发边界分类预期异常，退出码为 2 配置/环境要求、3 依赖、4 runtime、5 checkpoint、6 benchmark 和 70 internal error。该错误协议属于低频控制面，不进入训练 step 热路径。CI extras resolution 不能替代远程 CUDA、NPU 或 DeepSpeed 实机发布验收。
-
-配置系统采用显式版本协议。仓库当前 schema 为 v1；未声明版本的配置按 legacy v0 解析并可通过 `parascale config migrate` 迁移，版本高于 runtime 支持范围时必须在装配前失败。schema 校验、来源追踪和序列化均属于低频控制面，不得进入训练 step、batch move 或通信热路径。根包公共 API 以 `PUBLIC_API_VERSION` 和快照测试冻结，破坏性变化必须伴随 API 版本升级、迁移说明和回归测试。
-
-已发布 tag 与 Release 是不可变供应链标识。任何发布后修复必须递增 patch 版本并重新执行源码测试、wheel clean-install 和适用的远程硬件门禁，不得通过移动历史 tag 替换已发布代码。
-
-`0.1.0` 发布候选继续执行“先验收、后打 tag”的门禁顺序。候选 wheel 必须在不挂载源码的隔离环境中通过 `parascale --version`、strict doctor、plan、tiny train 和 checkpoint validate。CUDA 门禁使用双 RTX 4090 D、真实 DataComp WDS 和预训练 CLIP-B/32 对 native-DDP、FSDP、DeepSpeed 做同口径矩阵，并独立验证 checkpoint/resume。Ascend 门禁默认必须等待目标 910B4 资源空闲后执行，不能以 dry-run、mock 或接口测试替代实机结论。若发布负责人明确接受风险并豁免该门禁，版本必须标记为 `GPU-verified / Ascend-unverified`，且不得声明 Ascend production verified。
-
-## 附录 A：2026-06-23 架构重整基线
-
-本附录与 `docs/architecture_closure_design.md` 保持一致，作为后续代码重构、人工审查和功能验收的当前基线。ParaScale 尚未上线运行，因此本轮重整不要求兼容早期 `Engine`、旧并行 wrapper 或历史 CLI 形态，只保留已经验证有价值的能力，并以当前最优工程结构重新组织。
-
-### A.1 产品边界
-
-ParaScale 的定位是面向百卡以下视觉与多模态场景的分布式训练和推理控制层。短中期不重写 DeepSpeed/FSDP 的全部能力，而是把 DeepSpeed/FSDP 作为成熟 baseline 和 fallback，并围绕真实数据管线、profile、自动后端选择、可解释 benchmark、checkpoint/resume 闭环形成差异化。
-
-核心价值链为：
+`DistillationConfig` 不导入 torch；`OnlineDistillationLoss` 持有独立教师，冻结参数、清理梯度并以 eval/no-grad 前向。教师不注册为学生子模块。
 
 ```text
-Config -> RuntimePlan -> Workload Adapter -> Data Pipeline -> Training/Inference Runtime
-       -> Backend Adapter -> Profile -> Tuner Evidence -> Report -> Checkpoint/Resume
+total = (1-alpha) * CE + alpha * T^2 * KL(P_teacher(T) || P_student(T))
 ```
 
-### A.2 分层架构
+分类对齐类别语义与次序；causal_lm 对齐 token ID、位置和 shifted next-token 标签，并过滤无效位置。不同隐藏维度不构成障碍，但不同 tokenizer 或类别空间不能直接蒸馏。
 
-重整后的主包边界如下：
+### 8.2 检测专用适配
 
-- `commands/`：CLI 命令实现，`cli.py` 只做薄分发。
-- `contracts/`：跨模块稳定协议，包含 batch、backend、checkpoint、metrics、plan、workload 等核心 contract。
-- `core/device/`：CPU、CUDA、Ascend 设备能力抽象。
-- `core/distributed/`：Gloo、NCCL、HCCL、mock collective 和 process group 抽象。
-- `data/vision/`：通用视觉预处理、cache、collator、sampler、profile。
-- `data/multimodal/`：processor、tokenizer、conversation template、prompt cache、modality-aware profile。
-- `workloads/`：YOLO、CLIP、DataComp、VLM LoRA 等薄适配器。
-- `runtime/training/`：训练执行 runtime，包含 engine、fit loop、step、precision、memory、prefetch、checkpointing。
-- `runtime/inference/`：推理 runtime，包含 engine、batcher、scheduler 和 vision/multimodal/embedding task。
-- `runtime/backends/`：训练执行后端，包含 native、FSDP、DeepSpeed、Ascend native。
-- `strategy/`：RuntimePlan、DevicePlan、BackendPlan、CommunicationPlan、DataPlan、InferencePlan、profiler、tuner。
-- `communication/`：DDP hook、bucket policy、no_sync、LoRA sync、overlap profile。
-- `checkpoint/`：manifest、manager、adapter-only、converter、validator。
-- `reporting/`：benchmark、matrix、profile、tuner 和 markdown 报告。
+`DetectionDistillationConfig` 仅表达 detection 目标及非负 feature_weight。`create_detection_distillation` 返回训练模型和独立 loss callable：
 
-### A.3 硬件和训练后端分离
+| 对象 | 持有内容 |
+| --- | --- |
+| DetectionDistillationModel | student、三尺度 1x1 projectors；进入 optimizer 和训练 checkpoint |
+| DetectionDistillationObjective | 冻结教师、配置快照、官方损失 callable、最近指标；不进入学生 state_dict |
+| DetectionDistillationOutput | 官方前向结果和投影后的多尺度特征 |
 
-CUDA 和 Ascend 是硬件设备能力，不应与 native、FSDP、DeepSpeed 等训练策略混在同一层。设备层使用：
+通过 Detect 的临时 pre-hook 提取 neck 特征，先将输入列表转为 tuple，防止 head 原地替换列表造成捕获失效；无论成功失败都清理 hook。投影层在 optimizer 前初始化，保护 CPU/设备 RNG，避免改变采样或 dropout 序列。
 
 ```text
-core/device/cpu.py
-core/device/cuda.py
-core/device/ascend.py
+normalize(F) = F / sqrt(mean_CHW(F^2) + 1e-6)
+feature_loss = mean_scales MSE(normalize(project(F_student)), normalize(F_teacher))
+total = official_detection_loss + feature_weight * batch_size * feature_loss
 ```
 
-训练策略层使用：
+保留官方 batch-summed 损失尺度。教师看到同一预处理图像，并延迟放置到对应设备。前景和背景等权；这不是 FGD，也未实现分类 logit 或框回归分布蒸馏。
 
-```text
-runtime/backends/native.py
-runtime/backends/fsdp.py
-runtime/backends/deepspeed.py
-runtime/backends/ascend_native.py
-```
+只接受同系列标准 DetectionModel、三个 Detect 尺度、相同类别映射和 stride。检查师生共享存储，拒绝 YOLO-World、pose/segment、end-to-end 和跨系列头。YOLOv8、YOLO11 已有实际训练与恢复测试，验证上游版本为 Ultralytics 8.3.161。
 
-CUDA 路线默认组合为 `CudaDeviceBackend + NCCL + native/FSDP/DeepSpeed`。Ascend 路线默认组合为 `AscendDeviceBackend + HCCL + ascend_native`。Ascend 在没有实机验证前只能声明 interface ready 或 smoke ready，不能声明 production ready。
+feature_weight=0 跳过特征捕获、投影计算和教师推理。训练结束默认导出 checkpoint_dir/student.pt，其中仅含原始学生 DetectionModel state_dict；用匹配的 Ultralytics 模型加载，不是直接注册到 ParaScale infer/serve。
 
-### A.4 Contracts 性能约束
+### 8.3 Runtime 集成
 
-`contracts/` 是跨模块工程协议，不是高频训练热路径包装层。`RuntimePlan`、`BackendPlan`、`CommunicationPlan`、`DataPlan` 等计划对象应在训练前生成，运行中只读使用。默认训练模式不做 per-step 深度 schema 校验，不因 contracts 产生 batch 深拷贝、tensor clone 或频繁 JSON 序列化。严格校验只在 debug、doctor、smoke 或 profile 模式启用。
+`runtime/distillation.py` 负责执行组合校验、教师加载、哈希和 objective metadata；不同目标的数学逻辑留在 `distillation/`。CLI 限定单进程 native、FP32、累积为 1、完整检查点；拒绝与量化联合启用。检测任务只接受 yolo_detection 学生和教师 workload。
 
-### A.5 Plan 产物和 Examples 组织
+## 9. 推理与服务
 
-每次训练、推理或 benchmark 配置解析后会生成 RuntimePlan 和相关子计划。默认情况下 plan 只在内存中流转；显式 `--output` 时才保存到 `runs/`、`tests/` 或对应 `examples/example_xxx/` 子目录，不能写入 `parascale/` 源码目录。
-
-`examples/` 按一次完整运行一个子目录组织，例如：
-
-```text
-examples/example_001_clip_datacomp_native_ddp/
-  README.md
-  config.yaml
-  run.sh
-  runtime_plan.example.json
-  expected_metrics.example.json
-```
-
-真实运行产物、checkpoint、模型权重、机器专属路径和历史 benchmark 结果不进入 examples。
-
-### A.6 多机验收分级
-
-多机分布式是 ParaScale 的一等架构目标，但必须按验收级别声明能力：
-
-| 等级 | 含义 | 可声明能力 |
+| 路径 | 当前实现 | 边界 |
 | --- | --- | --- |
-| `single-node verified` | 单机单卡或单机多卡真实训练/benchmark 已通过 | 可以声明单机能力可用 |
-| `multi-node smoke` | 多机启动、通信初始化、少量 step smoke 通过 | 可以声明多机链路可启动，但不能声明生产性能 |
-| `multi-node production` | 多机长窗口训练、checkpoint/resume、benchmark matrix、故障恢复均通过 | 可以声明该场景具备生产可用性 |
+| `infer` | CLIP embedding、YOLO-World 的合成/真实适配与指标 | 不自动消费所有训练 workload 的检查点 |
+| `serve` | 校验 manifest，加载 tiny 模型，提交配置中的请求并 drain | 非常驻 HTTP/gRPC 服务 |
+| YOLO KD 导出 | 纯学生权重与重载预测一致性验证 | 使用 Ultralytics 推理；不是已完成一键上线 |
+| PTQ/QAT 导出 | 匹配模板的 reference 重载 | 不是低比特推理服务后端 |
 
-所有 CLI 输出、benchmark report 和文档必须标明当前结果属于哪一档。
+`runtime/inference/execution.py` 统一 eval/no-grad 执行并恢复原训练模式。服务批结果只接受明确的逐请求映射/序列合同，不把不匹配的单个结果广播给多请求；失败按请求隔离。
+
+scheduler、batcher、KV cache 等工程模块不代表已实现大模型 continuous token batching、paged attention 或生成式 streaming。未来应先完成目标模型的标准化产物与 infer 适配，再讨论网络协议、部署、版本切换和回滚。
+
+## 10. 测试与性能证据
+
+统一入口为 `python tests/run_tests.py`，覆盖语法与 pytest。no-torch 环境验证配置和协议，CPU/GPU 环境验证真实张量行为。功能正确性、预训练精度和吞吐是独立验收维度。
+
+| 设计域 | 主要回归入口 |
+| --- | --- |
+| 配置/预算/累积 | `tests/test_config_execution_contract_no_torch.py`、`tests/test_training_budget_no_torch.py`、`tests/test_training_execution_contract.py` |
+| 数据/分布式 | `tests/test_distributed_data_contracts_torch.py`、`tests/benchmarks/scripts/distributed_training_contracts.py` |
+| RNG/scaler/resume | `tests/test_checkpoint_runtime_state.py`、`tests/benchmarks/scripts/distributed_checkpoint_contracts.py` |
+| 推理结果合同 | `tests/test_inference_execution_contract.py` |
+| 压缩跨架构 | `tests/test_compression_portability.py` |
+| 检测 KD | `tests/test_detection_distillation.py`、`tests/test_detection_training.py`、`tests/test_detection_distillation_runtime_no_torch.py` |
+
+检测实际数据对照使用 YOLOv8s -> YOLOv8n、COCO128 固定 96/32 划分、单 A6000 FP32、三次 200 步。该子集在 COCO 预训练中已出现，不能视为独立泛化数据。两种微调结果均低于初始学生，不能宣称精度提升。数值和失败的高学习率探测保存在统一报告及 detection_distillation/summary.json。
+
+Llama、BERT、ViT、ResNet、Qwen2 的部分测试使用小型随机模型，验证 API、参数更新及序列化，不证明预训练质量，也不自动增加 CLI workload 注册。
+
+## 11. 发布与工程约束
+
+- 新功能必须有对应回归；无硬件/依赖应明确 skip，不以 mock 冒充实测。
+- 提交格式遵循 CONTRIBUTING.md 的 `<type>(<scope>): <subject>`；开发分支通过 PR 合并，不直接提交或推送主分支。
+- 已发布 tag/release 不移动；文档基线更新不等于软件版本升级。
+- 低频配置验证不得进入 step 热路径；不为保留旧 API 复制第二套执行逻辑。
+- 远程密码、密钥、临时运行目录和大权重不纳入版本控制。
+- Ascend、GPU 单机和多机的验收按实际报告分开；旧环境验证不能自动扩展到新增量化/蒸馏能力。
+
+## 12. 文档关联
+
+- [软件需求](software_requirements_specification.md)：编号、能力分级、验收要求。
+- [用户手册](user_manual.md)：安装、配置、训练、压缩与推理操作。
+- [量化指南](quantization.md)、[蒸馏指南](distillation.md)：数学目标、支持边界及完整示例。
+- [统一测试报告](../tests/benchmarks/reports/BENCHMARK_REPORT.md)：历史环境和当前实测证据。

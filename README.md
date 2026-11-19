@@ -386,9 +386,15 @@ from parascale import (
 
 使用方法与限制见 [蒸馏指南](docs/distillation.md)。
 
+Python API 已增加 BERT、ViT、ResNet、Qwen2 小型随机模型的跨架构回归：师生可以不同尺寸，但必须对齐类别或 token 含义。该验证不代表预训练模型效果，也不自动扩展 CLI workload 或不同 tokenizer 的支持。
+
+检测任务另提供 `yolo_detection` + `distillation.task: detection`：保留官方检测损失，增加同系列 YOLO 的三尺度特征蒸馏与可训练通道投影。已覆盖 YOLOv8 / YOLO11 的训练、恢复和纯学生权重导出；仍限定单进程 native FP32，不支持 YOLO-World、分割/姿态、端到端检测头或跨系列蒸馏。训练期教师和投影层不进入部署权重，实际精度收益需用同预算对照评估。
+
 ## PTQ 与 QAT
 
 支持 Linear/Conv2d 的 4-bit、8-bit 参考量化，以及 Llama 架构验证。PTQ 用于校准后导出，QAT 使用可反向传播的伪量化进行训练，再导出整数权重。
+
+跨模型回归覆盖 Transformers BERT 分类、ViT、ResNet、Qwen2 的 PTQ/QAT 与重载；GPT-2 的 `Conv1D` 投影、选中参数共享及自定义 Linear/Conv2d 子类尚不支持。校准输入支持 tokenizer 返回的映射对象。以上为随机小模型的功能验证，不是质量或加速承诺。
 
 - `python -m parascale.cli quantize --config <配置文件> --output <量化文件.pt>`：使用现有 workload 的模型与数据执行 PTQ。
 - `train` 的 `parascale.quantization.enabled=true`、`mode=qat`：单进程 native、FP32 QAT，并分别保存训练检查点与量化推理文件。

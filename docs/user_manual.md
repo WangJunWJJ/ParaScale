@@ -1,8 +1,10 @@
 # ParaScale 用户手册
 
+文档基线：2026-11-19，对应当前开发分支；具体发布包能力以其版本文档为准。
+
 本文面向第一次使用 ParaScale 的训练工程师和研究人员，重点说明如何安装、检查环境、编写配置、启动训练、比较后端、查看 benchmark 证据以及处理常见问题。
 
-ParaScale 当前是一个面向视觉与多模态任务的轻量级分布式训练控制层。它统一配置、运行计划、数据管线、后端选择、benchmark、checkpoint/resume 与 serving，但不替代 PyTorch DDP/FSDP、DeepSpeed、Megatron-LM 或通用 RL 框架。
+ParaScale 当前是一个面向视觉与多模态任务的轻量级分布式训练控制层，统一配置、运行计划、数据管线、后端选择、benchmark 和 checkpoint/resume，并提供有限的推理入口。它不替代 PyTorch DDP/FSDP、DeepSpeed、Megatron-LM 或通用 RL 框架，也不是完整的生产级训推一体平台。
 
 ## 1. 适用范围
 
@@ -15,6 +17,8 @@ ParaScale 适合以下工作：
 | VLM LoRA | 验证 LoRA adapter-only 训练、trainable ratio、checkpoint 和通信策略 |
 | YOLO / GroundingDINO | 使用真实视觉数据做 workload smoke、profile 和 checkpoint 验证 |
 | CUDA / Ascend | 通过统一 device/backend 配置入口保持跨硬件运行口径一致 |
+| PTQ / QAT | 单设备 FP32 的 4/8-bit 权重参考量化；不承诺整数内核推理加速 |
+| 在线蒸馏 | 分类/因果语言模型 API，以及标准 YOLO 同家族特征蒸馏 |
 
 当前不建议把 ParaScale 直接当作以下系统使用：
 
@@ -161,14 +165,18 @@ tests/validation/configs/
 
 | 配置层 | 典型内容 |
 | --- | --- |
-| `backend` | 后端类型、DeepSpeed/FSDP/native-DDP 参数、通信策略 |
-| `training` | workload、batch、precision、steps、learning rate |
-| `data` | 数据路径、num workers、prefetch、pin memory、cache |
-| `workload` | 模型类型、模型路径、LoRA、任务专属参数 |
-| `checkpoint` | 保存路径、resume、校验和、rank-aware 保存策略 |
-| `hardware` | world size、GPU/NPU 数量、拓扑和设备约束 |
+| `backend` | `training_backend`、`precision`、后端执行和通信参数 |
+| `training` | `workload`、`max_steps`、`checkpoint_dir`、`checkpoint_interval` |
+| `data` | 数据路径、batch size、num workers、prefetch、pin memory、cache |
+| `model` / `task` / `lora` | 模型路径及由具体 workload spec 解释的任务参数 |
+| `optimizer` | `type`、`lr`、`weight_decay` 等优化器参数 |
+| `runtime` / `hardware_profile` | 实际设备选择，以及规划使用的卡数、显存、拓扑信息 |
+| `parascale` | 现有平铺配置入口；`parascale.quantization` 配置参考 PTQ/QAT |
+| `distillation` | 学习目标、教师完整配置与教师检查点 |
 
 不同示例配置可能使用 JSON 或 YAML。建议新实验优先复制 quickstart 或 benchmark 配置，再做小范围修改。
+
+`ParaScaleConfig` 平铺模型与分组配置目前并存。计划/训练会解析优先级并记录配置来源；避免在两个位置重复指定同一字段。PTQ 命令目前直接读取 `parascale`，量化时应在该节点显式设置 native/FP32，不要假定每个命令都已共享同一配置解析路径。
 
 ### 5.2 环境变量引用
 
@@ -190,7 +198,14 @@ python -m parascale.cli train \
   --config configs/quickstart/tiny_torch.yaml
 ```
 
-如果当前配置需要分布式启动，ParaScale 会根据配置和后端选择合适的 launcher。你也可以先通过 `plan` 确认启动方式。
+单次 `train` 调用不会自动创建所需的分布式进程。多卡时先确认配置的后端、设备数和 batch，再通过 launcher 启动，例如在具备两张 GPU 的环境中：
+
+```bash
+torchrun --standalone --nproc_per_node=2 -m parascale.cli train \
+  --config tests/benchmarks/configs/benchmark_datacomp_medium_native_ddp.json
+```
+
+示例中的真实数据和模型路径需按本机修改。`training.max_steps` 是本次调用的优化器更新次数，不是 microbatch 数，也不是恢复后训练总步数上限。
 
 ### 6.2 Benchmark 训练
 
@@ -266,6 +281,75 @@ python -m parascale.cli benchmark \
 ```
 
 GroundingDINO 场景用于验证视觉 grounding workload adapter、数据加载、tensor cache 和 checkpoint 路径。
+
+### 7.6 标准 YOLO 检测与蒸馏
+
+标准闭集检测使用 `training.workload: yolo_detection`，与 `yolo_world` 分开。它复用官方检测损失；数据采用 YOLO 的 `images/`、`labels/` 目录，空标签文件表示背景，缺少对应标签文件的图像会被跳过。当前方形 resize 管线不等于 Ultralytics 完整增强配方。
+
+安装已验证版本：
+
+```bash
+python -m pip install ultralytics==8.3.161
+```
+
+在完整学生配置中增加以下片段，详细可运行结构和教师权重准备见[蒸馏指南](distillation.md#yolo-detection-distillation)：
+
+```yaml
+distillation:
+  enabled: true
+  task: detection
+  feature_weight: 0.1
+  teacher:
+    checkpoint: /models/teacher_state.pt
+    config: {}  # Replace with the full matching teacher workload configuration.
+```
+
+`teacher.config` 必须填写完整的嵌套配置字典，不能使用配置文件路径或空字典。教师检查点必须可加载，不会回退为随机教师。以常规训练命令执行填写完整后的配置：
+
+```bash
+python -m parascale.cli train --config /configs/yolo_kd.yaml
+```
+
+支持同家族三尺度 Detect、相同类别名称/顺序和 stride，已测 YOLOv8、YOLO11。不同宽度通过可训练 1x1 投影对齐；目标为官方检测损失加 RMS 归一化特征 MSE，并非 FGD 或框/类别分布蒸馏。拒绝 YOLO-World、分割、姿态、end-to-end head、跨家族和 GroundingDINO。仅支持单进程 native FP32、梯度累积为 1、无 QAT。
+
+结束后默认导出 `checkpoint_dir/student.pt`，可通过 `training.student_output` 改路径。该文件只含学生原始模型参数，不含教师、投影和优化器；使用匹配架构的 Ultralytics 加载做验证/预测，不是 ParaScale `infer` 自动可识别的新模型格式，也不能用于完整续训。
+
+### 7.7 PTQ 与 QAT
+
+从已有完整 workload 配置开始，在 `parascale` 中合入以下字段。此处只是配置片段，不是完整训练配置：
+
+```yaml
+parascale:
+  training_backend: native
+  precision: fp32
+  quantization:
+    enabled: true
+    mode: ptq
+    bits: 4
+    backend: reference
+    fuse_modules: false
+    per_channel: true
+    quantize_activations: false
+    exclude_modules: [lm_head]
+```
+
+PTQ 使用已有 workload 的模型和校准 dataloader：
+
+```bash
+python -m parascale.cli quantize --config /configs/model_ptq.yaml --output /outputs/model_ptq.pt
+```
+
+QAT 将 `mode` 改为 `qat`，继续使用 `train --config /configs/model_qat.yaml`。默认导出 `checkpoint_dir/quantized.pt`，可由 `training.quantized_output` 指定。QAT 使用 full-model checkpoint，不能设置 adapter-only、混合精度、FSDP/DeepSpeed、分布式或与蒸馏同时启用。
+
+仅精确类型的 PyTorch Linear/Conv2d 被转换；4-bit/8-bit 是权重存储格式，运行时反量化为浮点计算，不是 GPTQ/AWQ 或优化的 INT4 推理。共享权重、自定义子类及 GPT-2 Conv1D 需要额外适配。量化导出重载需要匹配的浮点模型模板，不能直接当作完整续训检查点。
+
+Llama、BERT、ViT、ResNet、Qwen2 的小型随机模型 API 测试不代表这些家族所有模型都已接入 CLI，也不证明预训练精度保持。Python 调用和重载示例见[量化指南](quantization.md)。
+
+### 7.8 分类与因果语言模型蒸馏
+
+Python API 支持分类 `[B,C]` 和因果语言预测 `[B,L,V]`，采用 hard CE 与带温度平方的 teacher-to-student KL。教师和学生可不同深度/宽度，但类别语义或 token-to-ID 必须对应；相同词表大小不足以证明对齐。因果语言目标会处理下一 token 位移和 padding/ignore mask，不能直接用于 masked LM、分割或连续动作回归。
+
+CLI 在完整学生配置中设置顶层 `distillation`，选择 `task: classification` 或 `causal_lm`，提供 `temperature`、`alpha`、嵌套教师配置和 tensor 权重检查点。仅支持已有 workload 构造路径、单进程 native FP32、梯度累积为 1。续训会校验教师权重和目标配置指纹，不能不经说明更换教师。完整示例见[蒸馏指南](distillation.md)。
 
 ## 8. 后端选择建议
 
@@ -352,6 +436,17 @@ python -m parascale.cli checkpoint validate \
 
 建议每个正式 benchmark 至少保存一次 checkpoint，并在报告中记录 validate 结果。
 
+恢复 quickstart 的 step 1 检查点：
+
+```bash
+python -m parascale.cli train \
+  --config configs/quickstart/tiny_torch.yaml --resume-step 1
+```
+
+使用配置中的同一 `checkpoint_dir`；该配置 `max_steps: 2` 表示再更新两步，预期到 global step 3。训练保存 rank-local RNG 和 AMP scaler，恢复包含数据 replay-skip。精确重现还要求相同数据顺序、数据处理行为和确定性算子，不能仅因 RNG 恢复就承诺任意数据管线位级一致。
+
+蒸馏续训使用完整训练检查点，保留投影参数和优化器状态；独立的 `student.pt` 或量化导出文件不是替代品。
+
 ## 12. Inference 与 Serving
 
 推理入口：
@@ -365,10 +460,13 @@ Serving 入口：
 
 ```bash
 python -m parascale.cli serve \
-  --config configs/server_tiny_torch.yaml
+  --config configs/quickstart/tiny_torch.yaml \
+  --checkpoint runs/quickstart/tiny_torch
 ```
 
-当前 serving 更适合功能 smoke 和架构验证。生产部署前需要结合具体模型、batcher、KV cache、服务协议和资源隔离策略做专项压测。
+请先完成 quickstart 训练。当前 `serve` 仅内置 tiny 模型检查点路径，执行配置中的 `serving.requests` 后排空队列并返回，不监听 HTTP/gRPC 端口。真实 CLIP/YOLO-World 的一次性推理使用 `infer`；`clip_real`、`yolo_world_real` 是真实模型入口，而 `clip`、`yolo_world` 等部分别名是 synthetic 路径，使用前核对配置。
+
+推理执行使用 eval/no-grad 并恢复原模型训练状态，输出数量必须与请求匹配。生产 tokenizer、流式生成、paged KV 和通用模型部署不在当前交付范围。标准 YOLO 检测蒸馏导出通过 Ultralytics 使用，不能与 YOLO-World 推理入口混淆。
 
 ## 13. 远程 GPU/NPU 验证
 
@@ -418,4 +516,6 @@ python -m parascale.cli serve \
 | [software_design_documentation.md](software_design_documentation.md) | 软件设计、模块边界和路线图 |
 | [software_requirements_specification.md](software_requirements_specification.md) | 功能需求和验收标准 |
 | [remote_server_test_guide.md](remote_server_test_guide.md) | 远程 GPU/NPU 容器测试指南 |
+| [quantization.md](quantization.md) | PTQ/QAT API、导出重载和支持边界 |
+| [distillation.md](distillation.md) | 分类、因果语言和 YOLO 检测蒸馏完整示例 |
 | [BENCHMARK_REPORT.md](../tests/benchmarks/reports/BENCHMARK_REPORT.md) | 统一 benchmark 证据入口 |
