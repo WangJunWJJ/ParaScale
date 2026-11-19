@@ -277,6 +277,9 @@ def _iter_ground_dino_batches(
     spec: GroundDinoSpec,
     dataloader_cls: Any | None = None,
 ) -> Iterable[Dict[str, Any]]:
+    indices = _ground_dino_rank_indices(len(dataset))
+    if not indices:
+        return
     if dataloader_cls is None:
         try:
             from torch.utils.data import DataLoader
@@ -296,6 +299,7 @@ def _iter_ground_dino_batches(
         "num_workers": max(0, spec.num_workers),
         "pin_memory": bool(spec.pin_memory),
         "collate_fn": collator,
+        "sampler": indices,
     }
     if spec.num_workers > 0:
         kwargs["prefetch_factor"] = max(1, spec.prefetch_factor)
@@ -316,6 +320,23 @@ def _iter_ground_dino_sync_batches(
     collator: Any,
     spec: GroundDinoSpec,
 ) -> Iterable[Dict[str, Any]]:
+    indices = _ground_dino_rank_indices(len(samples))
+    if not indices:
+        return
+    if int(os.environ.get("WORLD_SIZE", "1") or 1) > 1:
+        yielded = 0
+        while yielded < spec.num_batches:
+            for start in range(0, len(indices), spec.batch_size):
+                yield collator(
+                    [
+                        _sample_to_vision_sample(samples[index], prompt=spec.prompt)
+                        for index in indices[start : start + spec.batch_size]
+                    ]
+                )
+                yielded += 1
+                if yielded >= spec.num_batches:
+                    return
+        return
     yielded = 0
     index = 0
     while yielded < spec.num_batches:
@@ -329,6 +350,20 @@ def _iter_ground_dino_sync_batches(
         index += spec.batch_size
         yield collator(batch_samples)
         yielded += 1
+
+
+def _ground_dino_rank_indices(sample_count: int) -> List[int]:
+    """Share a cyclically padded rank partition between both loading paths."""
+    rank = int(os.environ.get("RANK", "0") or 0)
+    world_size = int(os.environ.get("WORLD_SIZE", "1") or 1)
+    if world_size < 1 or not 0 <= rank < world_size:
+        raise ValueError(
+            "GroundingDINO requires world_size >= 1 and 0 <= rank < world_size"
+        )
+    if not sample_count:
+        return []
+    total = ((sample_count + world_size - 1) // world_size) * world_size
+    return [index % sample_count for index in range(rank, total, world_size)]
 
 
 def _sample_to_vision_sample(sample: Dict[str, Path], *, prompt: str) -> VisionSample:

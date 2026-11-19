@@ -340,7 +340,8 @@ def _datacomp_entry_to_sample(
     tensor_ms = 0.0
     sample_image: Any = image_bytes
     image_key = "image"
-    if spec.wds_image_mode != "bytes":
+    pretrained = spec.model_type in {"hf_clip", "openai_clip", "siglip", "hf_siglip"}
+    if spec.wds_image_mode != "bytes" and not pretrained:
         Image = _require_pil_image()
         decode_start = time.perf_counter()
         try:
@@ -391,8 +392,6 @@ def _datacomp_entry_to_sample(
         }
     )
     sample = {
-        "input_ids": _simple_text_tokenize(text, spec),
-        "attention_mask": [1] * min(max(1, len(text.split())), spec.text_length),
         "text": text,
         "height": spec.image_size,
         "width": spec.image_size,
@@ -401,6 +400,11 @@ def _datacomp_entry_to_sample(
         ),
         "metadata": metadata,
     }
+    if not pretrained:
+        sample["input_ids"] = _simple_text_tokenize(text, spec)
+        sample["attention_mask"] = [1] * min(
+            max(1, len(text.split())), spec.text_length
+        )
     sample[image_key] = sample_image
     return sample
 

@@ -39,6 +39,83 @@ def _write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def test_compression_examples_report_keeps_random_and_real_data_scope():
+    from tests.benchmarks.tools.build_benchmark_report import (
+        _compression_examples_section,
+    )
+
+    text = "\n".join(
+        _compression_examples_section(
+            {
+                "scope": "Entry-point validation, not a quality claim.",
+                "runs": [
+                    {
+                        "example": "Llama PTQ",
+                        "device": "cuda",
+                        "source": "random Llama / synthetic tokens",
+                        "status": "passed",
+                    },
+                    {
+                        "example": "YOLO KD",
+                        "device": "cuda",
+                        "source": "pretrained YOLO / COCO128",
+                        "status": "passed",
+                    },
+                ],
+                "notes": ["Pretrained Llama quality was not evaluated."],
+            }
+        )
+    )
+    assert "random Llama / synthetic tokens" in text
+    assert "pretrained YOLO / COCO128" in text
+    assert "Pretrained Llama quality was not evaluated." in text
+    assert "not a quality claim" in text
+    assert _compression_examples_section({}) == []
+
+
+def test_normalization_optimization_report_keeps_comparison_scope():
+    from tests.benchmarks.tools.build_benchmark_report import (
+        _architecture_contracts_section,
+    )
+
+    text = "\n".join(
+        _architecture_contracts_section(
+            {
+                "scope": "Original short-window measurement",
+                "performance": [
+                    {
+                        "precision": "fp32",
+                        "baseline_median": 100,
+                        "fixed_median": 95,
+                        "change_percent": -5,
+                    }
+                ],
+                "normalization_optimization": {
+                    "scope": "Synthetic MLP; 2000 steps; not real-model throughput",
+                    "performance": [
+                        {
+                            "precision": "fp32",
+                            "before_median": 95,
+                            "after_median": 100,
+                            "change_percent": 5.26,
+                        }
+                    ],
+                },
+                "accumulation_optimization": {
+                    "scope": "Profiler counts are not throughput measurements",
+                    "performance": [],
+                },
+            }
+        )
+    )
+    assert "Original short-window measurement" in text
+    assert "not real-model throughput" in text
+    assert "+5.26%" in text
+    assert "-5.00%" in text
+    assert "Accumulation Statistics Optimization" in text
+    assert "Profiler counts are not throughput measurements" in text
+
+
 def test_distillation_report_distinguishes_smoke_from_quality():
     from tests.benchmarks.tools.build_benchmark_report import _distillation_section
 
@@ -60,6 +137,34 @@ def test_distillation_report_distinguishes_smoke_from_quality():
     assert "CE baseline" in text
     assert "Distillation" in text
     assert "excludes batch transfer" in text
+
+
+def test_detection_report_separates_throughput_and_quality():
+    from tests.benchmarks.tools.build_benchmark_report import (
+        _detection_distillation_section,
+    )
+
+    aggregate = {
+        "steady_state_images_per_second": {"mean": 100, "stdev": 2},
+        "end_to_end_images_per_second": {"mean": 75},
+        "cuda_peak_allocated_bytes": {"mean": 1024**2 * 300},
+    }
+    text = "\n".join(
+        _detection_distillation_section(
+            {
+                "aggregates": {"baseline": aggregate, "kd": aggregate},
+                "evaluation": {
+                    "baseline_0": {"mAP50_95": 0.4},
+                    "kd_0": {"mAP50_95": 0.39},
+                },
+                "notes": ["No demonstrated accuracy gain."],
+            }
+        )
+    )
+    assert "End-to-end" in text
+    assert "40.00" in text and "39.00" in text
+    assert "No demonstrated accuracy gain" in text
+    assert _detection_distillation_section({}) == []
 
 
 def test_benchmark_report_combines_suite_summaries(tmp_path):

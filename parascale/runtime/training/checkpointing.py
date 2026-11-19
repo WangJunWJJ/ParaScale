@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
+from .random_state import capture_rng_state, restore_rng_state
+
 
 class CheckpointController:
     """Persist and restore runtime state through a checkpoint manager."""
@@ -31,6 +33,9 @@ class CheckpointController:
         checkpoint_step = step if step is not None else self.engine.state.global_step
         rank = self._rank()
         world_size = self._world_size()
+        runtime_files = self._collective_call(
+            lambda: self._save_runtime_state(checkpoint_manager, checkpoint_step)
+        )
         files = []
         backend_metadata = {}
         backend_state_written = False
@@ -46,49 +51,33 @@ class CheckpointController:
         all_rank_backend_save = backend_name == "deepspeed" or (
             backend_name == "fsdp" and state_dict_type == "full"
         )
-        if rank != 0 and not shard_mode and not all_rank_backend_save:
-            self._barrier()
-            return {
-                "step": checkpoint_step,
-                "rank": rank,
-                "world_size": world_size,
-                "skipped": True,
-                "reason": "checkpoint manifest is written by rank 0 only",
-            }
-        if (
-            self.engine.training_backend is not None
-            and backend_name in {"fsdp", "deepspeed"}
-            and hasattr(checkpoint_manager, "payload_path")
-        ):
-            files, backend_metadata, backend_state_written = (
-                self._save_backend_specific_checkpoint(
-                    checkpoint_manager,
-                    checkpoint_step,
-                    scheduler,
-                    backend_name,
-                )
-            )
-        elif self.engine.training_backend is not None and hasattr(
-            checkpoint_manager, "payload_path"
-        ):
-            files, backend_metadata, backend_state_written = (
-                self._save_portable_backend_state(
-                    checkpoint_manager,
-                    checkpoint_step,
-                    scheduler,
-                )
-            )
 
-        if (
-            backend_metadata.get("backend_checkpoint_error")
-            and not self._allow_errors()
-        ):
-            raise RuntimeError(
-                "backend checkpoint save failed: "
-                f"{backend_metadata['backend_checkpoint_error']}"
-            )
-        if rank != 0 and (shard_mode or all_rank_backend_save):
-            self._barrier()
+        def save_backend():
+            if rank != 0 and not shard_mode and not all_rank_backend_save:
+                return [], {}, False
+            if self.engine.training_backend is None or not hasattr(
+                checkpoint_manager, "payload_path"
+            ):
+                return [], {}, False
+            if backend_name in {"fsdp", "deepspeed"}:
+                result = self._save_backend_specific_checkpoint(
+                    checkpoint_manager, checkpoint_step, scheduler, backend_name
+                )
+            else:
+                result = self._save_portable_backend_state(
+                    checkpoint_manager, checkpoint_step, scheduler
+                )
+            if result[1].get("backend_checkpoint_error") and not self._allow_errors():
+                raise RuntimeError(
+                    f"backend checkpoint save failed: {result[1]['backend_checkpoint_error']}"
+                )
+            return result
+
+        files, backend_metadata, backend_state_written = self._collective_call(
+            save_backend
+        )
+        if rank != 0:
+            self._collective_call(lambda: None)
             return {
                 "step": checkpoint_step,
                 "rank": rank,
@@ -97,59 +86,73 @@ class CheckpointController:
                 "reason": (
                     "backend checkpoint written; manifest is written by rank 0"
                     if all_rank_backend_save
-                    else "checkpoint shard written; manifest is written by rank 0"
+                    else (
+                        "checkpoint shard written; manifest is written by rank 0"
+                        if shard_mode
+                        else "checkpoint manifest is written by rank 0 only"
+                    )
                 ),
                 "files": files,
             }
-        if shard_mode and rank == 0:
-            self._add_expected_fsdp_shards(files, world_size, state_dict_type)
-        data_resume = getattr(self.engine, "data_resume", None)
-        data_state = data_resume.capture() if data_resume is not None else {}
-        optimizer = getattr(self.engine.training_backend, "optimizer", None)
-        optimizer_metadata = dict(
-            getattr(optimizer, "_parascale_optimizer_metadata", {}) or {}
-        )
-        manifest = CheckpointManifest(
-            step=checkpoint_step,
-            global_step=self.engine.state.global_step,
-            consumed_samples=int(
-                getattr(self.engine.state, "consumed_samples", 0) or 0
-            ),
-            backend=backend_name,
-            parallel_plan=self.engine.plan().to_dict(),
-            data_state=data_state,
-            files=files,
-            metadata={
-                "last_metrics": dict(self.engine.state.last_metrics),
-                "backend_state_written": backend_state_written,
-                "backend_specific_checkpoint": backend_name in {"fsdp", "deepspeed"}
-                and backend_state_written,
-                "rank": rank,
-                "world_size": world_size,
-                "rank_count": world_size,
-                "optimizer": optimizer_metadata,
-                "distributed_backend": self._distributed_backend(),
-                "shard_count": (
-                    world_size
-                    if shard_mode or (all_rank_backend_save and backend_state_written)
-                    else (1 if backend_state_written else 0)
+
+        def publish_manifest():
+            # Every rank has finished writing before rank 0 hashes/publishes files.
+            if shard_mode and rank == 0:
+                self._add_expected_fsdp_shards(files, world_size, state_dict_type)
+            if runtime_files:
+                files.extend(
+                    self._runtime_entry(runtime_rank)
+                    for runtime_rank in range(world_size)
+                )
+            data_resume = getattr(self.engine, "data_resume", None)
+            data_state = data_resume.capture() if data_resume is not None else {}
+            optimizer = getattr(self.engine.training_backend, "optimizer", None)
+            optimizer_metadata = dict(
+                getattr(optimizer, "_parascale_optimizer_metadata", {}) or {}
+            )
+            manifest = CheckpointManifest(
+                step=checkpoint_step,
+                global_step=self.engine.state.global_step,
+                consumed_samples=int(
+                    getattr(self.engine.state, "consumed_samples", 0) or 0
                 ),
-                "state_dict_type": state_dict_type,
-                "checkpoint_write_policy": (
-                    "rank_sharded" if shard_mode else "rank0_manifest"
-                ),
-                "scheduler_state_written": bool(
-                    scheduler is not None and hasattr(scheduler, "state_dict")
-                ),
-                **backend_metadata,
-            },
-        )
-        objective = dict(getattr(self.engine, "objective_metadata", {}) or {})
-        if objective:
-            manifest.metadata["objective"] = objective
-        path = checkpoint_manager.write_manifest(manifest)
-        self._barrier()
-        return path
+                backend=backend_name,
+                parallel_plan=self.engine.plan().to_dict(),
+                data_state=data_state,
+                files=files,
+                metadata={
+                    "last_metrics": dict(self.engine.state.last_metrics),
+                    "backend_state_written": backend_state_written,
+                    "backend_specific_checkpoint": backend_name in {"fsdp", "deepspeed"}
+                    and backend_state_written,
+                    "rank": rank,
+                    "world_size": world_size,
+                    "rank_count": world_size,
+                    "runtime_state_version": 1 if runtime_files else None,
+                    "optimizer": optimizer_metadata,
+                    "distributed_backend": self._distributed_backend(),
+                    "shard_count": (
+                        world_size
+                        if shard_mode
+                        or (all_rank_backend_save and backend_state_written)
+                        else (1 if backend_state_written else 0)
+                    ),
+                    "state_dict_type": state_dict_type,
+                    "checkpoint_write_policy": (
+                        "rank_sharded" if shard_mode else "rank0_manifest"
+                    ),
+                    "scheduler_state_written": bool(
+                        scheduler is not None and hasattr(scheduler, "state_dict")
+                    ),
+                    **backend_metadata,
+                },
+            )
+            objective = dict(getattr(self.engine, "objective_metadata", {}) or {})
+            if objective:
+                manifest.metadata["objective"] = objective
+            return checkpoint_manager.write_manifest(manifest)
+
+        return self._collective_call(publish_manifest)
 
     def load(
         self,
@@ -162,14 +165,18 @@ class CheckpointController:
     ) -> Any:
         from parascale.runtime.backends import create_runtime_training_backend
 
-        manifest = checkpoint_manager.read_manifest(step)
-        self._validate_before_resume(checkpoint_manager, manifest)
-        objective = dict(getattr(self.engine, "objective_metadata", {}) or {})
-        if manifest.metadata.get("objective", {}) != objective:
-            raise ValueError(
-                "checkpoint training objective does not match the current teacher/configuration"
-            )
-        self._validate_optimizer_metadata(manifest, optimizer)
+        def validate_runtime():
+            manifest = checkpoint_manager.read_manifest(step)
+            self._validate_before_resume(checkpoint_manager, manifest)
+            objective = dict(getattr(self.engine, "objective_metadata", {}) or {})
+            if manifest.metadata.get("objective", {}) != objective:
+                raise ValueError(
+                    "checkpoint training objective does not match the current teacher/configuration"
+                )
+            self._validate_optimizer_metadata(manifest, optimizer)
+            return manifest, self._read_runtime_state(checkpoint_manager, manifest)
+
+        manifest, runtime_state = self._collective_call(validate_runtime)
         backend_state_loaded = False
         if model is not None or optimizer is not None:
             self.engine.training_backend = create_runtime_training_backend(
@@ -209,6 +216,22 @@ class CheckpointController:
         data_resume = getattr(self.engine, "data_resume", None)
         if data_resume is not None:
             data_resume.restore_manifest(manifest)
+        if runtime_state is not None:
+
+            def restore_runtime():
+                precision = getattr(self.engine, "precision", None)
+                load_precision = getattr(precision, "load_state_dict", None)
+                if (
+                    callable(load_precision)
+                    and runtime_state.get("precision_state_dict") is not None
+                ):
+                    load_precision(runtime_state["precision_state_dict"])
+                import torch
+
+                self._restore_rng_state(torch, runtime_state["rng_state"])
+
+            self._collective_call(restore_runtime)
+            manifest.metadata["runtime_state_loaded"] = True
         manifest.metadata["backend_state_loaded"] = backend_state_loaded
         if self.engine.training_backend is not None:
             if hasattr(self.engine.training_backend, "optimizer_state_loaded"):
@@ -224,9 +247,7 @@ class CheckpointController:
     @staticmethod
     def _validate_optimizer_metadata(manifest: Any, optimizer: Any) -> None:
         saved = dict(manifest.metadata.get("optimizer", {}) or {})
-        current = dict(
-            getattr(optimizer, "_parascale_optimizer_metadata", {}) or {}
-        )
+        current = dict(getattr(optimizer, "_parascale_optimizer_metadata", {}) or {})
         if not saved or not current:
             return
         for key in (
@@ -271,12 +292,10 @@ class CheckpointController:
             report = validate(manifest)
             if not bool(getattr(report, "ok", False)):
                 details = (
-                    report.to_dict()
-                    if hasattr(report, "to_dict")
-                    else {"ok": False}
+                    report.to_dict() if hasattr(report, "to_dict") else {"ok": False}
                 )
                 raise RuntimeError(
-                    "Checkpoint validation failed before resume: " f"{details}"
+                    f"Checkpoint validation failed before resume: {details}"
                 )
 
         checkpoint_world_size = int(
@@ -412,7 +431,7 @@ class CheckpointController:
         if scheduler is not None and scheduler_state is not None:
             scheduler.load_state_dict(client_state["scheduler_state_dict"])
         rng_state = client_state.get("rng_state")
-        if rng_state is not None:
+        if rng_state is not None and not manifest.metadata.get("runtime_state_version"):
             try:
                 import torch
 
@@ -442,7 +461,9 @@ class CheckpointController:
         scheduler_state = payload.get("scheduler_state_dict")
         if scheduler is not None and scheduler_state is not None:
             scheduler.load_state_dict(scheduler_state)
-        if payload.get("rng_state") is not None:
+        if payload.get("rng_state") is not None and not manifest.metadata.get(
+            "runtime_state_version"
+        ):
             self._restore_rng_state(torch, payload["rng_state"])
         return True
 
@@ -490,23 +511,84 @@ class CheckpointController:
 
     @staticmethod
     def _capture_rng_state(torch: Any) -> Dict[str, Any]:
-        state: Dict[str, Any] = {"torch_cpu": torch.get_rng_state()}
-        try:
-            if torch.cuda.is_available():
-                state["torch_cuda"] = torch.cuda.get_rng_state_all()
-        except Exception as exc:
-            state["torch_cuda_error"] = str(exc)
-        return state
+        return capture_rng_state(torch)
 
     @staticmethod
     def _restore_rng_state(torch: Any, state: Dict[str, Any]) -> None:
-        if state.get("torch_cpu") is not None:
-            torch.set_rng_state(state["torch_cpu"])
-        if state.get("torch_cuda") is not None:
-            try:
-                torch.cuda.set_rng_state_all(state["torch_cuda"])
-            except Exception:
-                pass
+        restore_rng_state(state, torch)
+
+    @staticmethod
+    def _runtime_entry(rank: int) -> Dict[str, Any]:
+        return {
+            "path": f"rank-{rank:05d}/runtime_state.pt",
+            "role": "runtime_state",
+            "format": "torch",
+            "rank": rank,
+        }
+
+    def _save_runtime_state(self, manager: Any, step: int) -> bool:
+        if not callable(getattr(manager, "payload_path", None)):
+            return False
+        try:
+            import torch
+        except ImportError:
+            return False  # Metadata-only use remains supported without Torch.
+        precision = getattr(self.engine, "precision", None)
+        capture_precision = getattr(precision, "state_dict", None)
+        path = manager.payload_path(step, self._runtime_entry(self._rank())["path"])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save(
+            {
+                "version": 1,
+                "rank": self._rank(),
+                "world_size": self._world_size(),
+                "rng_state": self._capture_rng_state(torch),
+                "precision_state_dict": capture_precision()
+                if callable(capture_precision)
+                else None,
+            },
+            path,
+        )
+        return True
+
+    def _read_runtime_state(self, manager: Any, manifest: Any) -> Any:
+        entries = [
+            entry for entry in manifest.files if entry.get("role") == "runtime_state"
+        ]
+        if not entries and not manifest.metadata.get("runtime_state_version"):
+            return None  # Legacy checkpoints retain their original loading protocol.
+        ranks = [entry.get("rank") for entry in entries]
+        expected = int(
+            manifest.metadata.get("rank_count", manifest.metadata.get("world_size", 1))
+        )
+        if len(ranks) != expected or set(ranks) != set(range(expected)):
+            raise ValueError(
+                "Checkpoint runtime_state entries must cover each rank exactly once"
+            )
+        entry = next(
+            (entry for entry in entries if entry["rank"] == self._rank()), None
+        )
+        if entry is None:
+            raise ValueError(f"Checkpoint has no runtime_state for rank {self._rank()}")
+        import torch
+
+        state = torch.load(
+            manager.resolve_payload_path(manifest, entry),
+            map_location="cpu",
+            weights_only=True,
+        )
+        if (
+            state.get("version") != 1
+            or state.get("rank") != self._rank()
+            or state.get("world_size") != expected
+        ):
+            raise ValueError("Checkpoint runtime_state identity/version mismatch")
+        if (
+            not isinstance(state.get("rng_state"), dict)
+            or "torch_cpu" not in state["rng_state"]
+        ):
+            raise ValueError("Checkpoint runtime_state is missing RNG state")
+        return state
 
     def _rank(self) -> int:
         rank_fn = getattr(self.engine, "_distributed_rank", None)
@@ -516,6 +598,31 @@ class CheckpointController:
             except Exception:
                 return 0
         return 0
+
+    def _collective_call(self, operation: Any) -> Any:
+        """Finish a local I/O phase on every rank before propagating errors."""
+        result = None
+        error = None
+        try:
+            result = operation()
+        except Exception as exc:
+            error = exc
+        try:
+            import torch.distributed as dist
+        except ImportError:
+            dist = None
+        if dist is not None and dist.is_available() and dist.is_initialized():
+            errors = [None] * dist.get_world_size()
+            dist.all_gather_object(errors, str(error) if error is not None else None)
+            if error is not None:
+                raise error
+            if any(item is not None for item in errors):
+                raise RuntimeError(f"Checkpoint phase failed on another rank: {errors}")
+        else:
+            self._barrier()
+        if error is not None:
+            raise error
+        return result
 
     def _world_size(self) -> int:
         world_size_fn = getattr(self.engine, "_distributed_world_size", None)

@@ -15,6 +15,11 @@ from .base import TrainingBackend, _require_torch
 
 class FSDPTrainingBackend(TrainingBackend):
     name = "fsdp"
+
+    def clip_gradients(self, max_norm: float, optimizer: Any = None) -> None:
+        """Use FSDP's collective global norm rather than local shard norms."""
+        self.model.clip_grad_norm_(max_norm)
+
     _DEFAULT_CHECKPOINT_MODULE_CLASSES = {
         "CLIPEncoderLayer",
         "LlamaDecoderLayer",

@@ -1,0 +1,432 @@
+{
+  "status": "passed",
+  "hardware": "192.168.8.156, single RTX A6000 (logical CUDA 0)",
+  "image": "parascale-detection:a6000-ultralytics83161",
+  "image_id": "sha256:043573ecd623390f83f2a7dadac4d1ae55c178fb07e3b6122dd8606e6b323493",
+  "source_base_commit": "9ce3737 plus uncommitted architecture, portability and detection changes",
+  "dataset_archive_sha256": "61e5e3028863d8ffc3b81d6a514603954889f0edd5e4b44c4ce60b2da99aeb8e",
+  "remote_evidence_root": "/home/user/wangjun/parascale_detection_20261116/results",
+  "validation": {
+    "cpu_full_suite": {"passed": 781, "skipped": 7},
+    "a6000_full_suite": {"passed": 790, "skipped": 1},
+    "coverage": [
+      "YOLOv8 and YOLO11 official-loss CLI training and deterministic resume",
+      "Frozen teacher parameters and BatchNorm buffers, student/projector updates",
+      "Student-only export strict reload and prediction parity",
+      "Zero feature weight equals supervised training",
+      "Teacher/configuration mismatch rejection on resume",
+      "Class, architecture, stride, shape and nonfinite-loss guards",
+      "Hook cleanup, RNG preservation and checkpoint export collision guards",
+      "Benchmark requested/actual device consistency guards"
+    ],
+    "limitations": [
+      "Local CPU environment lacks Ultralytics; actual YOLO integration ran in the A6000 image.",
+      "Distributed, AMP, QAT+KD and cross-family detection distillation are not validated or enabled."
+    ]
+  },
+  "notes": [
+    "Configuration: YOLOv8s teacher -> YOLOv8n student; native FP32; 320x320; batch=4; AdamW lr=1e-5, weight_decay=0.0005; feature_weight=0.1; 200 steps/run, first 30 excluded, three timing repeats per mode.",
+    "COCO128: sorted first 96 images for training, remaining 32 for evaluation. These subsets are disjoint for this fine-tuning run, but COCO-pretrained models have already seen this dataset; this is not an unseen-data generalization study.",
+    "Initial teacher mAP50-95=51.23 and initial student=45.04. Final means: supervised=37.14, KD=37.31. Both decreased; the +0.17-point difference does not establish a reliable accuracy benefit. Do not deploy this short-run recipe on the strength of this result.",
+    "End-to-end throughput includes measured data wait and is 7.78% lower with KD. Step-only throughput excludes data wait and checkpointing. Peak allocated memory rises from 291.5 to 356.1 MiB; this is allocated tensor memory, not total GPU reservation.",
+    "All repeats use seed 42; non-deterministic GPU kernels remain enabled for timing. These repeats measure timing variability, not multi-seed quality confidence. Exact resume tests separately enable deterministic kernels.",
+    "An earlier 40-step exploratory run using the generic default lr=1e-3 and weight_decay=0.01 caused severe accuracy degradation for both modes; its measurements are retained below, not presented as a successful training recipe.",
+    "The adapter uses square resize and ParaScale's optimizer, without the full Ultralytics augmentation/EMA/scheduler recipe. It matches all foreground/background features equally, not FGD or classification/box-distribution distillation.",
+    "Functional validation passed, but no accuracy-improvement claim is made. Raw configs, per-step metrics, input manifests, checkpoints and official validation output remain under the remote evidence root."
+  ],
+  "exploratory_default_learning_rate": {
+    "learning_rate": 0.001,
+    "weight_decay": 0.01,
+    "steps": 40,
+    "baseline_mAP50_95": [0.000056435115952581166, 0.00009942691784599161, 0.00026883455934372257],
+    "kd_mAP50_95": [0.0017233489855777682, 0.00014651516531597033, 0.0002792890957601302]
+  },
+  "scope": "short real-data functional and training-cost validation",
+  "metadata": {
+    "timestamp": "2026-11-16T23:48:10.578664+08:00",
+    "python": "3.10.12",
+    "torch": "2.5.0a0+872d972e41.nv24.08",
+    "ultralytics": "8.3.161",
+    "cuda": "12.6",
+    "cudnn": 90300,
+    "platform": "Linux-5.15.0-46-generic-x86_64-with-glibc2.35",
+    "device": "cuda:0",
+    "device_name": "NVIDIA RTX A6000",
+    "workload": "yolo_detection",
+    "backend": "native",
+    "precision": "fp32",
+    "student_parameters": 3157200,
+    "teacher_parameters": 11166560,
+    "models": {
+      "student_model": {
+        "path": "/assets/yolov8n.pt",
+        "sha256": "f59b3d833e2ff32e194b5bb8e08d211dc7c5bdf144b90d2c8412c47ccfc83b36",
+        "initialization": "pretrained"
+      },
+      "teacher_model": {
+        "path": "/assets/yolov8s.pt",
+        "sha256": "1f47a78bf100391c2a140b7ac73a1caae18c32779be7d310658112f7ac9aa78a",
+        "initialization": "pretrained"
+      }
+    },
+    "data_manifest_sha256": "e74db749427b9723c3b4cd404b339cdc811793563a5f6e661c53bbf50853dfa3",
+    "selected_samples": 96,
+    "arguments": {
+      "student_model": "/assets/yolov8n.pt",
+      "teacher_model": "/assets/yolov8s.pt",
+      "image_dir": "/assets/train96/images",
+      "label_dir": "/assets/train96/labels",
+      "output_dir": "/results/coco128_final",
+      "device": "cuda",
+      "learning_rate": 1e-05,
+      "image_size": 320,
+      "batch_size": 4,
+      "steps": 200,
+      "warmup": 30,
+      "num_samples": 96,
+      "repeats": 3,
+      "num_workers": 0,
+      "evaluation_data": "/assets/evaluation.yaml"
+    },
+    "evaluation_data_sha256": "a3b5fea84cfd6469464ab38b8133ae0aa1a04c72089240a468eb7e74e4d3ba01"
+  },
+  "teacher_initial_state_sha256": "1fe495d238cf1d1d381bc685aa8371ff59b1ea2958c5503a4606202eccff80e1",
+  "runs": [
+    {
+      "mode": "baseline",
+      "repeat": 0,
+      "wall_seconds": 13.247019931674004,
+      "steady_state_images_per_second": 111.05371288579964,
+      "end_to_end_images_per_second": 66.59585945787302,
+      "dataloader_wait_seconds": 4.087681893259287,
+      "measured_images": 680,
+      "measured_steps": 170,
+      "measured_step_seconds": 6.123163128271699,
+      "cuda_peak_allocated_bytes": 305666048,
+      "cuda_peak_reserved_bytes": 331350016,
+      "checks": {
+        "student_weights_changed": true,
+        "same_initial_student": true,
+        "no_teacher_in_model_checkpoint": true,
+        "projectors_present": false,
+        "teacher_file_unchanged": true
+      }
+    },
+    {
+      "mode": "kd",
+      "repeat": 0,
+      "wall_seconds": 14.221036238595843,
+      "steady_state_images_per_second": 91.2673905221296,
+      "end_to_end_images_per_second": 61.656044956538736,
+      "dataloader_wait_seconds": 3.5782918483018875,
+      "measured_images": 680,
+      "measured_steps": 170,
+      "measured_step_seconds": 7.450634844601154,
+      "cuda_peak_allocated_bytes": 373348352,
+      "cuda_peak_reserved_bytes": 413138944,
+      "checks": {
+        "student_weights_changed": true,
+        "same_initial_student": true,
+        "no_teacher_in_model_checkpoint": true,
+        "projectors_present": true,
+        "teacher_file_unchanged": true,
+        "export_exact_raw_student": true,
+        "teacher_state_unchanged": true,
+        "teacher_frozen_no_grad": true,
+        "export_prediction_parity": true
+      },
+      "teacher_initial_state_sha256": "1fe495d238cf1d1d381bc685aa8371ff59b1ea2958c5503a4606202eccff80e1",
+      "teacher_final_state_sha256": "1fe495d238cf1d1d381bc685aa8371ff59b1ea2958c5503a4606202eccff80e1"
+    },
+    {
+      "mode": "kd",
+      "repeat": 1,
+      "wall_seconds": 14.241814384236932,
+      "steady_state_images_per_second": 87.64611435691178,
+      "end_to_end_images_per_second": 61.7552580210758,
+      "dataloader_wait_seconds": 3.2527352776378393,
+      "measured_images": 680,
+      "measured_steps": 170,
+      "measured_step_seconds": 7.758472865447402,
+      "cuda_peak_allocated_bytes": 373348352,
+      "cuda_peak_reserved_bytes": 413138944,
+      "checks": {
+        "student_weights_changed": true,
+        "same_initial_student": true,
+        "no_teacher_in_model_checkpoint": true,
+        "projectors_present": true,
+        "teacher_file_unchanged": true,
+        "export_exact_raw_student": true,
+        "teacher_state_unchanged": true,
+        "teacher_frozen_no_grad": true,
+        "export_prediction_parity": true
+      },
+      "teacher_initial_state_sha256": "1fe495d238cf1d1d381bc685aa8371ff59b1ea2958c5503a4606202eccff80e1",
+      "teacher_final_state_sha256": "1fe495d238cf1d1d381bc685aa8371ff59b1ea2958c5503a4606202eccff80e1"
+    },
+    {
+      "mode": "baseline",
+      "repeat": 1,
+      "wall_seconds": 12.66387583501637,
+      "steady_state_images_per_second": 103.4611558416249,
+      "end_to_end_images_per_second": 67.25666063537982,
+      "dataloader_wait_seconds": 3.538007775321603,
+      "measured_images": 680,
+      "measured_steps": 170,
+      "measured_step_seconds": 6.572515012696385,
+      "cuda_peak_allocated_bytes": 305666048,
+      "cuda_peak_reserved_bytes": 331350016,
+      "checks": {
+        "student_weights_changed": true,
+        "same_initial_student": true,
+        "no_teacher_in_model_checkpoint": true,
+        "projectors_present": false,
+        "teacher_file_unchanged": true
+      }
+    },
+    {
+      "mode": "baseline",
+      "repeat": 2,
+      "wall_seconds": 12.785459900274873,
+      "steady_state_images_per_second": 101.8738073870162,
+      "end_to_end_images_per_second": 66.87371857407207,
+      "dataloader_wait_seconds": 3.493494374677539,
+      "measured_images": 680,
+      "measured_steps": 170,
+      "measured_step_seconds": 6.6749247666448355,
+      "cuda_peak_allocated_bytes": 305666048,
+      "cuda_peak_reserved_bytes": 331350016,
+      "checks": {
+        "student_weights_changed": true,
+        "same_initial_student": true,
+        "no_teacher_in_model_checkpoint": true,
+        "projectors_present": false,
+        "teacher_file_unchanged": true
+      }
+    },
+    {
+      "mode": "kd",
+      "repeat": 2,
+      "wall_seconds": 14.108490535989404,
+      "steady_state_images_per_second": 87.24076388782345,
+      "end_to_end_images_per_second": 61.696263244225335,
+      "dataloader_wait_seconds": 3.2272158171981573,
+      "measured_images": 680,
+      "measured_steps": 170,
+      "measured_step_seconds": 7.794521387666464,
+      "cuda_peak_allocated_bytes": 373348352,
+      "cuda_peak_reserved_bytes": 413138944,
+      "checks": {
+        "student_weights_changed": true,
+        "same_initial_student": true,
+        "no_teacher_in_model_checkpoint": true,
+        "projectors_present": true,
+        "teacher_file_unchanged": true,
+        "export_exact_raw_student": true,
+        "teacher_state_unchanged": true,
+        "teacher_frozen_no_grad": true,
+        "export_prediction_parity": true
+      },
+      "teacher_initial_state_sha256": "1fe495d238cf1d1d381bc685aa8371ff59b1ea2958c5503a4606202eccff80e1",
+      "teacher_final_state_sha256": "1fe495d238cf1d1d381bc685aa8371ff59b1ea2958c5503a4606202eccff80e1"
+    }
+  ],
+  "evaluation": {
+    "initial_teacher": {
+      "mAP50_95": 0.5123158487731087,
+      "mAP50": 0.6284104368543872,
+      "metrics": {
+        "metrics/precision(B)": 0.717633304983236,
+        "metrics/recall(B)": 0.5602461727554175,
+        "metrics/mAP50(B)": 0.6284104368543872,
+        "metrics/mAP50-95(B)": 0.5123158487731087,
+        "fitness": 0.5239253075812366
+      }
+    },
+    "initial_student": {
+      "mAP50_95": 0.45038862383221967,
+      "mAP50": 0.5766180729957401,
+      "metrics": {
+        "metrics/precision(B)": 0.7331307909032319,
+        "metrics/recall(B)": 0.483297231332942,
+        "metrics/mAP50(B)": 0.5766180729957401,
+        "metrics/mAP50-95(B)": 0.45038862383221967,
+        "fitness": 0.46301156874857174
+      }
+    },
+    "baseline_0": {
+      "mAP50_95": 0.37122311749204406,
+      "mAP50": 0.4893545660054907,
+      "metrics": {
+        "metrics/precision(B)": 0.5727208524231653,
+        "metrics/recall(B)": 0.4806257686382387,
+        "metrics/mAP50(B)": 0.4893545660054907,
+        "metrics/mAP50-95(B)": 0.37122311749204406,
+        "fitness": 0.3830362623433887
+      }
+    },
+    "kd_0": {
+      "mAP50_95": 0.37264143498389357,
+      "mAP50": 0.48917422375748965,
+      "metrics": {
+        "metrics/precision(B)": 0.5533483703696969,
+        "metrics/recall(B)": 0.4815366289399554,
+        "metrics/mAP50(B)": 0.48917422375748965,
+        "metrics/mAP50-95(B)": 0.37264143498389357,
+        "fitness": 0.3842947138612532
+      }
+    },
+    "kd_1": {
+      "mAP50_95": 0.3756146898639444,
+      "mAP50": 0.4926943455410307,
+      "metrics": {
+        "metrics/precision(B)": 0.6194614537223166,
+        "metrics/recall(B)": 0.4613921039228809,
+        "metrics/mAP50(B)": 0.4926943455410307,
+        "metrics/mAP50-95(B)": 0.3756146898639444,
+        "fitness": 0.387322655431653
+      }
+    },
+    "baseline_1": {
+      "mAP50_95": 0.3730102673819936,
+      "mAP50": 0.4891953025927003,
+      "metrics": {
+        "metrics/precision(B)": 0.60026078487386,
+        "metrics/recall(B)": 0.47471113969019696,
+        "metrics/mAP50(B)": 0.4891953025927003,
+        "metrics/mAP50-95(B)": 0.3730102673819936,
+        "fitness": 0.3846287709030643
+      }
+    },
+    "baseline_2": {
+      "mAP50_95": 0.37000109021135713,
+      "mAP50": 0.4894276824810005,
+      "metrics": {
+        "metrics/precision(B)": 0.5508791902961576,
+        "metrics/recall(B)": 0.47287847668135485,
+        "metrics/mAP50(B)": 0.4894276824810005,
+        "metrics/mAP50-95(B)": 0.37000109021135713,
+        "fitness": 0.3819437494383215
+      }
+    },
+    "kd_2": {
+      "mAP50_95": 0.37102336555406773,
+      "mAP50": 0.4894396026522145,
+      "metrics": {
+        "metrics/precision(B)": 0.5529692231093573,
+        "metrics/recall(B)": 0.473435151668869,
+        "metrics/mAP50(B)": 0.4894396026522145,
+        "metrics/mAP50-95(B)": 0.37102336555406773,
+        "fitness": 0.3828649892638824
+      }
+    }
+  },
+  "limitations": [
+    "No guaranteed quality gain; mAP is unknown unless official validation is enabled.",
+    "Step throughput excludes data wait and checkpointing; wall time includes engine setup, audit hashing and saving.",
+    "The engine resets CUDA peaks before fit; reported peaks include training and export, not all transient setup allocations.",
+    "Small fixed dataset, fixed-seed repeats; not a multi-seed quality, convergence or distributed-scaling study.",
+    "Prediction parity uses one real image and raw pre-NMS output."
+  ],
+  "teacher_final_state_sha256": "1fe495d238cf1d1d381bc685aa8371ff59b1ea2958c5503a4606202eccff80e1",
+  "aggregates": {
+    "baseline": {
+      "repeats": 3,
+      "steady_state_images_per_second": {
+        "mean": 105.46289203814692,
+        "stdev": 4.90641183473202,
+        "repeats": [
+          111.05371288579964,
+          103.4611558416249,
+          101.8738073870162
+        ]
+      },
+      "end_to_end_images_per_second": {
+        "mean": 66.90874622244164,
+        "stdev": 0.33179022161799615,
+        "repeats": [
+          66.59585945787302,
+          67.25666063537982,
+          66.87371857407207
+        ]
+      },
+      "wall_seconds": {
+        "mean": 12.898785222321749,
+        "stdev": 0.3076462755006682,
+        "repeats": [
+          13.247019931674004,
+          12.66387583501637,
+          12.785459900274873
+        ]
+      },
+      "cuda_peak_allocated_bytes": {
+        "mean": 305666048,
+        "stdev": 0.0,
+        "repeats": [
+          305666048,
+          305666048,
+          305666048
+        ]
+      },
+      "cuda_peak_reserved_bytes": {
+        "mean": 331350016,
+        "stdev": 0.0,
+        "repeats": [
+          331350016,
+          331350016,
+          331350016
+        ]
+      }
+    },
+    "kd": {
+      "repeats": 3,
+      "steady_state_images_per_second": {
+        "mean": 88.71808958895494,
+        "stdev": 2.217042779607877,
+        "repeats": [
+          91.2673905221296,
+          87.64611435691178,
+          87.24076388782345
+        ]
+      },
+      "end_to_end_images_per_second": {
+        "mean": 61.702522073946625,
+        "stdev": 0.04990178108864252,
+        "repeats": [
+          61.656044956538736,
+          61.7552580210758,
+          61.696263244225335
+        ]
+      },
+      "wall_seconds": {
+        "mean": 14.190447052940726,
+        "stdev": 0.07173273894927537,
+        "repeats": [
+          14.221036238595843,
+          14.241814384236932,
+          14.108490535989404
+        ]
+      },
+      "cuda_peak_allocated_bytes": {
+        "mean": 373348352,
+        "stdev": 0.0,
+        "repeats": [
+          373348352,
+          373348352,
+          373348352
+        ]
+      },
+      "cuda_peak_reserved_bytes": {
+        "mean": 413138944,
+        "stdev": 0.0,
+        "repeats": [
+          413138944,
+          413138944,
+          413138944
+        ]
+      }
+    }
+  },
+  "teacher_file_final_sha256": "06d5c3d54d2a3743ea876d07a67e08e7bf4b72889e10e3024c8b251c73c80acf",
+  "teacher_file_initial_sha256": "06d5c3d54d2a3743ea876d07a67e08e7bf4b72889e10e3024c8b251c73c80acf"
+}

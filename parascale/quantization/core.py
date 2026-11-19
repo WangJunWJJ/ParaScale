@@ -138,18 +138,17 @@ def selected_layers(model, config):
             raise ValueError(f"custom Linear/Conv2d subclass unsupported: {name}")
     if not selected:
         raise ValueError("no supported layers selected")
-    all_params = list(model.named_parameters(remove_duplicate=False))
+    storage_paths = {}
+    for path, parameter in model.named_parameters(remove_duplicate=False):
+        if parameter.device.type != "meta":
+            key = (parameter.device, parameter.untyped_storage().data_ptr())
+            storage_paths.setdefault(key, []).append(path)
     for name, module in selected:
         for _, parameter in module.named_parameters(recurse=False):
             if parameter.device.type == "meta":
                 raise ValueError("meta parameters are unsupported")
-            aliases = [
-                path
-                for path, candidate in all_params
-                if candidate.device == parameter.device
-                and candidate.untyped_storage().data_ptr()
-                == parameter.untyped_storage().data_ptr()
-            ]
+            key = (parameter.device, parameter.untyped_storage().data_ptr())
+            aliases = storage_paths[key]
             if len(aliases) > 1:
                 raise ValueError(
                     f"tied selected parameters are unsupported: {name}: {aliases}"

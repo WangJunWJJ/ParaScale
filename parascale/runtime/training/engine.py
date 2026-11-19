@@ -123,6 +123,7 @@ class TrainEngine:
             raise RuntimeError(
                 "TrainEngine.fit requires either step_fn(batch, engine) or model, optimizer and loss_fn."
             )
+        self._validate_quantized_training(model, step_fn)
         if not self.state.initialized:
             self.initialize()
         if model is not None or optimizer is not None:
@@ -262,13 +263,41 @@ class TrainEngine:
         )
         backend.backward(loss)
 
-    def step(self, optimizer: Any = None) -> None:
+    def step(self, optimizer: Any = None) -> bool:
         if self.precision.step(optimizer):
-            return
+            return self.precision.optimizer_updated
         backend = self.training_backend or create_runtime_training_backend(
             config=self.config, local_rank=self._local_rank()
         )
-        backend.step(optimizer)
+        clip_norm = getattr(self.config, "grad_clip_norm", None)
+        if clip_norm is not None and backend.name != "deepspeed":
+            backend.clip_gradients(float(clip_norm), optimizer)
+        return backend.step(optimizer) is not False
+
+    def _validate_quantized_training(self, model: Any, step_fn: Any) -> None:
+        config = getattr(self.config, "quantization", None)
+        if config is None or not config.enabled:
+            return
+        if config.mode != "qat":
+            raise ValueError("PTQ cannot be used for training; use the quantize command")
+        if (
+            self.config.training_backend != "native"
+            or self.config.precision != "fp32"
+            or self.config.adapter_only_checkpoint
+            or self._world_size() != 1
+        ):
+            raise ValueError("QAT requires single-process native FP32 and full checkpoints")
+        from parascale.quantization.fake_quantize import (
+            FakeQuantizedConv2d,
+            FakeQuantizedLinear,
+        )
+
+        quantizers = [m.weight_fake_quant for m in model.modules()
+                      if isinstance(m, (FakeQuantizedLinear, FakeQuantizedConv2d))] if model is not None else []
+        if step_fn is not None or not quantizers:
+            raise ValueError("QAT requires a prepared model from QuantizationAwareTraining.prepare()")
+        if any(m.config.to_dict() != config.to_dict() for m in quantizers):
+            raise ValueError("prepared QAT model configuration does not match the runtime")
 
     def step_scheduler(self, scheduler: Any = None) -> None:
         if scheduler is not None and hasattr(scheduler, "step"):

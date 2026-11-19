@@ -1,0 +1,1520 @@
+{
+  "date": "2026-11-19",
+  "status": "passed",
+  "hardware": "Windows CPU and one NVIDIA RTX A6000 (host 156, physical GPU 0)",
+  "image": "parascale-detection:a6000-ultralytics83161",
+  "scope": "Actual example shell entrypoints executed on CPU/CUDA. Llama uses random models and synthetic tokens; only YOLO uses pretrained weights and real images. Bounded functional checks, not a quality or production-performance claim.",
+  "source": {
+    "implementation_commit": "501cd7dcd81da865073c2e2116657ef4195250a5",
+    "base_commit": "a1c6f026f64555e62faa40e39716b55fc3cace27",
+    "overlay": "Four example launchers/readmes, examples index and launcher regression tests; no parascale core changes.",
+    "execution_archive_sha256": "118fc6d793b7bd62dcd00870415746a7fea668f7a6398bfb82780fd172aef5c9",
+    "launcher_sha256": {
+      "examples/gpu/example_006_llama_qat/run.sh": "8ced1f7f2c8ed023407859e48ab4bedfdc7c68d8333247c83dd3d8d044d2d1ba",
+      "examples/gpu/example_008_yolo_distillation/run.sh": "ef2cc0c2cf46a63af77926a9bd6d7847f565c9b8c0ae151e94cafdf60f4428fb",
+      "examples/gpu/example_005_llama_ptq/run.sh": "62568c18d8223073eec2eb5c33a6b308bc6c11b1637f890d603d843a55287e65",
+      "examples/gpu/example_007_llama_distillation/run.sh": "8d397c20d24a3f48d4313da6ed22ef30e3a0d05822da5cf3eaecf501a23b531f"
+    },
+    "followup_overlay_sha256": {
+      "tests/benchmarks/scripts/validate_llama_quantization.py": "af61367082d042a04916ac26ddcbc69dfa202f61e18f5b8b505d25637dd0f978",
+      "tests/test_compression_examples_no_torch.py": "85e4cc381a15398a0aadb1f858243ce8062140896c4f3aa8a2a07d0e2201902c"
+    },
+    "followup_scope": "Quantization reports were rerun after a CLI nonempty-output safeguard; KD/YOLO retain their original runs. Final documentation wording may differ from the execution snapshot without changing launch arguments."
+  },
+  "environments": {
+    "cpu": {
+      "python": "3.12.8",
+      "torch": "2.15.0+cpu",
+      "transformers": "5.22.2"
+    },
+    "gpu": {
+      "python": "3.10.12",
+      "torch": "2.5.0a0+872d972e41.nv24.08",
+      "transformers": "4.51.3",
+      "ultralytics": "8.3.161",
+      "cuda": "12.6",
+      "cudnn": 90300,
+      "image_id": "sha256:043573ecd623390f83f2a7dadac4d1ae55c178fb07e3b6122dd8606e6b323493",
+      "network": "disabled",
+      "visible_gpus": "0",
+      "omp_num_threads": 1,
+      "assets_mount": "/home/user/wangjun/parascale_detection_20261116/assets:/assets"
+    }
+  },
+  "runs": [
+    {
+      "example": "Llama PTQ 8-bit",
+      "launcher": "examples/gpu/example_005_llama_ptq/run.sh",
+      "device": "cpu",
+      "source": "random Llama / synthetic tokens",
+      "status": "passed",
+      "arguments": {
+        "tiny": true,
+        "model": null,
+        "revision": "main",
+        "local_files_only": false,
+        "calibration_text": null,
+        "evaluation_text": null,
+        "mode": "ptq",
+        "bits": 8,
+        "device": "cpu",
+        "seed": 42,
+        "seqlen": 32,
+        "batch_size": 1,
+        "batches": 4,
+        "qat_steps": 4,
+        "learning_rate": 0.0001,
+        "warmup": 2,
+        "repeats": 5,
+        "output": "runs\\examples\\20261119_ptq_cpu_guarded"
+      },
+      "report_sha256": "05972705a9cd10420403ec0bfe0a5097f4bf57e2ee5f18f7391fe4f212fa36f0",
+      "raw_report": "runs/examples/20261119_ptq_cpu_guarded/report.json",
+      "data": {
+        "kind": "synthetic smoke only",
+        "training_batch_sha256": [
+          "7e849bdd51eddb47d9e95548639681cf6eda8927c4a2ed4bd61e96109cecd3d4",
+          "5a0040d45d3efd1a276290b03c58bbec3e18c48071bb2dac5dd8883508696c27",
+          "5898e295e879412ae5423ff933a2a8b1d8c256fa8e6acc2bbadab1b4e91e8140",
+          "d3870ba2978cffdcea1a7ea21cb4d5c50828e3d53b3f9a86110e3df63e38508e"
+        ],
+        "evaluation_batch_sha256": [
+          "825fb22653a31e4d6a5ca38dad357643deffa9668e84a4f2cb48335a20a35b95",
+          "5731d8d713121bc4fde9cffcd0225ded65ef7e61285fd30a17565ed8d2d38e7d",
+          "5e3aeb71b3ffea1975cf214997d79782f525d6ca9fc363800df7349526ccff68",
+          "921120b6ec9115ae6eb110dc77b9e8c8345e64793861e957bfec140d66c5171c"
+        ]
+      },
+      "baseline": {
+        "loss": 4.164274523335118,
+        "perplexity": 64.34598399632554,
+        "evaluated_tokens": 124,
+        "logits_mae": 0,
+        "logits_max_abs_error": 0,
+        "model_state_bytes": 90752,
+        "checkpoint_bytes": 99391,
+        "checkpoint_sha256": "6c034f43fb7599e1c38b8966a4b06cf8373f9340a340d0259797cfabb12707b3",
+        "serialization_memory": {
+          "process_rss_peak_sampled_bytes": null,
+          "rss_sampling_interval_ms": 10,
+          "cuda_peak_allocated_bytes": null,
+          "cuda_start_allocated_bytes": null,
+          "cuda_incremental_peak_bytes": null
+        },
+        "loading_memory": {
+          "process_rss_peak_sampled_bytes": null,
+          "rss_sampling_interval_ms": 10,
+          "cuda_peak_allocated_bytes": null,
+          "cuda_start_allocated_bytes": null,
+          "cuda_incremental_peak_bytes": null
+        },
+        "timing": {
+          "seconds_per_forward": 0.0026666199999453967,
+          "input_tokens_per_second": 12000.210003920789,
+          "warmup": 2,
+          "measured_forwards": 5,
+          "inference_memory": {
+            "process_rss_peak_sampled_bytes": null,
+            "rss_sampling_interval_ms": 10,
+            "cuda_peak_allocated_bytes": null,
+            "cuda_start_allocated_bytes": null,
+            "cuda_incremental_peak_bytes": null
+          },
+          "scope": "prefill forward only; excludes transfers, tokenization and loading"
+        }
+      },
+      "result": {
+        "loss": 4.16430651757025,
+        "perplexity": 64.34804272980091,
+        "evaluated_tokens": 124,
+        "logits_mae": 0.00024106216369546019,
+        "logits_max_abs_error": 0.0016488507390022278,
+        "model_state_bytes": 39552,
+        "checkpoint_bytes": 77734,
+        "checkpoint_sha256": "4816e9c0de514d392baf33ed70ab982a0ab5a40d1505644ccc9e426d1be7ef5c",
+        "timing": {
+          "seconds_per_forward": 0.0036734000001160893,
+          "input_tokens_per_second": 8711.275657153785,
+          "warmup": 2,
+          "measured_forwards": 5,
+          "inference_memory": {
+            "process_rss_peak_sampled_bytes": null,
+            "rss_sampling_interval_ms": 10,
+            "cuda_peak_allocated_bytes": null,
+            "cuda_start_allocated_bytes": null,
+            "cuda_incremental_peak_bytes": null
+          },
+          "scope": "prefill forward only; excludes transfers, tokenization and loading"
+        },
+        "procedure_memory": {
+          "process_rss_peak_sampled_bytes": null,
+          "rss_sampling_interval_ms": 10,
+          "cuda_peak_allocated_bytes": null,
+          "cuda_start_allocated_bytes": null,
+          "cuda_incremental_peak_bytes": null
+        },
+        "roundtrip_max_abs_error": 0,
+        "roundtrip_metadata_type": "dict"
+      },
+      "model": {
+        "vocab_size": 64,
+        "hidden_size": 32,
+        "num_hidden_layers": 2
+      }
+    },
+    {
+      "example": "Llama QAT 8-bit",
+      "launcher": "examples/gpu/example_006_llama_qat/run.sh",
+      "device": "cpu",
+      "source": "random Llama / synthetic tokens",
+      "status": "passed",
+      "arguments": {
+        "tiny": true,
+        "model": null,
+        "revision": "main",
+        "local_files_only": false,
+        "calibration_text": null,
+        "evaluation_text": null,
+        "mode": "qat",
+        "bits": 8,
+        "device": "cpu",
+        "seed": 42,
+        "seqlen": 32,
+        "batch_size": 1,
+        "batches": 4,
+        "qat_steps": 16,
+        "learning_rate": 0.0001,
+        "warmup": 2,
+        "repeats": 5,
+        "output": "runs\\examples\\20261119_qat_cpu_guarded"
+      },
+      "report_sha256": "3cbe4fcd8d7cf2226cd84ca4835117978cbbafab677a6a9ece9fb7525bd36354",
+      "raw_report": "runs/examples/20261119_qat_cpu_guarded/report.json",
+      "data": {
+        "kind": "synthetic smoke only",
+        "training_batch_sha256": [
+          "7e849bdd51eddb47d9e95548639681cf6eda8927c4a2ed4bd61e96109cecd3d4",
+          "5a0040d45d3efd1a276290b03c58bbec3e18c48071bb2dac5dd8883508696c27",
+          "5898e295e879412ae5423ff933a2a8b1d8c256fa8e6acc2bbadab1b4e91e8140",
+          "d3870ba2978cffdcea1a7ea21cb4d5c50828e3d53b3f9a86110e3df63e38508e"
+        ],
+        "evaluation_batch_sha256": [
+          "825fb22653a31e4d6a5ca38dad357643deffa9668e84a4f2cb48335a20a35b95",
+          "5731d8d713121bc4fde9cffcd0225ded65ef7e61285fd30a17565ed8d2d38e7d",
+          "5e3aeb71b3ffea1975cf214997d79782f525d6ca9fc363800df7349526ccff68",
+          "921120b6ec9115ae6eb110dc77b9e8c8345e64793861e957bfec140d66c5171c"
+        ]
+      },
+      "baseline": {
+        "loss": 4.164274523335118,
+        "perplexity": 64.34598399632554,
+        "evaluated_tokens": 124,
+        "logits_mae": 0,
+        "logits_max_abs_error": 0,
+        "model_state_bytes": 90752,
+        "checkpoint_bytes": 99391,
+        "checkpoint_sha256": "6c034f43fb7599e1c38b8966a4b06cf8373f9340a340d0259797cfabb12707b3",
+        "serialization_memory": {
+          "process_rss_peak_sampled_bytes": null,
+          "rss_sampling_interval_ms": 10,
+          "cuda_peak_allocated_bytes": null,
+          "cuda_start_allocated_bytes": null,
+          "cuda_incremental_peak_bytes": null
+        },
+        "loading_memory": {
+          "process_rss_peak_sampled_bytes": null,
+          "rss_sampling_interval_ms": 10,
+          "cuda_peak_allocated_bytes": null,
+          "cuda_start_allocated_bytes": null,
+          "cuda_incremental_peak_bytes": null
+        },
+        "timing": {
+          "seconds_per_forward": 0.0027483999998366925,
+          "input_tokens_per_second": 11643.137826335837,
+          "warmup": 2,
+          "measured_forwards": 5,
+          "inference_memory": {
+            "process_rss_peak_sampled_bytes": null,
+            "rss_sampling_interval_ms": 10,
+            "cuda_peak_allocated_bytes": null,
+            "cuda_start_allocated_bytes": null,
+            "cuda_incremental_peak_bytes": null
+          },
+          "scope": "prefill forward only; excludes transfers, tokenization and loading"
+        }
+      },
+      "result": {
+        "loss": 4.162348839544481,
+        "perplexity": 64.22219320716327,
+        "evaluated_tokens": 124,
+        "logits_mae": 0.008773926878347993,
+        "logits_max_abs_error": 0.058605700731277466,
+        "model_state_bytes": 39552,
+        "checkpoint_bytes": 77734,
+        "checkpoint_sha256": "60f7e41a569ea6230e2177caf7d7a1713d7c00d085c05d31fe87bf4c3acfa27d",
+        "timing": {
+          "seconds_per_forward": 0.005942540000251029,
+          "input_tokens_per_second": 5384.9027517943905,
+          "warmup": 2,
+          "measured_forwards": 5,
+          "inference_memory": {
+            "process_rss_peak_sampled_bytes": null,
+            "rss_sampling_interval_ms": 10,
+            "cuda_peak_allocated_bytes": null,
+            "cuda_start_allocated_bytes": null,
+            "cuda_incremental_peak_bytes": null
+          },
+          "scope": "prefill forward only; excludes transfers, tokenization and loading"
+        },
+        "training": {
+          "steps": 16,
+          "nonzero_gradient_steps": 16,
+          "changed_parameters": 14
+        },
+        "procedure_memory": {
+          "process_rss_peak_sampled_bytes": null,
+          "rss_sampling_interval_ms": 10,
+          "cuda_peak_allocated_bytes": null,
+          "cuda_start_allocated_bytes": null,
+          "cuda_incremental_peak_bytes": null
+        },
+        "roundtrip_max_abs_error": 0,
+        "roundtrip_metadata_type": "dict"
+      },
+      "model": {
+        "vocab_size": 64,
+        "hidden_size": 32,
+        "num_hidden_layers": 2
+      }
+    },
+    {
+      "example": "Llama distillation",
+      "launcher": "examples/gpu/example_007_llama_distillation/run.sh",
+      "device": "cpu",
+      "source": "random Llama / synthetic tokens",
+      "status": "passed",
+      "arguments": {
+        "tiny": true,
+        "teacher_model": null,
+        "student_model": null,
+        "teacher_revision": "main",
+        "student_revision": "main",
+        "local_files_only": false,
+        "calibration_text": null,
+        "evaluation_text": null,
+        "device": "cpu",
+        "seed": 42,
+        "seqlen": 32,
+        "batch_size": 1,
+        "batches": 4,
+        "steps": 16,
+        "learning_rate": 0.0001,
+        "temperature": 2,
+        "alpha": 0.5,
+        "output": "runs\\examples\\20261119_kd_cpu"
+      },
+      "report_sha256": "3fa404654bbdeafddd6d4e5f14f50365968e351c25be97bf452869c5248a3dec",
+      "raw_report": "runs/examples/20261119_kd_cpu/report.json",
+      "data": {
+        "train_batch_hashes": [
+          "58f05afb5455f645e0eb02e2ea4a2ac5b7e6cbe3d2bb8587cfa23942b953640d",
+          "4e9998057be4318d560fa4711aba0d160ef8272531352e1e046ad223711b6ebd",
+          "a8bc69719ca47c40963358e3b24d8e1b83d6bc12c2e99e6faa3b1303591483a2",
+          "0f5711a9a3c4f7e432f9f675638c803bddd5e1ca8480546d653e816120002374"
+        ],
+        "eval_batch_hashes": [
+          "aa5a1871894e92c43b916c8e2bc7c099292458f52f92ebaa2e71ab847243f106",
+          "c7c02aa3cee295337bf05b426dc6d79084d822e769392587e81fe2c4048ba236",
+          "ad4295a0434165633347c471c4a4fed3eeb9c7a70e30912fba44b178c9119814",
+          "dfaf11b792d5fe172bef420373be5dfb8e39a5023dc98c43f455dccb87514f1c"
+        ],
+        "train_seed": 43,
+        "eval_seed": 44
+      },
+      "parameter_counts": {
+        "teacher": 82240,
+        "student": 13408
+      },
+      "distillation": {
+        "before": {
+          "ce": 4.18480460874496,
+          "perplexity": 65.6806662350787,
+          "kl_teacher_to_student": 0.01729299897147763,
+          "valid_count": 124
+        },
+        "training": {
+          "losses": [
+            2.0806684494018555,
+            2.1052846908569336,
+            2.0928170680999756,
+            2.0837855339050293,
+            2.073620080947876,
+            2.099514961242676,
+            2.088672399520874,
+            2.079582452774048,
+            2.0689468383789062,
+            2.09442138671875,
+            2.084582805633545,
+            2.075077772140503,
+            2.0645813941955566,
+            2.0894570350646973,
+            2.080496072769165,
+            2.0704808235168457
+          ],
+          "nonzero_gradient_steps": 16,
+          "changed_parameters": 12,
+          "step_seconds": [
+            0.0067363000016484875,
+            0.006110499998612795,
+            0.004550099998596124,
+            0.0036413000016182195,
+            0.0034611000010045245,
+            0.0038075999982538633,
+            0.09710099999938393,
+            0.004409400000440655,
+            0.004316899998229928,
+            0.009161100002529565,
+            0.00526489999901969,
+            0.004682300001149997,
+            0.005085700002382509,
+            0.0037496000004466623,
+            0.003514699998049764,
+            0.003908300001057796
+          ],
+          "mean_step_seconds": 0.010593800000151532,
+          "timing_scope": "No warmup; forward, loss, backward, checks, optimizer; excludes batch transfer",
+          "memory": {
+            "process_rss_peak_sampled_bytes": null,
+            "rss_sampling_interval_ms": 10,
+            "cuda_peak_allocated_bytes": null,
+            "cuda_start_allocated_bytes": null,
+            "cuda_incremental_peak_bytes": null
+          },
+          "memory_scope": "Training loop; teacher and active student resident; initial weights on CPU; RSS is whole process",
+          "last_metrics": {
+            "total": 2.0704808235168457,
+            "hard_loss": 4.122437953948975,
+            "soft_loss": 0.018523847684264183,
+            "valid_count": 31
+          }
+        },
+        "after": {
+          "ce": 4.184678354570942,
+          "perplexity": 65.67237430027097,
+          "kl_teacher_to_student": 0.017258322527331692,
+          "valid_count": 124
+        }
+      },
+      "ce_baseline": {
+        "before": {
+          "ce": 4.18480460874496,
+          "perplexity": 65.6806662350787,
+          "kl_teacher_to_student": 0.01729299897147763,
+          "valid_count": 124
+        },
+        "training": {
+          "losses": [
+            4.144322872161865,
+            4.190967559814453,
+            4.167436122894287,
+            4.148934841156006,
+            4.130220413208008,
+            4.179565906524658,
+            4.1591477394104,
+            4.1405253410339355,
+            4.120843887329102,
+            4.1694793701171875,
+            4.150960922241211,
+            4.13150691986084,
+            4.112071514129639,
+            4.1596293449401855,
+            4.142767906188965,
+            4.1222968101501465
+          ],
+          "nonzero_gradient_steps": 16,
+          "changed_parameters": 12,
+          "step_seconds": [
+            0.0025028999989444856,
+            0.0022236000004340895,
+            0.0021863000001758337,
+            0.0024438000000372995,
+            0.004067600002599647,
+            0.002812999999150634,
+            0.002146899998479057,
+            0.0019921000020985957,
+            0.0019812000027741306,
+            0.0019839999986288603,
+            0.0023131999987526797,
+            0.0022747000002709683,
+            0.002047199999651639,
+            0.002100800000334857,
+            0.002027099999395432,
+            0.0020327999991422985
+          ],
+          "mean_step_seconds": 0.0023210750000544067,
+          "timing_scope": "No warmup; forward, loss, backward, checks, optimizer; excludes batch transfer",
+          "memory": {
+            "process_rss_peak_sampled_bytes": null,
+            "rss_sampling_interval_ms": 10,
+            "cuda_peak_allocated_bytes": null,
+            "cuda_start_allocated_bytes": null,
+            "cuda_incremental_peak_bytes": null
+          },
+          "memory_scope": "Training loop; teacher and active student resident; initial weights on CPU; RSS is whole process",
+          "last_metrics": {}
+        },
+        "after": {
+          "ce": 4.184827127764302,
+          "perplexity": 65.6821453159257,
+          "kl_teacher_to_student": 0.017325856031910065,
+          "valid_count": 124
+        }
+      },
+      "teacher_state": {
+        "before": "a274f6a2eaee167e1ad1989a248af2ad7c3c79d22a3b8621986e69be053284e5",
+        "after": "a274f6a2eaee167e1ad1989a248af2ad7c3c79d22a3b8621986e69be053284e5",
+        "frozen": true,
+        "eval": true,
+        "no_gradients": true
+      },
+      "student_export": {
+        "path": "runs\\examples\\20261119_kd_cpu\\student_state_dict.pt",
+        "sha256": "78bb25aae31b9922ed544ac3480c586b5df00b45025ad9665a888e3f9bac9c2d",
+        "bytes": 58565,
+        "max_abs_error": 0
+      }
+    },
+    {
+      "example": "Llama PTQ 4-bit",
+      "launcher": "examples/gpu/example_005_llama_ptq/run.sh",
+      "device": "cuda",
+      "source": "random Llama / synthetic tokens",
+      "status": "passed",
+      "arguments": {
+        "tiny": true,
+        "model": null,
+        "revision": "main",
+        "local_files_only": false,
+        "calibration_text": null,
+        "evaluation_text": null,
+        "mode": "ptq",
+        "bits": 4,
+        "device": "cuda",
+        "seed": 42,
+        "seqlen": 32,
+        "batch_size": 1,
+        "batches": 4,
+        "qat_steps": 4,
+        "learning_rate": 0.0001,
+        "warmup": 2,
+        "repeats": 5,
+        "output": "/results/final_ptq_4"
+      },
+      "report_sha256": "c4c257357b1045d103a50b315b8909b1978b8aefbe495d17a12f5a4f69e48ed7",
+      "raw_report": "/home/user/wangjun/parascale_examples_20261119/results/final_ptq_4/report.json",
+      "data": {
+        "kind": "synthetic smoke only",
+        "training_batch_sha256": [
+          "7e849bdd51eddb47d9e95548639681cf6eda8927c4a2ed4bd61e96109cecd3d4",
+          "5a0040d45d3efd1a276290b03c58bbec3e18c48071bb2dac5dd8883508696c27",
+          "5898e295e879412ae5423ff933a2a8b1d8c256fa8e6acc2bbadab1b4e91e8140",
+          "d3870ba2978cffdcea1a7ea21cb4d5c50828e3d53b3f9a86110e3df63e38508e"
+        ],
+        "evaluation_batch_sha256": [
+          "825fb22653a31e4d6a5ca38dad357643deffa9668e84a4f2cb48335a20a35b95",
+          "5731d8d713121bc4fde9cffcd0225ded65ef7e61285fd30a17565ed8d2d38e7d",
+          "5e3aeb71b3ffea1975cf214997d79782f525d6ca9fc363800df7349526ccff68",
+          "921120b6ec9115ae6eb110dc77b9e8c8345e64793861e957bfec140d66c5171c"
+        ]
+      },
+      "baseline": {
+        "loss": 4.16427476944462,
+        "perplexity": 64.34599983248555,
+        "evaluated_tokens": 124,
+        "logits_mae": 0,
+        "logits_max_abs_error": 0,
+        "model_state_bytes": 90752,
+        "checkpoint_bytes": 99248,
+        "checkpoint_sha256": "40f6daef88ccb716a739254f1d1f18db5092b0efdc7f1dc7ad395d4499702fdc",
+        "serialization_memory": {
+          "process_rss_peak_sampled_bytes": 1112989696,
+          "rss_sampling_interval_ms": 10,
+          "cuda_peak_allocated_bytes": 8612864,
+          "cuda_start_allocated_bytes": 8612864,
+          "cuda_incremental_peak_bytes": 0
+        },
+        "loading_memory": {
+          "process_rss_peak_sampled_bytes": 744128512,
+          "rss_sampling_interval_ms": 10,
+          "cuda_peak_allocated_bytes": 93184,
+          "cuda_start_allocated_bytes": 0,
+          "cuda_incremental_peak_bytes": 93184
+        },
+        "timing": {
+          "seconds_per_forward": 0.0019265450537204742,
+          "input_tokens_per_second": 16610.044980885734,
+          "warmup": 2,
+          "measured_forwards": 5,
+          "inference_memory": {
+            "process_rss_peak_sampled_bytes": 1113407488,
+            "rss_sampling_interval_ms": 10,
+            "cuda_peak_allocated_bytes": 8657408,
+            "cuda_start_allocated_bytes": 8613888,
+            "cuda_incremental_peak_bytes": 43520
+          },
+          "scope": "prefill forward only; excludes transfers, tokenization and loading"
+        }
+      },
+      "result": {
+        "loss": 4.162858532321069,
+        "perplexity": 64.25493513859176,
+        "evaluated_tokens": 124,
+        "logits_mae": 0.0048720730701461434,
+        "logits_max_abs_error": 0.042238377034664154,
+        "model_state_bytes": 30336,
+        "checkpoint_bytes": 70809,
+        "checkpoint_sha256": "3652ad0d2cab7d607dfcaa8fa26feb5af51dcdfb47c63b8ce4329a5fca614569",
+        "timing": {
+          "seconds_per_forward": 0.00390181764960289,
+          "input_tokens_per_second": 8201.305871702338,
+          "warmup": 2,
+          "measured_forwards": 5,
+          "inference_memory": {
+            "process_rss_peak_sampled_bytes": 1244573696,
+            "rss_sampling_interval_ms": 10,
+            "cuda_peak_allocated_bytes": 8616448,
+            "cuda_start_allocated_bytes": 8564736,
+            "cuda_incremental_peak_bytes": 51712
+          },
+          "scope": "prefill forward only; excludes transfers, tokenization and loading"
+        },
+        "procedure_memory": {
+          "process_rss_peak_sampled_bytes": 1243795456,
+          "rss_sampling_interval_ms": 10,
+          "cuda_peak_allocated_bytes": 8921600,
+          "cuda_start_allocated_bytes": 8519680,
+          "cuda_incremental_peak_bytes": 401920
+        },
+        "roundtrip_max_abs_error": 0,
+        "roundtrip_metadata_type": "dict"
+      },
+      "model": {
+        "vocab_size": 64,
+        "hidden_size": 32,
+        "num_hidden_layers": 2
+      }
+    },
+    {
+      "example": "Llama PTQ 8-bit",
+      "launcher": "examples/gpu/example_005_llama_ptq/run.sh",
+      "device": "cuda",
+      "source": "random Llama / synthetic tokens",
+      "status": "passed",
+      "arguments": {
+        "tiny": true,
+        "model": null,
+        "revision": "main",
+        "local_files_only": false,
+        "calibration_text": null,
+        "evaluation_text": null,
+        "mode": "ptq",
+        "bits": 8,
+        "device": "cuda",
+        "seed": 42,
+        "seqlen": 32,
+        "batch_size": 1,
+        "batches": 4,
+        "qat_steps": 4,
+        "learning_rate": 0.0001,
+        "warmup": 2,
+        "repeats": 5,
+        "output": "/results/final_ptq_8"
+      },
+      "report_sha256": "5f20a66f1b5f40d05bbaca830c6c5759f4314b43d3e72438408db9365b8b394c",
+      "raw_report": "/home/user/wangjun/parascale_examples_20261119/results/final_ptq_8/report.json",
+      "data": {
+        "kind": "synthetic smoke only",
+        "training_batch_sha256": [
+          "7e849bdd51eddb47d9e95548639681cf6eda8927c4a2ed4bd61e96109cecd3d4",
+          "5a0040d45d3efd1a276290b03c58bbec3e18c48071bb2dac5dd8883508696c27",
+          "5898e295e879412ae5423ff933a2a8b1d8c256fa8e6acc2bbadab1b4e91e8140",
+          "d3870ba2978cffdcea1a7ea21cb4d5c50828e3d53b3f9a86110e3df63e38508e"
+        ],
+        "evaluation_batch_sha256": [
+          "825fb22653a31e4d6a5ca38dad357643deffa9668e84a4f2cb48335a20a35b95",
+          "5731d8d713121bc4fde9cffcd0225ded65ef7e61285fd30a17565ed8d2d38e7d",
+          "5e3aeb71b3ffea1975cf214997d79782f525d6ca9fc363800df7349526ccff68",
+          "921120b6ec9115ae6eb110dc77b9e8c8345e64793861e957bfec140d66c5171c"
+        ]
+      },
+      "baseline": {
+        "loss": 4.16427476944462,
+        "perplexity": 64.34599983248555,
+        "evaluated_tokens": 124,
+        "logits_mae": 0,
+        "logits_max_abs_error": 0,
+        "model_state_bytes": 90752,
+        "checkpoint_bytes": 99248,
+        "checkpoint_sha256": "40f6daef88ccb716a739254f1d1f18db5092b0efdc7f1dc7ad395d4499702fdc",
+        "serialization_memory": {
+          "process_rss_peak_sampled_bytes": 1112788992,
+          "rss_sampling_interval_ms": 10,
+          "cuda_peak_allocated_bytes": 8612864,
+          "cuda_start_allocated_bytes": 8612864,
+          "cuda_incremental_peak_bytes": 0
+        },
+        "loading_memory": {
+          "process_rss_peak_sampled_bytes": 743636992,
+          "rss_sampling_interval_ms": 10,
+          "cuda_peak_allocated_bytes": 93184,
+          "cuda_start_allocated_bytes": 0,
+          "cuda_incremental_peak_bytes": 93184
+        },
+        "timing": {
+          "seconds_per_forward": 0.0024536438286304474,
+          "input_tokens_per_second": 13041.827679554237,
+          "warmup": 2,
+          "measured_forwards": 5,
+          "inference_memory": {
+            "process_rss_peak_sampled_bytes": 1113174016,
+            "rss_sampling_interval_ms": 10,
+            "cuda_peak_allocated_bytes": 8657408,
+            "cuda_start_allocated_bytes": 8613888,
+            "cuda_incremental_peak_bytes": 43520
+          },
+          "scope": "prefill forward only; excludes transfers, tokenization and loading"
+        }
+      },
+      "result": {
+        "loss": 4.164307009789251,
+        "perplexity": 64.34807440313806,
+        "evaluated_tokens": 124,
+        "logits_mae": 0.00024106210184982046,
+        "logits_max_abs_error": 0.0016488544642925262,
+        "model_state_bytes": 39552,
+        "checkpoint_bytes": 80025,
+        "checkpoint_sha256": "2b277d5dd570739866b870933ee13e9ee832a53ac3799eb206840f0f34b120c4",
+        "timing": {
+          "seconds_per_forward": 0.0034609198570251464,
+          "input_tokens_per_second": 9246.096795637963,
+          "warmup": 2,
+          "measured_forwards": 5,
+          "inference_memory": {
+            "process_rss_peak_sampled_bytes": 1218482176,
+            "rss_sampling_interval_ms": 10,
+            "cuda_peak_allocated_bytes": 8624640,
+            "cuda_start_allocated_bytes": 8572928,
+            "cuda_incremental_peak_bytes": 51712
+          },
+          "scope": "prefill forward only; excludes transfers, tokenization and loading"
+        },
+        "procedure_memory": {
+          "process_rss_peak_sampled_bytes": 1218256896,
+          "rss_sampling_interval_ms": 10,
+          "cuda_peak_allocated_bytes": 8929792,
+          "cuda_start_allocated_bytes": 8519680,
+          "cuda_incremental_peak_bytes": 410112
+        },
+        "roundtrip_max_abs_error": 0,
+        "roundtrip_metadata_type": "dict"
+      },
+      "model": {
+        "vocab_size": 64,
+        "hidden_size": 32,
+        "num_hidden_layers": 2
+      }
+    },
+    {
+      "example": "Llama QAT 4-bit",
+      "launcher": "examples/gpu/example_006_llama_qat/run.sh",
+      "device": "cuda",
+      "source": "random Llama / synthetic tokens",
+      "status": "passed",
+      "arguments": {
+        "tiny": true,
+        "model": null,
+        "revision": "main",
+        "local_files_only": false,
+        "calibration_text": null,
+        "evaluation_text": null,
+        "mode": "qat",
+        "bits": 4,
+        "device": "cuda",
+        "seed": 42,
+        "seqlen": 32,
+        "batch_size": 1,
+        "batches": 4,
+        "qat_steps": 16,
+        "learning_rate": 0.0001,
+        "warmup": 2,
+        "repeats": 5,
+        "output": "/results/final_qat_4"
+      },
+      "report_sha256": "be084fb44d22ffb5fc0ca3a4c976aef43c8b5bcfb885d5367cb30cc30b58ff3e",
+      "raw_report": "/home/user/wangjun/parascale_examples_20261119/results/final_qat_4/report.json",
+      "data": {
+        "kind": "synthetic smoke only",
+        "training_batch_sha256": [
+          "7e849bdd51eddb47d9e95548639681cf6eda8927c4a2ed4bd61e96109cecd3d4",
+          "5a0040d45d3efd1a276290b03c58bbec3e18c48071bb2dac5dd8883508696c27",
+          "5898e295e879412ae5423ff933a2a8b1d8c256fa8e6acc2bbadab1b4e91e8140",
+          "d3870ba2978cffdcea1a7ea21cb4d5c50828e3d53b3f9a86110e3df63e38508e"
+        ],
+        "evaluation_batch_sha256": [
+          "825fb22653a31e4d6a5ca38dad357643deffa9668e84a4f2cb48335a20a35b95",
+          "5731d8d713121bc4fde9cffcd0225ded65ef7e61285fd30a17565ed8d2d38e7d",
+          "5e3aeb71b3ffea1975cf214997d79782f525d6ca9fc363800df7349526ccff68",
+          "921120b6ec9115ae6eb110dc77b9e8c8345e64793861e957bfec140d66c5171c"
+        ]
+      },
+      "baseline": {
+        "loss": 4.16427476944462,
+        "perplexity": 64.34599983248555,
+        "evaluated_tokens": 124,
+        "logits_mae": 0,
+        "logits_max_abs_error": 0,
+        "model_state_bytes": 90752,
+        "checkpoint_bytes": 99248,
+        "checkpoint_sha256": "40f6daef88ccb716a739254f1d1f18db5092b0efdc7f1dc7ad395d4499702fdc",
+        "serialization_memory": {
+          "process_rss_peak_sampled_bytes": 1113149440,
+          "rss_sampling_interval_ms": 10,
+          "cuda_peak_allocated_bytes": 8612864,
+          "cuda_start_allocated_bytes": 8612864,
+          "cuda_incremental_peak_bytes": 0
+        },
+        "loading_memory": {
+          "process_rss_peak_sampled_bytes": 743989248,
+          "rss_sampling_interval_ms": 10,
+          "cuda_peak_allocated_bytes": 93184,
+          "cuda_start_allocated_bytes": 0,
+          "cuda_incremental_peak_bytes": 93184
+        },
+        "timing": {
+          "seconds_per_forward": 0.0019589632749557493,
+          "input_tokens_per_second": 16335.170959610174,
+          "warmup": 2,
+          "measured_forwards": 5,
+          "inference_memory": {
+            "process_rss_peak_sampled_bytes": 1113628672,
+            "rss_sampling_interval_ms": 10,
+            "cuda_peak_allocated_bytes": 8657408,
+            "cuda_start_allocated_bytes": 8613888,
+            "cuda_incremental_peak_bytes": 43520
+          },
+          "scope": "prefill forward only; excludes transfers, tokenization and loading"
+        }
+      },
+      "result": {
+        "loss": 4.1611470868510585,
+        "perplexity": 64.14506037007943,
+        "evaluated_tokens": 124,
+        "logits_mae": 0.010067251278087497,
+        "logits_max_abs_error": 0.07792901247739792,
+        "model_state_bytes": 30336,
+        "checkpoint_bytes": 70809,
+        "checkpoint_sha256": "997ecad8e81e62c8619a0ba7719f0be523077f78e087814fc0eab717b388f67d",
+        "timing": {
+          "seconds_per_forward": 0.004504043981432915,
+          "input_tokens_per_second": 7104.726359670123,
+          "warmup": 2,
+          "measured_forwards": 5,
+          "inference_memory": {
+            "process_rss_peak_sampled_bytes": 1335341056,
+            "rss_sampling_interval_ms": 10,
+            "cuda_peak_allocated_bytes": 17136128,
+            "cuda_start_allocated_bytes": 17084416,
+            "cuda_incremental_peak_bytes": 51712
+          },
+          "scope": "prefill forward only; excludes transfers, tokenization and loading"
+        },
+        "training": {
+          "steps": 16,
+          "nonzero_gradient_steps": 16,
+          "changed_parameters": 14
+        },
+        "procedure_memory": {
+          "process_rss_peak_sampled_bytes": 1334497280,
+          "rss_sampling_interval_ms": 10,
+          "cuda_peak_allocated_bytes": 17701888,
+          "cuda_start_allocated_bytes": 8519680,
+          "cuda_incremental_peak_bytes": 9182208
+        },
+        "roundtrip_max_abs_error": 0,
+        "roundtrip_metadata_type": "dict"
+      },
+      "model": {
+        "vocab_size": 64,
+        "hidden_size": 32,
+        "num_hidden_layers": 2
+      }
+    },
+    {
+      "example": "Llama QAT 8-bit",
+      "launcher": "examples/gpu/example_006_llama_qat/run.sh",
+      "device": "cuda",
+      "source": "random Llama / synthetic tokens",
+      "status": "passed",
+      "arguments": {
+        "tiny": true,
+        "model": null,
+        "revision": "main",
+        "local_files_only": false,
+        "calibration_text": null,
+        "evaluation_text": null,
+        "mode": "qat",
+        "bits": 8,
+        "device": "cuda",
+        "seed": 42,
+        "seqlen": 32,
+        "batch_size": 1,
+        "batches": 4,
+        "qat_steps": 16,
+        "learning_rate": 0.0001,
+        "warmup": 2,
+        "repeats": 5,
+        "output": "/results/final_qat_8"
+      },
+      "report_sha256": "b304b7dbec6beee1c5025c2d4b618e73b5b3b7bbf9b0c5375198a10ee1c5e6a3",
+      "raw_report": "/home/user/wangjun/parascale_examples_20261119/results/final_qat_8/report.json",
+      "data": {
+        "kind": "synthetic smoke only",
+        "training_batch_sha256": [
+          "7e849bdd51eddb47d9e95548639681cf6eda8927c4a2ed4bd61e96109cecd3d4",
+          "5a0040d45d3efd1a276290b03c58bbec3e18c48071bb2dac5dd8883508696c27",
+          "5898e295e879412ae5423ff933a2a8b1d8c256fa8e6acc2bbadab1b4e91e8140",
+          "d3870ba2978cffdcea1a7ea21cb4d5c50828e3d53b3f9a86110e3df63e38508e"
+        ],
+        "evaluation_batch_sha256": [
+          "825fb22653a31e4d6a5ca38dad357643deffa9668e84a4f2cb48335a20a35b95",
+          "5731d8d713121bc4fde9cffcd0225ded65ef7e61285fd30a17565ed8d2d38e7d",
+          "5e3aeb71b3ffea1975cf214997d79782f525d6ca9fc363800df7349526ccff68",
+          "921120b6ec9115ae6eb110dc77b9e8c8345e64793861e957bfec140d66c5171c"
+        ]
+      },
+      "baseline": {
+        "loss": 4.16427476944462,
+        "perplexity": 64.34599983248555,
+        "evaluated_tokens": 124,
+        "logits_mae": 0,
+        "logits_max_abs_error": 0,
+        "model_state_bytes": 90752,
+        "checkpoint_bytes": 99248,
+        "checkpoint_sha256": "40f6daef88ccb716a739254f1d1f18db5092b0efdc7f1dc7ad395d4499702fdc",
+        "serialization_memory": {
+          "process_rss_peak_sampled_bytes": 1113067520,
+          "rss_sampling_interval_ms": 10,
+          "cuda_peak_allocated_bytes": 8612864,
+          "cuda_start_allocated_bytes": 8612864,
+          "cuda_incremental_peak_bytes": 0
+        },
+        "loading_memory": {
+          "process_rss_peak_sampled_bytes": 744218624,
+          "rss_sampling_interval_ms": 10,
+          "cuda_peak_allocated_bytes": 93184,
+          "cuda_start_allocated_bytes": 0,
+          "cuda_incremental_peak_bytes": 93184
+        },
+        "timing": {
+          "seconds_per_forward": 0.00189877487719059,
+          "input_tokens_per_second": 16852.97208447739,
+          "warmup": 2,
+          "measured_forwards": 5,
+          "inference_memory": {
+            "process_rss_peak_sampled_bytes": 1113501696,
+            "rss_sampling_interval_ms": 10,
+            "cuda_peak_allocated_bytes": 8657408,
+            "cuda_start_allocated_bytes": 8613888,
+            "cuda_incremental_peak_bytes": 43520
+          },
+          "scope": "prefill forward only; excludes transfers, tokenization and loading"
+        }
+      },
+      "result": {
+        "loss": 4.16234859343498,
+        "perplexity": 64.22217740147332,
+        "evaluated_tokens": 124,
+        "logits_mae": 0.008773925947025418,
+        "logits_max_abs_error": 0.058605700731277466,
+        "model_state_bytes": 39552,
+        "checkpoint_bytes": 80025,
+        "checkpoint_sha256": "ae2a968c1f0ef0f5e493450aa2d83b0dd5366bddd198611e493865dd69a70efe",
+        "timing": {
+          "seconds_per_forward": 0.0026306167244911196,
+          "input_tokens_per_second": 12164.447865809965,
+          "warmup": 2,
+          "measured_forwards": 5,
+          "inference_memory": {
+            "process_rss_peak_sampled_bytes": 1309306880,
+            "rss_sampling_interval_ms": 10,
+            "cuda_peak_allocated_bytes": 17144320,
+            "cuda_start_allocated_bytes": 17092608,
+            "cuda_incremental_peak_bytes": 51712
+          },
+          "scope": "prefill forward only; excludes transfers, tokenization and loading"
+        },
+        "training": {
+          "steps": 16,
+          "nonzero_gradient_steps": 16,
+          "changed_parameters": 14
+        },
+        "procedure_memory": {
+          "process_rss_peak_sampled_bytes": 1309298688,
+          "rss_sampling_interval_ms": 10,
+          "cuda_peak_allocated_bytes": 17701888,
+          "cuda_start_allocated_bytes": 8519680,
+          "cuda_incremental_peak_bytes": 9182208
+        },
+        "roundtrip_max_abs_error": 0,
+        "roundtrip_metadata_type": "dict"
+      },
+      "model": {
+        "vocab_size": 64,
+        "hidden_size": 32,
+        "num_hidden_layers": 2
+      }
+    },
+    {
+      "example": "Llama distillation",
+      "launcher": "examples/gpu/example_007_llama_distillation/run.sh",
+      "device": "cuda",
+      "source": "random Llama / synthetic tokens",
+      "status": "passed",
+      "arguments": {
+        "tiny": true,
+        "teacher_model": null,
+        "student_model": null,
+        "teacher_revision": "main",
+        "student_revision": "main",
+        "local_files_only": false,
+        "calibration_text": null,
+        "evaluation_text": null,
+        "device": "cuda",
+        "seed": 42,
+        "seqlen": 32,
+        "batch_size": 1,
+        "batches": 4,
+        "steps": 16,
+        "learning_rate": 0.0001,
+        "temperature": 2,
+        "alpha": 0.5,
+        "output": "/results/llama_kd"
+      },
+      "report_sha256": "506154d92377c7646885bf6d431969accceb30ef00175d244edec03682b1efe5",
+      "raw_report": "/home/user/wangjun/parascale_examples_20261119/results/llama_kd/report.json",
+      "data": {
+        "train_batch_hashes": [
+          "58f05afb5455f645e0eb02e2ea4a2ac5b7e6cbe3d2bb8587cfa23942b953640d",
+          "4e9998057be4318d560fa4711aba0d160ef8272531352e1e046ad223711b6ebd",
+          "a8bc69719ca47c40963358e3b24d8e1b83d6bc12c2e99e6faa3b1303591483a2",
+          "0f5711a9a3c4f7e432f9f675638c803bddd5e1ca8480546d653e816120002374"
+        ],
+        "eval_batch_hashes": [
+          "aa5a1871894e92c43b916c8e2bc7c099292458f52f92ebaa2e71ab847243f106",
+          "c7c02aa3cee295337bf05b426dc6d79084d822e769392587e81fe2c4048ba236",
+          "ad4295a0434165633347c471c4a4fed3eeb9c7a70e30912fba44b178c9119814",
+          "dfaf11b792d5fe172bef420373be5dfb8e39a5023dc98c43f455dccb87514f1c"
+        ],
+        "train_seed": 43,
+        "eval_seed": 44
+      },
+      "parameter_counts": {
+        "teacher": 82240,
+        "student": 13408
+      },
+      "distillation": {
+        "before": {
+          "ce": 4.18480473179971,
+          "perplexity": 65.68067431739719,
+          "kl_teacher_to_student": 0.017293009065812635,
+          "valid_count": 124
+        },
+        "training": {
+          "losses": [
+            2.0806684494018555,
+            2.1052849292755127,
+            2.0928173065185547,
+            2.0837857723236084,
+            2.073620319366455,
+            2.099514961242676,
+            2.088672399520874,
+            2.0795822143554688,
+            2.068946599960327,
+            2.09442138671875,
+            2.084582805633545,
+            2.075077533721924,
+            2.0645813941955566,
+            2.089456796646118,
+            2.080496311187744,
+            2.070481061935425
+          ],
+          "nonzero_gradient_steps": 16,
+          "changed_parameters": 12,
+          "step_seconds": [
+            0.12999416328966618,
+            0.010736798867583275,
+            0.010061005130410194,
+            0.013308852910995483,
+            0.012345083057880402,
+            0.012466920539736748,
+            0.01161126047372818,
+            0.011552602052688599,
+            0.011360187083482742,
+            0.011009562760591507,
+            0.011360002681612968,
+            0.012312926352024078,
+            0.012283429503440857,
+            0.011033693328499794,
+            0.013272630050778389,
+            0.010278776288032532
+          ],
+          "mean_step_seconds": 0.019061743398196995,
+          "timing_scope": "No warmup; forward, loss, backward, checks, optimizer; excludes batch transfer",
+          "memory": {
+            "process_rss_peak_sampled_bytes": 1339756544,
+            "rss_sampling_interval_ms": 10,
+            "cuda_peak_allocated_bytes": 17776640,
+            "cuda_start_allocated_bytes": 8905728,
+            "cuda_incremental_peak_bytes": 8870912
+          },
+          "memory_scope": "Training loop; teacher and active student resident; initial weights on CPU; RSS is whole process",
+          "last_metrics": {
+            "total": 2.070481061935425,
+            "hard_loss": 4.122437953948975,
+            "soft_loss": 0.01852395385503769,
+            "valid_count": 31
+          }
+        },
+        "after": {
+          "ce": 4.184678231516192,
+          "perplexity": 65.67236621897383,
+          "kl_teacher_to_student": 0.017258340312588598,
+          "valid_count": 124
+        }
+      },
+      "ce_baseline": {
+        "before": {
+          "ce": 4.18480473179971,
+          "perplexity": 65.68067431739719,
+          "kl_teacher_to_student": 0.017293009065812635,
+          "valid_count": 124
+        },
+        "training": {
+          "losses": [
+            4.144322872161865,
+            4.190967559814453,
+            4.167436122894287,
+            4.148934364318848,
+            4.130221366882324,
+            4.1795654296875,
+            4.1591477394104,
+            4.1405253410339355,
+            4.120843887329102,
+            4.1694793701171875,
+            4.150961399078369,
+            4.1315083503723145,
+            4.112071514129639,
+            4.1596293449401855,
+            4.142767429351807,
+            4.1222968101501465
+          ],
+          "nonzero_gradient_steps": 16,
+          "changed_parameters": 12,
+          "step_seconds": [
+            0.005971997976303101,
+            0.006159573793411255,
+            0.006823910400271416,
+            0.007444089278578758,
+            0.007139377295970917,
+            0.0065294839441776276,
+            0.0072354525327682495,
+            0.007125360891222954,
+            0.0065657999366521835,
+            0.00694282166659832,
+            0.007231254130601883,
+            0.006809527054429054,
+            0.006690174341201782,
+            0.007485274225473404,
+            0.007031278684735298,
+            0.006714709103107452
+          ],
+          "mean_step_seconds": 0.006868755328468978,
+          "timing_scope": "No warmup; forward, loss, backward, checks, optimizer; excludes batch transfer",
+          "memory": {
+            "process_rss_peak_sampled_bytes": 1353773056,
+            "rss_sampling_interval_ms": 10,
+            "cuda_peak_allocated_bytes": 17774592,
+            "cuda_start_allocated_bytes": 17497600,
+            "cuda_incremental_peak_bytes": 276992
+          },
+          "memory_scope": "Training loop; teacher and active student resident; initial weights on CPU; RSS is whole process",
+          "last_metrics": {}
+        },
+        "after": {
+          "ce": 4.184827496928554,
+          "perplexity": 65.68216956343022,
+          "kl_teacher_to_student": 0.01732588823764555,
+          "valid_count": 124
+        }
+      },
+      "teacher_state": {
+        "before": "e5c11f5c5047f47f90534fd0e32f557de07e0f412b8bc85231e9ab4f7cc8bae3",
+        "after": "e5c11f5c5047f47f90534fd0e32f557de07e0f412b8bc85231e9ab4f7cc8bae3",
+        "frozen": true,
+        "eval": true,
+        "no_gradients": true
+      },
+      "student_export": {
+        "path": "/results/llama_kd/student_state_dict.pt",
+        "sha256": "f5527dacfe392a501458e451b0b18ca811077bfb32eca55d848f82a56dccc0f0",
+        "bytes": 58146,
+        "max_abs_error": 0
+      }
+    },
+    {
+      "example": "YOLOv8s -> YOLOv8n distillation",
+      "launcher": "examples/gpu/example_008_yolo_distillation/run.sh",
+      "device": "cuda",
+      "source": "pretrained YOLO / COCO128 train96-val32",
+      "status": "passed",
+      "report_sha256": "c36a041fe63e069496823432f79675fd80252523de79d48f33dd43c72fa9c4eb",
+      "raw_report": "/home/user/wangjun/parascale_examples_20261119/results/yolo_kd/summary.json",
+      "metadata": {
+        "timestamp": "2026-11-19T15:59:06.935794+08:00",
+        "python": "3.10.12",
+        "torch": "2.5.0a0+872d972e41.nv24.08",
+        "ultralytics": "8.3.161",
+        "cuda": "12.6",
+        "cudnn": 90300,
+        "platform": "Linux-5.15.0-46-generic-x86_64-with-glibc2.35",
+        "device": "cuda:0",
+        "device_name": "NVIDIA RTX A6000",
+        "workload": "yolo_detection",
+        "backend": "native",
+        "precision": "fp32",
+        "student_parameters": 3157200,
+        "teacher_parameters": 11166560,
+        "models": {
+          "student_model": {
+            "path": "/assets/yolov8n.pt",
+            "sha256": "f59b3d833e2ff32e194b5bb8e08d211dc7c5bdf144b90d2c8412c47ccfc83b36",
+            "initialization": "pretrained"
+          },
+          "teacher_model": {
+            "path": "/assets/yolov8s.pt",
+            "sha256": "1f47a78bf100391c2a140b7ac73a1caae18c32779be7d310658112f7ac9aa78a",
+            "initialization": "pretrained"
+          }
+        },
+        "data_manifest_sha256": "e74db749427b9723c3b4cd404b339cdc811793563a5f6e661c53bbf50853dfa3",
+        "selected_samples": 96,
+        "arguments": {
+          "student_model": "/assets/yolov8n.pt",
+          "teacher_model": "/assets/yolov8s.pt",
+          "image_dir": "/assets/train96/images",
+          "label_dir": "/assets/train96/labels",
+          "output_dir": "/results/yolo_kd",
+          "device": "cuda",
+          "learning_rate": 0.00001,
+          "image_size": 320,
+          "batch_size": 4,
+          "steps": 40,
+          "warmup": 10,
+          "num_samples": 96,
+          "repeats": 3,
+          "num_workers": 0,
+          "evaluation_data": "/assets/evaluation.yaml"
+        },
+        "evaluation_data_sha256": "a3b5fea84cfd6469464ab38b8133ae0aa1a04c72089240a468eb7e74e4d3ba01"
+      },
+      "checks": [
+        {
+          "mode": "baseline",
+          "repeat": 0,
+          "checks": {
+            "student_weights_changed": true,
+            "same_initial_student": true,
+            "no_teacher_in_model_checkpoint": true,
+            "projectors_present": false,
+            "teacher_file_unchanged": true
+          }
+        },
+        {
+          "mode": "kd",
+          "repeat": 0,
+          "checks": {
+            "student_weights_changed": true,
+            "same_initial_student": true,
+            "no_teacher_in_model_checkpoint": true,
+            "projectors_present": true,
+            "teacher_file_unchanged": true,
+            "export_exact_raw_student": true,
+            "teacher_state_unchanged": true,
+            "teacher_frozen_no_grad": true,
+            "export_prediction_parity": true
+          }
+        },
+        {
+          "mode": "kd",
+          "repeat": 1,
+          "checks": {
+            "student_weights_changed": true,
+            "same_initial_student": true,
+            "no_teacher_in_model_checkpoint": true,
+            "projectors_present": true,
+            "teacher_file_unchanged": true,
+            "export_exact_raw_student": true,
+            "teacher_state_unchanged": true,
+            "teacher_frozen_no_grad": true,
+            "export_prediction_parity": true
+          }
+        },
+        {
+          "mode": "baseline",
+          "repeat": 1,
+          "checks": {
+            "student_weights_changed": true,
+            "same_initial_student": true,
+            "no_teacher_in_model_checkpoint": true,
+            "projectors_present": false,
+            "teacher_file_unchanged": true
+          }
+        },
+        {
+          "mode": "baseline",
+          "repeat": 2,
+          "checks": {
+            "student_weights_changed": true,
+            "same_initial_student": true,
+            "no_teacher_in_model_checkpoint": true,
+            "projectors_present": false,
+            "teacher_file_unchanged": true
+          }
+        },
+        {
+          "mode": "kd",
+          "repeat": 2,
+          "checks": {
+            "student_weights_changed": true,
+            "same_initial_student": true,
+            "no_teacher_in_model_checkpoint": true,
+            "projectors_present": true,
+            "teacher_file_unchanged": true,
+            "export_exact_raw_student": true,
+            "teacher_state_unchanged": true,
+            "teacher_frozen_no_grad": true,
+            "export_prediction_parity": true
+          }
+        }
+      ],
+      "aggregates": {
+        "baseline": {
+          "repeats": 3,
+          "steady_state_images_per_second": {
+            "mean": 105.19589345362957,
+            "stdev": 4.862389800518675,
+            "repeats": [
+              110.62307594227161,
+              103.72813616631122,
+              101.23646825230588
+            ]
+          },
+          "end_to_end_images_per_second": {
+            "mean": 67.33524831323922,
+            "stdev": 0.5428325980458386,
+            "repeats": [
+              67.10011065077371,
+              67.9560069091422,
+              66.94962737980173
+            ]
+          },
+          "wall_seconds": {
+            "mean": 3.2149165651450553,
+            "stdev": 0.2129565379243115,
+            "repeats": [
+              3.4537922386080027,
+              3.0449386797845364,
+              3.1460187770426273
+            ]
+          },
+          "cuda_peak_allocated_bytes": {
+            "mean": 305666048,
+            "stdev": 0,
+            "repeats": [
+              305666048,
+              305666048,
+              305666048
+            ]
+          },
+          "cuda_peak_reserved_bytes": {
+            "mean": 331350016,
+            "stdev": 0,
+            "repeats": [
+              331350016,
+              331350016,
+              331350016
+            ]
+          }
+        },
+        "kd": {
+          "repeats": 3,
+          "steady_state_images_per_second": {
+            "mean": 81.50997971407895,
+            "stdev": 6.289855654527131,
+            "repeats": [
+              88.49627051211333,
+              79.73616261959293,
+              76.29750601053058
+            ]
+          },
+          "end_to_end_images_per_second": {
+            "mean": 58.17103382283368,
+            "stdev": 3.030733622330584,
+            "repeats": [
+              61.376616218305145,
+              57.784189753433566,
+              55.35229549676233
+            ]
+          },
+          "wall_seconds": {
+            "mean": 3.923133277644714,
+            "stdev": 0.13917472577223683,
+            "repeats": [
+              3.8028003349900246,
+              3.8910523019731045,
+              4.075547195971012
+            ]
+          },
+          "cuda_peak_allocated_bytes": {
+            "mean": 373348352,
+            "stdev": 0,
+            "repeats": [
+              373348352,
+              373348352,
+              373348352
+            ]
+          },
+          "cuda_peak_reserved_bytes": {
+            "mean": 413138944,
+            "stdev": 0,
+            "repeats": [
+              413138944,
+              413138944,
+              413138944
+            ]
+          }
+        }
+      },
+      "evaluation": {
+        "initial_teacher": {
+          "mAP50_95": 0.5123158487731087,
+          "mAP50": 0.6284104368543872,
+          "metrics": {
+            "metrics/precision(B)": 0.717633304983236,
+            "metrics/recall(B)": 0.5602461727554175,
+            "metrics/mAP50(B)": 0.6284104368543872,
+            "metrics/mAP50-95(B)": 0.5123158487731087,
+            "fitness": 0.5239253075812366
+          }
+        },
+        "initial_student": {
+          "mAP50_95": 0.45038862383221967,
+          "mAP50": 0.5766180729957401,
+          "metrics": {
+            "metrics/precision(B)": 0.7331307909032319,
+            "metrics/recall(B)": 0.483297231332942,
+            "metrics/mAP50(B)": 0.5766180729957401,
+            "metrics/mAP50-95(B)": 0.45038862383221967,
+            "fitness": 0.46301156874857174
+          }
+        },
+        "baseline_0": {
+          "mAP50_95": 0.41424167083323116,
+          "mAP50": 0.5309070008030002,
+          "metrics": {
+            "metrics/precision(B)": 0.7247116613548344,
+            "metrics/recall(B)": 0.44268322813314465,
+            "metrics/mAP50(B)": 0.5309070008030002,
+            "metrics/mAP50-95(B)": 0.41424167083323116,
+            "fitness": 0.4259082038302081
+          }
+        },
+        "kd_0": {
+          "mAP50_95": 0.4130681487397256,
+          "mAP50": 0.5298068909153834,
+          "metrics": {
+            "metrics/precision(B)": 0.6884297096059584,
+            "metrics/recall(B)": 0.4598736433346495,
+            "metrics/mAP50(B)": 0.5298068909153834,
+            "metrics/mAP50-95(B)": 0.4130681487397256,
+            "fitness": 0.4247420229572914
+          }
+        },
+        "kd_1": {
+          "mAP50_95": 0.41161719029382865,
+          "mAP50": 0.5308942626708462,
+          "metrics": {
+            "metrics/precision(B)": 0.6920794706013366,
+            "metrics/recall(B)": 0.45911729248269517,
+            "metrics/mAP50(B)": 0.5308942626708462,
+            "metrics/mAP50-95(B)": 0.41161719029382865,
+            "fitness": 0.4235448975315304
+          }
+        },
+        "baseline_1": {
+          "mAP50_95": 0.41757287549476463,
+          "mAP50": 0.5309254467183995,
+          "metrics": {
+            "metrics/precision(B)": 0.6923331918074472,
+            "metrics/recall(B)": 0.45867395202663147,
+            "metrics/mAP50(B)": 0.5309254467183995,
+            "metrics/mAP50-95(B)": 0.41757287549476463,
+            "fitness": 0.4289081326171281
+          }
+        },
+        "baseline_2": {
+          "mAP50_95": 0.41507921913246,
+          "mAP50": 0.5297726275000053,
+          "metrics": {
+            "metrics/precision(B)": 0.6882706200918258,
+            "metrics/recall(B)": 0.45926767600062074,
+            "metrics/mAP50(B)": 0.5297726275000053,
+            "metrics/mAP50-95(B)": 0.41507921913246,
+            "fitness": 0.42654855996921454
+          }
+        },
+        "kd_2": {
+          "mAP50_95": 0.4162968412324244,
+          "mAP50": 0.5297813479144259,
+          "metrics": {
+            "metrics/precision(B)": 0.6885756690853672,
+            "metrics/recall(B)": 0.45971156403430263,
+            "metrics/mAP50(B)": 0.5297813479144259,
+            "metrics/mAP50-95(B)": 0.4162968412324244,
+            "fitness": 0.42764529190062456
+          }
+        }
+      },
+      "limitations": [
+        "No guaranteed quality gain; mAP is unknown unless official validation is enabled.",
+        "Step throughput excludes data wait and checkpointing; wall time includes engine setup, audit hashing and saving.",
+        "The engine resets CUDA peaks before fit; reported peaks include training and export, not all transient setup allocations.",
+        "Small fixed dataset, fixed-seed repeats; not a multi-seed quality, convergence or distributed-scaling study.",
+        "Prediction parity uses one real image and raw pre-NMS output."
+      ]
+    }
+  ],
+  "notes": [
+    "Validation date: 2026-11-19. All four launchers were executed, not merely inspected or dry-run.",
+    "CPU: 8-bit PTQ, 8-bit QAT (16 updates), and Llama KD/CE baseline (16 updates each) passed. A6000: 4/8-bit PTQ/QAT and Llama KD passed; export roundtrip max absolute error was 0 for all six PTQ/QAT runs and both KD student exports.",
+    "Pretrained Llama execution/quality was not evaluated in this run. Local-pretrained-model commands are documented, but are not substituted by the random-model results.",
+    "YOLO: trusted pretrained YOLOv8s -> YOLOv8n, COCO128 fixed train96/val32, 320 pixels, batch 4, FP32 native, 40 updates, 10 warmup, 3 same-seed repeats, AdamW lr=1e-5. COCO128 is not unseen during COCO pretraining.",
+    "YOLO baseline/KD step throughput: 105.20/81.51 images/s; including data wait: 67.34/58.17 images/s. These short-window numbers exclude setup/checkpoint/evaluation from the data-wait-inclusive denominator; wall time is separately retained.",
+    "YOLO mAP50-95 (0-100): initial student 45.04, supervised mean 41.56, KD mean 41.37. No demonstrated accuracy gain; both fine-tuned results are below the initial student.",
+    "YOLO validates saved checkpoint contents and student export, but this example does not execute resume. Do not reinterpret its pass status as a resume test.",
+    "Llama timing scopes differ from YOLO and are not cross-model throughput comparisons. Reference weight storage is not an optimized integer inference backend.",
+    "Raw reports and logs remain in /home/user/wangjun/parascale_examples_20261119/results; the source archive and report SHA-256 values identify the executed evidence. Models and checkpoints are not committed.",
+    "Post-review safeguards: PTQ/QAT reject nonempty output directories before model loading or failure-report writing. All six quantization runs were repeated after this change; 19 launcher/layout tests passed on both Windows and the A6000 container.",
+    "Final local source validation: 796 passed, 7 skipped. CPU timing overlapped local test activity and is retained only as diagnostic data, not a performance comparison."
+  ]
+}

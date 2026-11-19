@@ -1,0 +1,286 @@
+# -*- coding: utf-8 -*-
+# @Time : 2026/11/13 下午5:00
+# @Author : Wang Jun
+# @Email: wj_xd@foxmail.com
+
+"""Rank-local runtime checkpoint and replay regression tests."""
+
+import copy
+import random
+import sys
+from types import SimpleNamespace
+
+import pytest
+
+from parascale.checkpoint import CheckpointManager
+from parascale.runtime.training.checkpointing import CheckpointController
+from parascale.runtime.training.data_state import DataResumeController
+
+
+class FakeTorch:
+    def __init__(self):
+        self.cpu = [1]
+        self.npu_state = [[2]]
+        self.cuda = SimpleNamespace(is_available=lambda: False)
+        self.npu = SimpleNamespace(
+            is_available=lambda: True,
+            get_rng_state_all=lambda: copy.deepcopy(self.npu_state),
+            set_rng_state_all=lambda state: setattr(self, "npu_state", state),
+        )
+        self.payloads = {}
+
+    def get_rng_state(self):
+        return self.cpu[:]
+
+    def set_rng_state(self, state):
+        self.cpu = state[:]
+
+    def save(self, payload, path):
+        self.payloads[str(path)] = copy.deepcopy(payload)
+        path.write_bytes(b"fake torch payload")
+
+    def load(self, path, *, map_location, weights_only):
+        assert map_location == "cpu" and weights_only is True
+        return copy.deepcopy(self.payloads[str(path)])
+
+
+def engine(rank=0, world_size=1):
+    precision = SimpleNamespace(value={"amp_scaler": {"scale": 128.0}})
+    precision.state_dict = lambda: copy.deepcopy(precision.value)
+    precision.load_state_dict = lambda state: setattr(precision, "value", state)
+    result = SimpleNamespace(
+        precision=precision,
+        config=SimpleNamespace(training_backend="native"),
+        state=SimpleNamespace(
+            global_step=3,
+            last_metrics={},
+            consumed_samples=6,
+            consumed_micro_batches=3,
+            data_state={},
+        ),
+        training_backend=SimpleNamespace(
+            name="native", state_dict=lambda: {}, load_state_dict=lambda state: None
+        ),
+        _distributed_rank=lambda: rank,
+        _distributed_world_size=lambda: world_size,
+        _distributed_barrier=lambda: None,
+        plan=lambda: SimpleNamespace(to_dict=lambda: {}),
+    )
+    result.data_resume = DataResumeController(result)
+    return result
+
+
+def test_full_rng_roundtrip_fake_npu():
+    torch = FakeTorch()
+    random.seed(12)
+    state = CheckpointController._capture_rng_state(torch)
+    expected = random.random()
+    torch.cpu = [9]
+    torch.npu_state = [[9]]
+    CheckpointController._restore_rng_state(torch, state)
+    assert random.random() == expected
+    assert torch.cpu == [1]
+    assert torch.npu_state == [[2]]
+
+
+def test_rank_sidecars_and_precision_roundtrip(tmp_path, monkeypatch):
+    torch = FakeTorch()
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    manager = CheckpointManager(str(tmp_path))
+    worker = engine(1, 2)
+    torch.cpu = [11]
+    CheckpointController(worker).save(manager)
+    assert manager.payload_path(3, "rank-00001/runtime_state.pt").is_file()
+    assert not manager.payload_path(3, "backend_state.pt").exists()
+    leader = engine(0, 2)
+    torch.cpu = [22]
+    CheckpointController(leader).save(manager)
+    manifest = manager.read_manifest(3)
+    entries = [entry for entry in manifest.files if entry["role"] == "runtime_state"]
+    assert {entry["rank"] for entry in entries} == {0, 1}
+    assert all("sha256" in entry for entry in entries)
+    worker.precision.value = {}
+    CheckpointController(worker).load(manager, 3)
+    assert torch.cpu == [11]
+    assert worker.precision.value == {"amp_scaler": {"scale": 128.0}}
+
+
+@pytest.mark.parametrize("exhausted", [False, True])
+def test_replay_preserves_random_even_on_failure(exhausted):
+    target = engine()
+    target.state.data_state = {
+        "resume_mode": "replay_skip",
+        "consumed_micro_batches": 2,
+    }
+
+    class Source:
+        def __iter__(self):
+            random.random()
+            return self
+
+        def __next__(self):
+            random.random()
+            if exhausted:
+                raise StopIteration
+            return 1
+
+    random.seed(31)
+    before = random.getstate()
+    with pytest.warns(RuntimeWarning, match="deterministic"):
+        if exhausted:
+            with pytest.raises(RuntimeError, match="exhausted"):
+                target.data_resume.prepare_iterator(Source())
+        else:
+            target.data_resume.prepare_iterator(Source())
+    assert random.getstate() == before
+
+
+def test_real_cpu_weights_only_roundtrip_and_dropout(tmp_path):
+    torch = pytest.importorskip("torch")
+    numpy = pytest.importorskip("numpy")
+    manager = CheckpointManager(str(tmp_path))
+    target = engine()
+    torch.manual_seed(51)
+    numpy.random.seed(51)
+    random.seed(51)
+    CheckpointController(target).save(manager)
+    expected = (
+        random.random(),
+        numpy.random.random(),
+        torch.nn.functional.dropout(torch.ones(64), training=True),
+    )
+    target.precision.value = {}
+    CheckpointController(target).load(manager, 3)
+    assert random.random() == expected[0]
+    assert numpy.random.random() == expected[1]
+    assert torch.equal(
+        torch.nn.functional.dropout(torch.ones(64), training=True), expected[2]
+    )
+    assert target.precision.value["amp_scaler"]["scale"] == 128.0
+
+
+@pytest.mark.parametrize("corruption", ["rank", "missing_entry", "duplicate_entry"])
+def test_runtime_identity_validated_before_backend_load(
+    tmp_path, monkeypatch, corruption
+):
+    torch = FakeTorch()
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    manager = CheckpointManager(str(tmp_path))
+    target = engine()
+    CheckpointController(target).save(manager)
+    if corruption == "rank":
+        torch.payloads[str(manager.payload_path(3, "rank-00000/runtime_state.pt"))][
+            "rank"
+        ] = 9
+    else:
+        manifest = manager.read_manifest(3)
+        entry = next(
+            entry for entry in manifest.files if entry["role"] == "runtime_state"
+        )
+        if corruption == "missing_entry":
+            manifest.files.remove(entry)
+        else:
+            manifest.files.append(entry)
+        manager.write_manifest(manifest)
+    target.training_backend.load_state_dict = lambda state: pytest.fail(
+        "backend must not load"
+    )
+    with pytest.raises(ValueError, match="runtime_state"):
+        CheckpointController(target).load(manager, 3)
+
+
+def test_missing_precision_methods_are_supported(tmp_path, monkeypatch):
+    torch = FakeTorch()
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    manager = CheckpointManager(str(tmp_path))
+    target = engine()
+    target.precision = object()
+    CheckpointController(target).save(manager)
+    CheckpointController(target).load(manager, 3)
+
+
+def test_runtime_failure_is_synchronized_before_raising(tmp_path, monkeypatch):
+    torch = FakeTorch()
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    target = engine()
+    calls = []
+    target._distributed_barrier = lambda: calls.append("sync")
+
+    def fail():
+        raise ValueError("bad precision")
+
+    target.precision.state_dict = fail
+    with pytest.raises(ValueError, match="bad precision"):
+        CheckpointController(target).save(CheckpointManager(str(tmp_path)))
+    assert calls == ["sync"]
+
+
+def test_peer_failure_stops_checkpoint_phase(monkeypatch):
+    distributed = SimpleNamespace(
+        is_available=lambda: True,
+        is_initialized=lambda: True,
+        get_world_size=lambda: 2,
+        all_gather_object=lambda errors, local: errors.__setitem__(1, "sidecar failed"),
+    )
+    torch = FakeTorch()
+    torch.distributed = distributed
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    monkeypatch.setitem(sys.modules, "torch.distributed", distributed)
+    with pytest.raises(RuntimeError, match="another rank.*sidecar failed"):
+        CheckpointController(engine())._collective_call(lambda: None)
+
+
+def test_rng_without_numpy_and_with_cuda(monkeypatch):
+    monkeypatch.setitem(sys.modules, "numpy", None)
+    torch = FakeTorch()
+    torch.cuda = torch.npu
+    state = CheckpointController._capture_rng_state(torch)
+    assert "numpy" not in state
+    assert state["torch_cuda"] == [[2]]
+    torch.npu_state = [[9]]
+    CheckpointController._restore_rng_state(torch, state)
+    assert torch.npu_state == [[2]]
+
+
+def test_real_cpu_continuous_vs_resumed_scaler_training(tmp_path):
+    torch = pytest.importorskip("torch")
+    from parascale.runtime.training.precision import PrecisionController
+
+    target = engine()
+    target.config.precision = "fp16"
+    target.amp_scaler = torch.amp.GradScaler("cpu", init_scale=32, growth_interval=1)
+    target.precision = PrecisionController(target)
+    model = torch.nn.Sequential(torch.nn.Dropout(0.5), torch.nn.Linear(8, 1))
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+    target.training_backend.state_dict = lambda: {
+        "model": model.state_dict(),
+        "optimizer": optimizer.state_dict(),
+    }
+
+    def restore(state):
+        model.load_state_dict(state["model"])
+        optimizer.load_state_dict(state["optimizer"])
+
+    target.training_backend.load_state_dict = restore
+
+    def update():
+        optimizer.zero_grad()
+        loss = model(torch.ones(4, 8)).square().mean()
+        target.amp_scaler.scale(loss).backward()
+        target.amp_scaler.step(optimizer)
+        target.amp_scaler.update()
+
+    update()
+    manager = CheckpointManager(str(tmp_path))
+    CheckpointController(target).save(manager)
+    update()
+    expected = copy.deepcopy(model.state_dict())
+    expected_scaler = copy.deepcopy(target.amp_scaler.state_dict())
+    CheckpointController(target).load(manager, 3)
+    target.precision.setup_scaler()
+    target.precision.setup_scaler()
+    update()
+    assert all(
+        torch.equal(value, model.state_dict()[key]) for key, value in expected.items()
+    )
+    assert target.amp_scaler.state_dict() == expected_scaler

@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict
 
-from .common import _section
+from .common import _section, training_micro_batches
 
 
 @dataclass
@@ -58,9 +58,7 @@ class GroundDinoSpec:
                 "batch_size", training.get("batch_size", parascale.get("batch_size", 2))
             )
         )
-        num_batches = int(
-            training.get("max_steps", training.get("num_batches", 2)) or 2
-        )
+        num_batches = training_micro_batches(config_data)
         return cls(
             model_path=str(
                 model.get(

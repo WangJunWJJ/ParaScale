@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict
 
-from .common import _section
+from .common import _section, training_micro_batches
 
 
 @dataclass
@@ -50,25 +50,22 @@ class YoloWorldSpec:
         label_dir = data.get("label_dir")
         loss_type = str(
             training.get(
-                "loss_type", data.get("loss_type", model.get("loss_type", "proxy"))
+                "loss_type",
+                data.get("loss_type", model.get("loss_type", cls.loss_type)),
             )
         ).lower()
         if model_path is None:
-            raise ValueError(
-                "YOLO-World workload requires model.path or model.model_path."
-            )
+            raise ValueError("YOLO workload requires model.path or model.model_path.")
         if data_zip is None and image_dir is None and data_dir is None:
             raise ValueError(
-                "YOLO-World workload requires data.zip_path, data.image_dir or data.data_dir."
+                "YOLO workload requires data.zip_path, data.image_dir or data.data_dir."
             )
         batch_size = int(
             data.get(
                 "batch_size", training.get("batch_size", parascale.get("batch_size", 2))
             )
         )
-        num_batches = int(
-            training.get("max_steps", training.get("num_batches", 2)) or 2
-        )
+        num_batches = training_micro_batches(config_data)
         return cls(
             model_path=str(model_path),
             data_zip=str(data_zip) if data_zip is not None else None,
@@ -133,4 +130,17 @@ class YoloWorldSpec:
         )
 
 
-__all__ = ["YoloWorldSpec"]
+@dataclass
+class YoloDetectionSpec(YoloWorldSpec):
+    """Standard closed-set detection uses only the official detection objective."""
+
+    loss_type: str = "official"
+
+    def __post_init__(self) -> None:
+        if self.loss_type != "official":
+            raise ValueError("yolo_detection requires loss_type=official")
+        if self.image_size < 32 or self.image_size % 32:
+            raise ValueError("YOLO image_size must be a positive multiple of 32")
+
+
+__all__ = ["YoloDetectionSpec", "YoloWorldSpec"]

@@ -1,0 +1,48 @@
+{
+  "status": "passed",
+  "date": "2026-11-16",
+  "hardware": "Local CPU and 1x RTX A6000, host 156",
+  "image": "parascale-quantization:a6000-torch25-transformers451",
+  "scope": "Random small Transformers architectures, single-device FP32 Python APIs. Not pretrained quality, inference acceleration, complete CLI workload coverage, or distributed compression evidence.",
+  "families": [
+    {
+      "name": "BERT sequence classification",
+      "quantization": "4/8-bit PTQ/QAT and reload passed",
+      "distillation": "Classification; different teacher/student widths passed"
+    },
+    {
+      "name": "ViT image classification",
+      "quantization": "4/8-bit PTQ/QAT and reload passed",
+      "distillation": "Classification; different teacher/student widths passed"
+    },
+    {
+      "name": "ResNet image classification",
+      "quantization": "4/8-bit PTQ/QAT and reload passed",
+      "distillation": "Classification; different teacher/student widths passed"
+    },
+    {
+      "name": "Qwen2 causal LM",
+      "quantization": "4/8-bit PTQ/QAT and reload passed",
+      "distillation": "Causal LM; different teacher/student widths passed"
+    }
+  ],
+  "tests": {
+    "local_focused_passed": 15,
+    "remote_focused_passed": 15,
+    "remote_cuda_family_cases": 12,
+    "remote_cpu_boundary_cases": 3,
+    "local_full_passed": 725,
+    "local_full_skipped": 3,
+    "remote_full_passed": 727,
+    "remote_full_skipped": 1
+  },
+  "notes": [
+    "Each QAT test asserts nonzero gradients, actual weight changes, frozen-observer conversion parity, reload parity and an unchanged source model; no convergence or accuracy claim.",
+    "Distillation checks student updates and unchanged teacher weights/buffers with no teacher gradients; class/token alignment remains the caller's responsibility.",
+    "GPT-2 default projection selection is explicitly rejected: Transformers Conv1D is unsupported. This does not imply GPT-2 logits are unsuitable for the separate causal distillation loss.",
+    "PTQ now accepts Mapping calibration inputs, including tokenizer-style batches, with finite-value validation preserved.",
+    "Storage-alias checking is indexed once. The 12-Linear regression reduces storage queries from 1152 to at most 48; this is preparation complexity evidence, not GPU inference throughput.",
+    "Reproduce: PARASCALE_PORTABILITY_DEVICE=cuda:0 python -m pytest tests/test_compression_portability.py -q (PyTorch and Transformers required)."
+  ],
+  "remote_log": "/home/user/wangjun/parascale_architecture_20261113/results/portability-gpu.log"
+}

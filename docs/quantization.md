@@ -33,19 +33,55 @@ integer storage. Inspect `packed_weight` for storage representation; using
   correctness only. It is not evidence of pretrained model quality, TinyLlama
   accuracy, GPU performance, or production stability.
 
-### Validation status (2026-11-13)
+### Validation status (2026-11-16)
 
 The coordinating validation run reports 18 remote Llama/runtime tests passed,
 plus GPU 4-bit and 8-bit PTQ/QAT smoke runs with 16 QAT optimizer steps passed.
 These use a tiny randomly initialized, genuine Llama architecture, not a
-pretrained quality benchmark. Latest template revalidation remains pending
-the quantization core review fixes. The unified validation report maintained
-by the coordinating task supplies the detailed evidence and links.
+pretrained quality benchmark. Cross-family validation now additionally passes
+15 tests locally and on the A6000 host: 12 family cases use CUDA remotely and
+three input/selection boundary checks run on CPU. The unified validation report
+supplies the detailed evidence and links.
 
-**Production pretrained-quality validation remains blocked:** Hugging Face,
-mirror and ModelScope model downloads were inaccessible or stalled. No stable
+**Production pretrained-quality validation remains unverified:** earlier model
+downloads were inaccessible or stalled; this run deliberately uses offline
+random models and does not retest download availability. No stable
 pretrained quality, TinyLlama quality retention, or production readiness claim
 can be inferred from these smoke results.
+
+## Cross-model applicability
+
+The algorithm is not Llama-specific. Selection targets exact PyTorch `Linear`
+and `Conv2d` modules, with per-output-channel or per-tensor affine/symmetric
+quantization. Embeddings, normalization, attention matrix multiplication and
+other operators remain floating point. This is not GPTQ, AWQ, or a fused INT4
+inference backend.
+
+`tests/test_compression_portability.py` checks randomly initialized small
+Transformers BERT sequence classifiers, ViT classifiers, ResNet classifiers and
+Qwen2 causal LMs. Each family exercises 4/8-bit weight-only PTQ, genuine QAT
+weight updates, frozen-observer conversion parity, and PTQ/QAT checkpoint
+reload. These are Python API tests, not automatic registration of new CLI
+workloads, pretrained quality evaluation, or all configurations of each family.
+
+Important boundaries:
+
+- Calibration accepts tensor batches, `(inputs, labels)`, and keyword `Mapping`
+  batches such as tokenizer `BatchEncoding`. Inputs must be on the model device;
+  multiple positional inputs require an explicit adapter.
+- GPT-2's Transformers `Conv1D` projections are not supported. With the default
+  excluded `lm_head`, a tiny GPT-2 is rejected rather than reported as quantized.
+- Tied selected parameters and custom `Linear/Conv2d` subclasses are rejected.
+  PEFT layers, MoE branches not exercised by calibration, and models that bypass
+  module `forward` need dedicated adaptation and coverage checks.
+- YOLO, GroundingDINO, CLIP, encoder-decoder models and VLMs may contain eligible
+  layers, but eligible layers alone do not establish end-to-end compatibility.
+  Their detection, generation and multimodal paths require separate validation.
+- Each export still needs the matching float model template to reload.
+
+Parameter-sharing checks index storage aliases once rather than rescanning all
+parameters for every selected tensor. This improves preparation complexity,
+not inference kernel speed or quality.
 
 ## Native workload CLI
 

@@ -25,12 +25,20 @@ from parascale.workloads.adapters.yolo import (
     YoloDetectionTargetAdapter,
     YoloOfficialBatchAdapter,
 )
-from parascale.workloads.specs.yolo import YoloWorldSpec
+from parascale.workloads.specs.yolo import YoloDetectionSpec, YoloWorldSpec
 
 from .common import _require_torch, _select_torch_device
 
 
 def build_yolo_world_components(spec: YoloWorldSpec):
+    return _build_yolo_components(spec, world=True)
+
+
+def build_yolo_detection_components(spec: YoloDetectionSpec):
+    return _build_yolo_components(spec, world=False)
+
+
+def _build_yolo_components(spec: YoloWorldSpec, *, world: bool):
     torch = _require_torch()
     import torch.nn as nn
     import torch.optim as optim
@@ -38,23 +46,33 @@ def build_yolo_world_components(spec: YoloWorldSpec):
     os.environ.setdefault("YOLO_CONFIG_DIR", "/tmp/ultralytics")
     try:
         import numpy as np
-        from ultralytics import YOLOWorld
+        from ultralytics import YOLO, YOLOWorld
     except Exception as exc:
         raise ImportError(
-            "YOLO-World workloads require ultralytics, Pillow and numpy."
+            "YOLO workloads require ultralytics, Pillow and numpy."
         ) from exc
 
     torch.manual_seed(spec.seed)
     device = _select_torch_device(torch, spec.device)
     model_path = _resolve_model_path(spec.model_path)
-    yolo = YOLOWorld(model_path)
+    yolo = (YOLOWorld if world else YOLO)(model_path)
     base_model = yolo.model.train()
+    if not world:
+        from ultralytics.nn.modules import Detect
+
+        if type(base_model.model[-1]) is not Detect or getattr(
+            base_model.model[-1], "end2end", False
+        ):
+            raise ValueError(
+                "yolo_detection requires a standard non-end2end Detect head"
+            )
     if spec.loss_type == "official":
         _prepare_yolo_world_official_loss_args(base_model)
-    for parameter in base_model.parameters():
-        parameter.requires_grad_(True)
+    for name, parameter in base_model.named_parameters():
+        # Published checkpoints may freeze everything; DFL's integral stays fixed.
+        parameter.requires_grad_(world or ".dfl." not in name)
 
-    class YoloWorldTrainingProxy(nn.Module):
+    class YoloTrainingProxy(nn.Module):
         def __init__(self, wrapped_model) -> None:
             super().__init__()
             self.wrapped_model = wrapped_model
@@ -95,6 +113,14 @@ def build_yolo_world_components(spec: YoloWorldSpec):
                     device=target_device, dtype=torch.float32, non_blocking=True
                 ),
             }
+            # Ultralytics loss objects retain device-specific tensors outside buffers.
+            # Refresh after the engine moves the model, not on every training step.
+            criterion = getattr(self.wrapped_model, "criterion", None)
+            if (
+                criterion is not None
+                and getattr(criterion, "device", None) != target_device
+            ):
+                self.wrapped_model.criterion = self.wrapped_model.init_criterion()
             text_features = getattr(self.wrapped_model, "txt_feats", None)
             if text_features is not None:
                 model_batch["txt_feats"] = text_features.to(
@@ -103,7 +129,7 @@ def build_yolo_world_components(spec: YoloWorldSpec):
                 )
             return self.wrapped_model(model_batch)
 
-    model = YoloWorldTrainingProxy(base_model)
+    model = YoloTrainingProxy(base_model)
     optimizer = optim.AdamW(
         (parameter for parameter in model.parameters() if parameter.requires_grad),
         lr=spec.lr,

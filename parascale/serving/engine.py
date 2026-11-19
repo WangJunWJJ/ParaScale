@@ -121,12 +121,15 @@ class ServingEngine:
 
     @staticmethod
     def _normalize_outputs(outputs: Any, batch_size: int) -> List[Any]:
-        if outputs is None:
-            return [None for _ in range(batch_size)]
         if isinstance(outputs, list):
             if len(outputs) == batch_size:
                 return outputs
             raise ValueError(
                 f"runtime returned {len(outputs)} outputs for batch size {batch_size}"
             )
-        return [outputs for _ in range(batch_size)]
+        if batch_size == 1:
+            return [outputs]
+        raise ValueError(
+            "runtime must return a list with one output per request "
+            f"for batch size {batch_size}; got {type(outputs).__name__}"
+        )

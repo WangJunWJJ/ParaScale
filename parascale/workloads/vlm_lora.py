@@ -362,6 +362,9 @@ def _build_hf_vlm_lora_components(torch: Any, nn: Any, optim: Any, spec: VlmLora
             ignore_index=-100,
         )
 
+    from parascale.contracts.workload import causal_token_weight
+
+    loss_fn.normalization_weight = causal_token_weight
     return model, optimizer, dataloader(), loss_fn
 
 

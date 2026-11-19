@@ -1,0 +1,645 @@
+{
+  "image": "parascale-quantization:a6000-torch25-transformers451",
+  "status": "passed",
+  "hardware": "2x RTX A6000, host 156, GPU 0/1",
+  "notes": [
+    "Remote full suite: 707 passed, 1 skipped.",
+    "Two-rank DDP, FSDP and DeepSpeed Stage 0 FP32 numerical contracts passed; maximum parameter error 3.73e-9 against concatenated global-batch reference.",
+    "FP16 DDP checkpoint/resume: exact parameters, optimizer, GradScaler and rank-local RNG continuation.",
+    "DeepSpeed correctness image: parascale-ci:a6000-cu126-torch25 (DeepSpeed 0.19.3). No ZeRO-2/3 or Ascend validation in this run.",
+    "Performance clipping disabled in both revisions because the baseline ignored clipping. Synthetic FP32/BF16 throughput is not a real-workload speedup claim."
+  ],
+  "performance": [
+    {
+      "fixed_runs": [
+        {
+          "backend": "native_ddp",
+          "precision": "fp32",
+          "world_size": 2,
+          "steps": 500,
+          "warmup_steps": 20,
+          "seconds": 2.280719041824341,
+          "max_parameter_error": null,
+          "samples_per_second": 56122.651520291234,
+          "peak_memory_mb": 573.537109375,
+          "status": "passed",
+          "synthetic": true
+        },
+        {
+          "backend": "native_ddp",
+          "precision": "fp32",
+          "world_size": 2,
+          "steps": 500,
+          "warmup_steps": 20,
+          "seconds": 1.9966198205947876,
+          "max_parameter_error": null,
+          "samples_per_second": 64108.34886025981,
+          "peak_memory_mb": 573.537109375,
+          "status": "passed",
+          "synthetic": true
+        },
+        {
+          "backend": "native_ddp",
+          "precision": "fp32",
+          "world_size": 2,
+          "steps": 500,
+          "warmup_steps": 20,
+          "seconds": 2.0001368522644043,
+          "max_parameter_error": null,
+          "samples_per_second": 63995.621027175235,
+          "peak_memory_mb": 573.537109375,
+          "status": "passed",
+          "synthetic": true
+        }
+      ],
+      "fixed_median": 63995.621027175235,
+      "baseline_runs": [
+        {
+          "backend": "native_ddp",
+          "precision": "fp32",
+          "world_size": 2,
+          "steps": 500,
+          "warmup_steps": 20,
+          "seconds": 1.9243545532226562,
+          "max_parameter_error": null,
+          "samples_per_second": 66515.80904654104,
+          "peak_memory_mb": 573.537109375,
+          "status": "passed",
+          "synthetic": true
+        },
+        {
+          "backend": "native_ddp",
+          "precision": "fp32",
+          "world_size": 2,
+          "steps": 500,
+          "warmup_steps": 20,
+          "seconds": 2.102419853210449,
+          "max_parameter_error": null,
+          "samples_per_second": 60882.225690810854,
+          "peak_memory_mb": 573.537109375,
+          "status": "passed",
+          "synthetic": true
+        },
+        {
+          "backend": "native_ddp",
+          "precision": "fp32",
+          "world_size": 2,
+          "steps": 500,
+          "warmup_steps": 20,
+          "seconds": 1.9498757123947144,
+          "max_parameter_error": null,
+          "samples_per_second": 65645.20968508217,
+          "peak_memory_mb": 573.537109375,
+          "status": "passed",
+          "synthetic": true
+        }
+      ],
+      "precision": "fp32",
+      "baseline_median": 65645.20968508217,
+      "change_percent": -2.5128850464800956
+    },
+    {
+      "fixed_runs": [
+        {
+          "backend": "native_ddp",
+          "precision": "bf16",
+          "world_size": 2,
+          "steps": 500,
+          "warmup_steps": 20,
+          "seconds": 2.2371816635131836,
+          "max_parameter_error": null,
+          "samples_per_second": 57214.844054726316,
+          "peak_memory_mb": 576.9111328125,
+          "status": "passed",
+          "synthetic": true
+        },
+        {
+          "backend": "native_ddp",
+          "precision": "bf16",
+          "world_size": 2,
+          "steps": 500,
+          "warmup_steps": 20,
+          "seconds": 2.2378196716308594,
+          "max_parameter_error": null,
+          "samples_per_second": 57198.531956204155,
+          "peak_memory_mb": 576.9111328125,
+          "status": "passed",
+          "synthetic": true
+        },
+        {
+          "backend": "native_ddp",
+          "precision": "bf16",
+          "world_size": 2,
+          "steps": 500,
+          "warmup_steps": 20,
+          "seconds": 2.2567050457000732,
+          "max_parameter_error": null,
+          "samples_per_second": 56719.86254645517,
+          "peak_memory_mb": 576.9111328125,
+          "status": "passed",
+          "synthetic": true
+        }
+      ],
+      "fixed_median": 57198.531956204155,
+      "baseline_runs": [
+        {
+          "backend": "native_ddp",
+          "precision": "bf16",
+          "world_size": 2,
+          "steps": 500,
+          "warmup_steps": 20,
+          "seconds": 2.120594024658203,
+          "max_parameter_error": null,
+          "samples_per_second": 60360.445475003646,
+          "peak_memory_mb": 576.9111328125,
+          "status": "passed",
+          "synthetic": true
+        },
+        {
+          "backend": "native_ddp",
+          "precision": "bf16",
+          "world_size": 2,
+          "steps": 500,
+          "warmup_steps": 20,
+          "seconds": 2.1488001346588135,
+          "max_parameter_error": null,
+          "samples_per_second": 59568.127316933475,
+          "peak_memory_mb": 576.9111328125,
+          "status": "passed",
+          "synthetic": true
+        },
+        {
+          "backend": "native_ddp",
+          "precision": "bf16",
+          "world_size": 2,
+          "steps": 500,
+          "warmup_steps": 20,
+          "seconds": 2.212653398513794,
+          "max_parameter_error": null,
+          "samples_per_second": 57849.09651280028,
+          "peak_memory_mb": 576.9111328125,
+          "status": "passed",
+          "synthetic": true
+        }
+      ],
+      "precision": "bf16",
+      "baseline_median": 59568.127316933475,
+      "change_percent": -3.9779584611109864
+    }
+  ],
+  "scope": "Synthetic two-layer 1024-wide MLP, native DDP, per-rank microbatch 64, GAS 2, 20 warmup and 500 measured optimizer updates, three repeats. Resident GPU inputs exclude dataloader and storage. Short-window runtime overhead measurements only; not end-to-end model training or quality evidence.",
+  "baseline_commit": "9ce3737",
+  "fixed_branch": "fix/architecture-contracts (uncommitted)",
+  "date": "2026-11-16",
+  "remote_artifacts": "/home/user/wangjun/parascale_architecture_20261113/results",
+  "normalization_optimization": {
+    "notes": [
+      "Implementation: async global denominator reduction, wait after forward, retain denominator on device; no assumed equal-batch fast path.",
+      "Correctness: DDP/FSDP/DeepSpeed Stage 0 unequal-batch tests passed, maximum parameter error 3.73e-9.",
+      "Local full suite: 709 passed, 3 skipped; torch-free suite: 422 passed, 4 skipped.",
+      "Per-run variance remains visible; do not compare these 2000-step medians directly to the earlier 500-step table.",
+      "Final remote full suite: 711 passed, 1 skipped.",
+      "Final async implementation: dual-GPU FP16 checkpoint continuation passed exactly for parameters, optimizer, scaler and per-rank RNG."
+    ],
+    "scope": "Same 2x A6000 GPUs 0/1 and synthetic MLP as above; 20 warmup, 2000 measured updates, three repeats alternating async then source. Before is the correctness-fixed synchronous implementation, NOT original commit 9ce3737. Resident GPU inputs, no clipping, no checkpoints in timed region. Medians are observations, not statistically established speedups or real-model results.",
+    "performance": [
+      {
+        "change_percent": 2.2861885286515227,
+        "precision": "fp32",
+        "before_median": 62894.01380322514,
+        "after_median": 64331.889532002984,
+        "before_runs": [
+          {
+            "backend": "native_ddp",
+            "precision": "fp32",
+            "world_size": 2,
+            "steps": 2000,
+            "warmup_steps": 20,
+            "seconds": 7.895306587219238,
+            "max_parameter_error": null,
+            "samples_per_second": 64848.65335423645,
+            "peak_memory_mb": 2073.537109375,
+            "status": "passed",
+            "synthetic": true
+          },
+          {
+            "backend": "native_ddp",
+            "precision": "fp32",
+            "world_size": 2,
+            "steps": 2000,
+            "warmup_steps": 20,
+            "seconds": 8.216218948364258,
+            "max_parameter_error": null,
+            "samples_per_second": 62315.768751748335,
+            "peak_memory_mb": 2073.537109375,
+            "status": "passed",
+            "synthetic": true
+          },
+          {
+            "backend": "native_ddp",
+            "precision": "fp32",
+            "world_size": 2,
+            "steps": 2000,
+            "warmup_steps": 20,
+            "seconds": 8.140679359436035,
+            "max_parameter_error": null,
+            "samples_per_second": 62894.01380322514,
+            "peak_memory_mb": 2073.537109375,
+            "status": "passed",
+            "synthetic": true
+          }
+        ],
+        "after_runs": [
+          {
+            "backend": "native_ddp",
+            "precision": "fp32",
+            "world_size": 2,
+            "steps": 2000,
+            "warmup_steps": 20,
+            "seconds": 7.989116191864014,
+            "max_parameter_error": null,
+            "samples_per_second": 64087.18908374527,
+            "peak_memory_mb": 2073.53759765625,
+            "status": "passed",
+            "synthetic": true
+          },
+          {
+            "backend": "native_ddp",
+            "precision": "fp32",
+            "world_size": 2,
+            "steps": 2000,
+            "warmup_steps": 20,
+            "seconds": 7.958727836608887,
+            "max_parameter_error": null,
+            "samples_per_second": 64331.889532002984,
+            "peak_memory_mb": 2073.53759765625,
+            "status": "passed",
+            "synthetic": true
+          },
+          {
+            "backend": "native_ddp",
+            "precision": "fp32",
+            "world_size": 2,
+            "steps": 2000,
+            "warmup_steps": 20,
+            "seconds": 7.782627105712891,
+            "max_parameter_error": null,
+            "samples_per_second": 65787.55387421336,
+            "peak_memory_mb": 2073.53759765625,
+            "status": "passed",
+            "synthetic": true
+          }
+        ]
+      },
+      {
+        "change_percent": 7.366137952118956,
+        "precision": "bf16",
+        "before_median": 53471.08406171588,
+        "after_median": 57409.837878195365,
+        "before_runs": [
+          {
+            "backend": "native_ddp",
+            "precision": "bf16",
+            "world_size": 2,
+            "steps": 2000,
+            "warmup_steps": 20,
+            "seconds": 8.962349891662598,
+            "max_parameter_error": null,
+            "samples_per_second": 57127.87451829995,
+            "peak_memory_mb": 2076.9111328125,
+            "status": "passed",
+            "synthetic": true
+          },
+          {
+            "backend": "native_ddp",
+            "precision": "bf16",
+            "world_size": 2,
+            "steps": 2000,
+            "warmup_steps": 20,
+            "seconds": 9.997652053833008,
+            "max_parameter_error": null,
+            "samples_per_second": 51212.0243076177,
+            "peak_memory_mb": 2076.9111328125,
+            "status": "passed",
+            "synthetic": true
+          },
+          {
+            "backend": "native_ddp",
+            "precision": "bf16",
+            "world_size": 2,
+            "steps": 2000,
+            "warmup_steps": 20,
+            "seconds": 9.575268745422363,
+            "max_parameter_error": null,
+            "samples_per_second": 53471.08406171588,
+            "peak_memory_mb": 2076.9111328125,
+            "status": "passed",
+            "synthetic": true
+          }
+        ],
+        "after_runs": [
+          {
+            "backend": "native_ddp",
+            "precision": "bf16",
+            "world_size": 2,
+            "steps": 2000,
+            "warmup_steps": 20,
+            "seconds": 8.91833209991455,
+            "max_parameter_error": null,
+            "samples_per_second": 57409.837878195365,
+            "peak_memory_mb": 2076.91162109375,
+            "status": "passed",
+            "synthetic": true
+          },
+          {
+            "backend": "native_ddp",
+            "precision": "bf16",
+            "world_size": 2,
+            "steps": 2000,
+            "warmup_steps": 20,
+            "seconds": 9.020329475402832,
+            "max_parameter_error": null,
+            "samples_per_second": 56760.67613673668,
+            "peak_memory_mb": 2076.91162109375,
+            "status": "passed",
+            "synthetic": true
+          },
+          {
+            "backend": "native_ddp",
+            "precision": "bf16",
+            "world_size": 2,
+            "steps": 2000,
+            "warmup_steps": 20,
+            "seconds": 8.614811897277832,
+            "max_parameter_error": null,
+            "samples_per_second": 59432.52227733322,
+            "peak_memory_mb": 2076.91162109375,
+            "status": "passed",
+            "synthetic": true
+          }
+        ]
+      }
+    ]
+  },
+  "accumulation_optimization": {
+    "performance": [
+      {
+        "before_median": 63159.73077838439,
+        "after_runs": [
+          {
+            "backend": "native_ddp",
+            "precision": "fp32",
+            "world_size": 2,
+            "steps": 2000,
+            "warmup_steps": 20,
+            "seconds": 8.078885078430176,
+            "max_parameter_error": null,
+            "samples_per_second": 63375.081466004434,
+            "peak_memory_mb": 2073.5380859375,
+            "status": "passed",
+            "synthetic": true,
+            "profile": null
+          },
+          {
+            "backend": "native_ddp",
+            "precision": "fp32",
+            "world_size": 2,
+            "steps": 2000,
+            "warmup_steps": 20,
+            "seconds": 8.368829727172852,
+            "max_parameter_error": null,
+            "samples_per_second": 61179.402221266515,
+            "peak_memory_mb": 2073.5380859375,
+            "status": "passed",
+            "synthetic": true,
+            "profile": null
+          },
+          {
+            "backend": "native_ddp",
+            "precision": "fp32",
+            "world_size": 2,
+            "steps": 2000,
+            "warmup_steps": 20,
+            "seconds": 8.128654479980469,
+            "max_parameter_error": null,
+            "samples_per_second": 62987.054162650325,
+            "peak_memory_mb": 2073.5380859375,
+            "status": "passed",
+            "synthetic": true,
+            "profile": null
+          }
+        ],
+        "precision": "fp32",
+        "before_runs": [
+          {
+            "backend": "native_ddp",
+            "precision": "fp32",
+            "world_size": 2,
+            "steps": 2000,
+            "warmup_steps": 20,
+            "seconds": 8.44072151184082,
+            "max_parameter_error": null,
+            "samples_per_second": 60658.32159984851,
+            "peak_memory_mb": 2073.53759765625,
+            "status": "passed",
+            "synthetic": true,
+            "profile": null
+          },
+          {
+            "backend": "native_ddp",
+            "precision": "fp32",
+            "world_size": 2,
+            "steps": 2000,
+            "warmup_steps": 20,
+            "seconds": 8.106431007385254,
+            "max_parameter_error": null,
+            "samples_per_second": 63159.73077838439,
+            "peak_memory_mb": 2073.53759765625,
+            "status": "passed",
+            "synthetic": true,
+            "profile": null
+          },
+          {
+            "backend": "native_ddp",
+            "precision": "fp32",
+            "world_size": 2,
+            "steps": 2000,
+            "warmup_steps": 20,
+            "seconds": 8.032470703125,
+            "max_parameter_error": null,
+            "samples_per_second": 63741.284459438924,
+            "peak_memory_mb": 2073.53759765625,
+            "status": "passed",
+            "synthetic": true,
+            "profile": null
+          }
+        ],
+        "change_percent": -0.27339669375722186,
+        "after_median": 62987.054162650325
+      },
+      {
+        "before_median": 56090.279212875656,
+        "after_runs": [
+          {
+            "backend": "native_ddp",
+            "precision": "bf16",
+            "world_size": 2,
+            "steps": 2000,
+            "warmup_steps": 20,
+            "seconds": 8.65819263458252,
+            "max_parameter_error": null,
+            "samples_per_second": 59134.74342843466,
+            "peak_memory_mb": 2076.912109375,
+            "status": "passed",
+            "synthetic": true,
+            "profile": null
+          },
+          {
+            "backend": "native_ddp",
+            "precision": "bf16",
+            "world_size": 2,
+            "steps": 2000,
+            "warmup_steps": 20,
+            "seconds": 10.010831832885742,
+            "max_parameter_error": null,
+            "samples_per_second": 51144.60102287123,
+            "peak_memory_mb": 2076.912109375,
+            "status": "passed",
+            "synthetic": true,
+            "profile": null
+          },
+          {
+            "backend": "native_ddp",
+            "precision": "bf16",
+            "world_size": 2,
+            "steps": 2000,
+            "warmup_steps": 20,
+            "seconds": 9.009696960449219,
+            "max_parameter_error": null,
+            "samples_per_second": 56827.66049153244,
+            "peak_memory_mb": 2076.912109375,
+            "status": "passed",
+            "synthetic": true,
+            "profile": null
+          }
+        ],
+        "precision": "bf16",
+        "before_runs": [
+          {
+            "backend": "native_ddp",
+            "precision": "bf16",
+            "world_size": 2,
+            "steps": 2000,
+            "warmup_steps": 20,
+            "seconds": 9.128141403198242,
+            "max_parameter_error": null,
+            "samples_per_second": 56090.279212875656,
+            "peak_memory_mb": 2076.91162109375,
+            "status": "passed",
+            "synthetic": true,
+            "profile": null
+          },
+          {
+            "backend": "native_ddp",
+            "precision": "bf16",
+            "world_size": 2,
+            "steps": 2000,
+            "warmup_steps": 20,
+            "seconds": 10.692357063293457,
+            "max_parameter_error": null,
+            "samples_per_second": 47884.67098219912,
+            "peak_memory_mb": 2076.91162109375,
+            "status": "passed",
+            "synthetic": true,
+            "profile": null
+          },
+          {
+            "backend": "native_ddp",
+            "precision": "bf16",
+            "world_size": 2,
+            "steps": 2000,
+            "warmup_steps": 20,
+            "seconds": 8.994780540466309,
+            "max_parameter_error": null,
+            "samples_per_second": 56921.900172725815,
+            "peak_memory_mb": 2076.91162109375,
+            "status": "passed",
+            "synthetic": true,
+            "profile": null
+          }
+        ],
+        "change_percent": 1.314632925712944,
+        "after_median": 56827.66049153244
+      }
+    ],
+    "scope": "Second round: async normalization baseline versus detached, pre-fence accumulated-loss statistics and per-window divisor reuse. Same synthetic MLP, 2x A6000 GPU0/1, microbatch64, GAS2, 20 warmup/2000 measured updates, three repeats alternating baseline and changed code. No profiler during throughput runs; medians are observations with visible variance, not real-model evidence.",
+    "profile_before": {
+      "cudaDeviceSynchronize": {
+        "count": 61,
+        "self_cpu_us": 12927.894000000015
+      },
+      "cudaStreamSynchronize": {
+        "count": 60,
+        "self_cpu_us": 242.7490000000571
+      },
+      "aten::addmm": {
+        "count": 120,
+        "self_cpu_us": 5860.8379999999925
+      },
+      "aten::div": {
+        "count": 240,
+        "self_cpu_us": 4429.387999999686
+      },
+      "aten::add_": {
+        "count": 120,
+        "self_cpu_us": 1169.9249999999056
+      },
+      "aten::add": {
+        "count": 60,
+        "self_cpu_us": 1239.4379999998964
+      },
+      "aten::item": {
+        "count": 30,
+        "self_cpu_us": 84.85799999996289
+      }
+    },
+    "profile_after": {
+      "cudaDeviceSynchronize": {
+        "count": 61,
+        "self_cpu_us": 23665.935999999958
+      },
+      "cudaStreamSynchronize": {
+        "count": 60,
+        "self_cpu_us": 250.8060000000005
+      },
+      "aten::addmm": {
+        "count": 120,
+        "self_cpu_us": 4966.789999999887
+      },
+      "aten::div": {
+        "count": 210,
+        "self_cpu_us": 4008.9160000001066
+      },
+      "aten::add_": {
+        "count": 120,
+        "self_cpu_us": 1089.0899999999547
+      },
+      "aten::add": {
+        "count": 30,
+        "self_cpu_us": 543.2520000000259
+      },
+      "aten::item": {
+        "count": 30,
+        "self_cpu_us": 70.79799999995885
+      }
+    },
+    "notes": [
+      "Separate 30-update profiling: aten::div 240 -> 210; aten::add 60 -> 30; cudaDeviceSynchronize 61 -> 61. Profiling elapsed time is excluded from throughput comparisons.",
+      "FP32 throughput is essentially unchanged; do not interpret sub-percent differences as a speedup.",
+      "DDP/FSDP/DeepSpeed Stage 0 unequal-batch correctness passed with maximum parameter error 3.73e-9.",
+      "Full suites: remote 712 passed, 1 skipped; local CPU Torch 710 passed, 3 skipped.",
+      "Benchmark scope remains synthetic; no quality or real-dataset scaling claim.",
+      "Dual-GPU FP16 checkpoint/resume passed exact parameter, optimizer, scaler and rank-local RNG continuation."
+    ]
+  }
+}

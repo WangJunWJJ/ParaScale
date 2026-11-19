@@ -11,6 +11,7 @@ import inspect
 import time
 from typing import Any, Dict
 
+from .loss_weight import global_normalization, normalization_weight
 from .metrics import metric_value
 
 
@@ -46,14 +47,28 @@ class StepRunner:
                 self.engine.memory.elapsed_since(start),
             )
 
+        weight = normalization_weight(loss_fn, batch)
+        denominator, replicas, normalization_work = global_normalization(
+            weight, getattr(self.engine, "training_backend", None), model
+        )
         with self.engine.precision.autocast_context():
             output = model(**batch) if isinstance(batch, dict) else model(batch)
             loss = loss_fn(output, batch)
-        self.engine.backward(loss)
-        self.engine.step(optimizer)
-        self.engine.step_scheduler(scheduler)
+        if normalization_work is not None:
+            normalization_work.wait()
+        scale = denominator / (weight * replicas)
+        self.engine.backward(
+            loss if isinstance(scale, (int, float)) and scale == 1 else loss / scale
+        )
+        updated = self.engine.step(optimizer) is not False
+        if updated:
+            self.engine.step_scheduler(scheduler)
         self.engine.memory.synchronize_device()
-        metrics: Dict[str, Any] = {"loss": metric_value(loss)}
+        metrics: Dict[str, Any] = {
+            "loss": metric_value(loss),
+            "optimizer_updated": updated,
+            "loss_normalization_weight": weight,
+        }
         if not isinstance(batch, dict) and hasattr(batch, "__len__"):
             metrics["batch_size"] = len(batch)
         return self.engine._with_throughput_metrics(

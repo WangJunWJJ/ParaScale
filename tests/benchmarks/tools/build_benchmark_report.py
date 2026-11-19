@@ -22,6 +22,10 @@ SUMMARY_FILES = {
     "a6000_native_ddp_scaling": Path("a6000_native_ddp_scaling/summary.json"),
     "llama_quantization": Path("llama_quantization/summary.json"),
     "llama_distillation": Path("llama_distillation/summary.json"),
+    "architecture_contracts": Path("architecture_contracts/summary.json"),
+    "compression_portability": Path("compression_portability/summary.json"),
+    "detection_distillation": Path("detection_distillation/summary.json"),
+    "compression_examples": Path("compression_examples/summary.json"),
 }
 
 CONFIG_FILES = {
@@ -102,7 +106,33 @@ def build_report_markdown(
     )
     lines.extend(_quantization_section(summaries.get("llama_quantization", {})))
     lines.extend(_distillation_section(summaries.get("llama_distillation", {})))
+    lines.extend(
+        _detection_distillation_section(summaries.get("detection_distillation", {}))
+    )
+    lines.extend(
+        _architecture_contracts_section(summaries.get("architecture_contracts", {}))
+    )
+    lines.extend(
+        _compression_examples_section(summaries.get("compression_examples", {}))
+    )
     lines.extend(_evidence_links(report_root, summaries))
+    portability = summaries.get("compression_portability", {})
+    if portability.get("families"):
+        lines.extend(
+            [
+                "## Cross-model Compression Portability",
+                "",
+                portability["scope"],
+                "",
+                "| Family | PTQ/QAT | Distillation |",
+                "| --- | --- | --- |",
+            ]
+        )
+        for family in portability["families"]:
+            lines.append(
+                f"| {family['name']} | {family['quantization']} | {family['distillation']} |"
+            )
+        lines.extend(["", *portability.get("notes", []), ""])
     return "\n".join(lines).rstrip() + "\n"
 
 
@@ -123,6 +153,10 @@ def _overview_table(summaries: Dict[str, Dict[str, Any]]) -> List[str]:
         "a6000_native_ddp_scaling": "A6000 native-DDP scaling",
         "llama_quantization": "Llama reference PTQ/QAT smoke",
         "llama_distillation": "Llama online distillation smoke",
+        "architecture_contracts": "A6000 architecture contracts",
+        "compression_portability": "Cross-model compression portability",
+        "detection_distillation": "YOLO detection distillation",
+        "compression_examples": "Runnable compression examples",
     }
     for name, label in labels.items():
         summary = summaries.get(name, {"missing": True})
@@ -134,6 +168,104 @@ def _overview_table(summaries: Dict[str, Dict[str, Any]]) -> List[str]:
             f"| {label} | {status} | {hardware} | `{image}` | [{summary_link}]({summary_link}) |"
         )
     lines.append("")
+    return lines
+
+
+def _compression_examples_section(summary: Dict[str, Any]) -> List[str]:
+    if not summary.get("runs"):
+        return []
+    lines = [
+        "## Runnable Compression Examples",
+        "",
+        summary["scope"],
+        "",
+        "| Example | Device | Model/data source | Status |",
+        "| --- | --- | --- | --- |",
+    ]
+    for run in summary["runs"]:
+        lines.append(
+            f"| {run['example']} | {run['device']} | {run['source']} | {run['status']} |"
+        )
+    lines.extend(["", *summary.get("notes", []), ""])
+    return lines
+
+
+def _detection_distillation_section(summary: Dict[str, Any]) -> List[str]:
+    if not summary.get("aggregates"):
+        return []
+    lines = [
+        "## YOLO Detection Distillation",
+        "",
+        summary.get("scope", "Bounded functional and training-cost validation."),
+        "",
+        "| Mode | Step images/s (mean +/- sd) | End-to-end images/s | Peak allocated MiB | mAP50-95 (0-100) |",
+        "| --- | ---: | ---: | ---: | ---: |",
+    ]
+    for mode, row in summary["aggregates"].items():
+        speed = row["steady_state_images_per_second"]
+        e2e = row["end_to_end_images_per_second"]["mean"]
+        memory = row["cuda_peak_allocated_bytes"]["mean"] / 1024**2
+        maps = [
+            value["mAP50_95"]
+            for key, value in summary.get("evaluation", {}).items()
+            if key.startswith(mode + "_")
+        ]
+        quality = f"{100 * sum(maps) / len(maps):.2f}" if maps else "not evaluated"
+        lines.append(
+            f"| {mode} | {speed['mean']:.2f} +/- {speed['stdev']:.2f} | {e2e:.2f} | {memory:.1f} | {quality} |"
+        )
+    lines.extend(
+        [
+            "",
+            *summary.get("notes", []),
+            "",
+            "[Full measurements and validation scope](detection_distillation/summary.json)",
+            "",
+        ]
+    )
+    return lines
+
+
+def _architecture_contracts_section(summary: Dict[str, Any]) -> List[str]:
+    if not summary.get("performance"):
+        return []
+    lines = [
+        "## A6000 Architecture Contracts",
+        "",
+        summary["scope"],
+        "",
+        "| Precision | Baseline median samples/s | Fixed median samples/s | Change |",
+        "| --- | ---: | ---: | ---: |",
+    ]
+    for row in summary["performance"]:
+        lines.append(
+            f"| {row['precision']} | {row['baseline_median']:.1f} | "
+            f"{row['fixed_median']:.1f} | {row['change_percent']:+.2f}% |"
+        )
+    lines.extend(["", *summary.get("notes", []), ""])
+    for key, title in (
+        ("normalization_optimization", "Normalization Performance Optimization"),
+        ("accumulation_optimization", "Accumulation Statistics Optimization"),
+    ):
+        optimization = summary.get(key, {})
+        if not optimization:
+            continue
+        lines.extend(
+            [
+                f"### {title}",
+                "",
+                optimization["scope"],
+                "",
+                "| Precision | Before samples/s | After samples/s | Change |",
+                "| --- | ---: | ---: | ---: |",
+            ]
+        )
+        for row in optimization["performance"]:
+            lines.append(
+                f"| {row['precision']} | {row['before_median']:.1f} | "
+                f"{row['after_median']:.1f} | {row['change_percent']:+.2f}% |"
+            )
+        lines.extend(["", *optimization.get("notes", []), ""])
     return lines
 
 
