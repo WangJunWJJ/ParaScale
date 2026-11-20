@@ -1,0 +1,569 @@
+{
+  "mode": "train",
+  "dry_run": false,
+  "runtime_status": "real_local",
+  "capability_level": "local_native_clip_contrastive_datacomp_wds",
+  "synthetic": false,
+  "vision_synthetic": false,
+  "clip_contrastive": true,
+  "vlm_lora": false,
+  "yolo_world": false,
+  "yolo_detection": false,
+  "ground_dino": false,
+  "mock": false,
+  "workload": "clip_contrastive",
+  "data_type": "datacomp_wds",
+  "backend": "native_ddp",
+  "optimizer": {
+    "type": "adamw",
+    "state_schema_version": 1,
+    "group_size": null,
+    "compensate_quant_error": null,
+    "error_compensation_dtype": null,
+    "error_compensation_mode": null,
+    "trainable_params": 151277313
+  },
+  "global_step": 40,
+  "last_metrics": {
+    "loss": 0.0003208011912647635,
+    "optimizer_updated": true,
+    "loss_normalization_weight": 8.0,
+    "batch_size": 32,
+    "step_time_seconds": 0.2230834774672985,
+    "images": 32,
+    "images_per_second": 143.44406122452898,
+    "dataloader_wait_ms": 59.51090715825558,
+    "end_to_end_images_per_second": 113.23650341602132,
+    "peak_memory_bytes": 3132656640,
+    "allocated_memory_bytes": 2456334848
+  },
+  "metrics_history": [
+    {
+      "loss": 0.042729701846838,
+      "optimizer_updated": true,
+      "loss_normalization_weight": 8.0,
+      "batch_size": 32,
+      "step_time_seconds": 0.6548345722258091,
+      "images": 32,
+      "images_per_second": 48.86730383099767,
+      "dataloader_wait_ms": 94.93381716310978,
+      "end_to_end_images_per_second": 42.679846807199816,
+      "peak_memory_bytes": 3132656640,
+      "allocated_memory_bytes": 2456334848
+    },
+    {
+      "loss": 0.18064914643764496,
+      "optimizer_updated": true,
+      "loss_normalization_weight": 8.0,
+      "batch_size": 32,
+      "step_time_seconds": 0.2207446303218603,
+      "images": 32,
+      "images_per_second": 144.96388860441078,
+      "dataloader_wait_ms": 62.71813437342644,
+      "end_to_end_images_per_second": 112.88960662751934,
+      "peak_memory_bytes": 3132656640,
+      "allocated_memory_bytes": 2456334848
+    },
+    {
+      "loss": 0.057664401829242706,
+      "optimizer_updated": true,
+      "loss_normalization_weight": 8.0,
+      "batch_size": 32,
+      "step_time_seconds": 0.23380428738892078,
+      "images": 32,
+      "images_per_second": 136.86660906593954,
+      "dataloader_wait_ms": 53.37977223098278,
+      "end_to_end_images_per_second": 111.42679730327974,
+      "peak_memory_bytes": 3132656640,
+      "allocated_memory_bytes": 2456334848
+    },
+    {
+      "loss": 0.03393753618001938,
+      "optimizer_updated": true,
+      "loss_normalization_weight": 8.0,
+      "batch_size": 32,
+      "step_time_seconds": 0.2231656201183796,
+      "images": 32,
+      "images_per_second": 143.39126243112807,
+      "dataloader_wait_ms": 64.2577987164259,
+      "end_to_end_images_per_second": 111.33400378342785,
+      "peak_memory_bytes": 3132656640,
+      "allocated_memory_bytes": 2456334848
+    },
+    {
+      "loss": 3.6102770536672324e-05,
+      "optimizer_updated": true,
+      "loss_normalization_weight": 8.0,
+      "batch_size": 32,
+      "step_time_seconds": 0.22579546086490154,
+      "images": 32,
+      "images_per_second": 141.7211837537616,
+      "dataloader_wait_ms": 61.462277546525,
+      "end_to_end_images_per_second": 111.39821742301618,
+      "peak_memory_bytes": 3132656640,
+      "allocated_memory_bytes": 2456334848
+    },
+    {
+      "loss": 0.0010524413082748652,
+      "optimizer_updated": true,
+      "loss_normalization_weight": 8.0,
+      "batch_size": 32,
+      "step_time_seconds": 0.22313741594552994,
+      "images": 32,
+      "images_per_second": 143.40938683188622,
+      "dataloader_wait_ms": 63.4887907654047,
+      "end_to_end_images_per_second": 111.64366429435503,
+      "peak_memory_bytes": 3132656640,
+      "allocated_memory_bytes": 2456334848
+    },
+    {
+      "loss": 3.742719127330929e-05,
+      "optimizer_updated": true,
+      "loss_normalization_weight": 8.0,
+      "batch_size": 32,
+      "step_time_seconds": 0.23587610758841038,
+      "images": 32,
+      "images_per_second": 135.66443980768955,
+      "dataloader_wait_ms": 54.411495104432106,
+      "end_to_end_images_per_second": 110.23550335306487,
+      "peak_memory_bytes": 3132656640,
+      "allocated_memory_bytes": 2456334848
+    },
+    {
+      "loss": 2.235171905340394e-07,
+      "optimizer_updated": true,
+      "loss_normalization_weight": 8.0,
+      "batch_size": 32,
+      "step_time_seconds": 0.2252358365803957,
+      "images": 32,
+      "images_per_second": 142.07330629900858,
+      "dataloader_wait_ms": 58.50027874112129,
+      "end_to_end_images_per_second": 112.78084907780965,
+      "peak_memory_bytes": 3132656640,
+      "allocated_memory_bytes": 2456334848
+    },
+    {
+      "loss": 9.008554479805753e-05,
+      "optimizer_updated": true,
+      "loss_normalization_weight": 8.0,
+      "batch_size": 32,
+      "step_time_seconds": 0.2225196696817875,
+      "images": 32,
+      "images_per_second": 143.80751169441044,
+      "dataloader_wait_ms": 64.08579088747501,
+      "end_to_end_images_per_second": 111.65174570100949,
+      "peak_memory_bytes": 3132656640,
+      "allocated_memory_bytes": 2456334848
+    },
+    {
+      "loss": 0.0001781294122338295,
+      "optimizer_updated": true,
+      "loss_normalization_weight": 8.0,
+      "batch_size": 32,
+      "step_time_seconds": 0.2303672395646572,
+      "images": 32,
+      "images_per_second": 138.90864022363976,
+      "dataloader_wait_ms": 56.644257158041,
+      "end_to_end_images_per_second": 111.49379159162194,
+      "peak_memory_bytes": 3132656640,
+      "allocated_memory_bytes": 2456334848
+    },
+    {
+      "loss": 0.00014144285523798317,
+      "optimizer_updated": true,
+      "loss_normalization_weight": 8.0,
+      "batch_size": 32,
+      "step_time_seconds": 0.2258035894483328,
+      "images": 32,
+      "images_per_second": 141.71608200817408,
+      "dataloader_wait_ms": 64.2721876502037,
+      "end_to_end_images_per_second": 110.31600197740691,
+      "peak_memory_bytes": 3132656640,
+      "allocated_memory_bytes": 2456334848
+    },
+    {
+      "loss": 0.00035834568552672863,
+      "optimizer_updated": true,
+      "loss_normalization_weight": 8.0,
+      "batch_size": 32,
+      "step_time_seconds": 0.23281865939497948,
+      "images": 32,
+      "images_per_second": 137.44602809395806,
+      "dataloader_wait_ms": 60.01759693026543,
+      "end_to_end_images_per_second": 109.276086238647,
+      "peak_memory_bytes": 3132656640,
+      "allocated_memory_bytes": 2456334848
+    },
+    {
+      "loss": 0.0001363822811981663,
+      "optimizer_updated": true,
+      "loss_normalization_weight": 8.0,
+      "batch_size": 32,
+      "step_time_seconds": 0.23487248085439205,
+      "images": 32,
+      "images_per_second": 136.24414356077003,
+      "dataloader_wait_ms": 54.87018823623657,
+      "end_to_end_images_per_second": 110.44282880541395,
+      "peak_memory_bytes": 3132656640,
+      "allocated_memory_bytes": 2456334848
+    },
+    {
+      "loss": 2.9578582143585663e-06,
+      "optimizer_updated": true,
+      "loss_normalization_weight": 8.0,
+      "batch_size": 32,
+      "step_time_seconds": 0.23916328884661198,
+      "images": 32,
+      "images_per_second": 133.79979910095352,
+      "dataloader_wait_ms": 54.85624261200428,
+      "end_to_end_images_per_second": 108.83630703460274,
+      "peak_memory_bytes": 3132656640,
+      "allocated_memory_bytes": 2456334848
+    },
+    {
+      "loss": 0.0006666744011454284,
+      "optimizer_updated": true,
+      "loss_normalization_weight": 8.0,
+      "batch_size": 32,
+      "step_time_seconds": 0.24262355081737041,
+      "images": 32,
+      "images_per_second": 131.89156572886571,
+      "dataloader_wait_ms": 55.79746700823307,
+      "end_to_end_images_per_second": 107.23105307113697,
+      "peak_memory_bytes": 3132656640,
+      "allocated_memory_bytes": 2456334848
+    },
+    {
+      "loss": 0.25292202830314636,
+      "optimizer_updated": true,
+      "loss_normalization_weight": 8.0,
+      "batch_size": 32,
+      "step_time_seconds": 0.23780115507543087,
+      "images": 32,
+      "images_per_second": 134.5662092761894,
+      "dataloader_wait_ms": 70.6406868994236,
+      "end_to_end_images_per_second": 103.74727305191226,
+      "peak_memory_bytes": 3132656640,
+      "allocated_memory_bytes": 2456334848
+    },
+    {
+      "loss": 0.0931893065571785,
+      "optimizer_updated": true,
+      "loss_normalization_weight": 8.0,
+      "batch_size": 32,
+      "step_time_seconds": 0.22822959534823895,
+      "images": 32,
+      "images_per_second": 140.2096864395414,
+      "dataloader_wait_ms": 65.34568592905998,
+      "end_to_end_images_per_second": 109.00100260748499,
+      "peak_memory_bytes": 3132656640,
+      "allocated_memory_bytes": 2456334848
+    },
+    {
+      "loss": 0.00011977496615145355,
+      "optimizer_updated": true,
+      "loss_normalization_weight": 8.0,
+      "batch_size": 32,
+      "step_time_seconds": 0.23082165606319904,
+      "images": 32,
+      "images_per_second": 138.63517204485524,
+      "dataloader_wait_ms": 64.04690258204937,
+      "end_to_end_images_per_second": 108.5229301727577,
+      "peak_memory_bytes": 3132656640,
+      "allocated_memory_bytes": 2456334848
+    },
+    {
+      "loss": 2.589342329883948e-05,
+      "optimizer_updated": true,
+      "loss_normalization_weight": 8.0,
+      "batch_size": 32,
+      "step_time_seconds": 0.23369652964174747,
+      "images": 32,
+      "images_per_second": 136.92971842181575,
+      "dataloader_wait_ms": 62.99458257853985,
+      "end_to_end_images_per_second": 107.8562811016753,
+      "peak_memory_bytes": 3132656640,
+      "allocated_memory_bytes": 2456334848
+    },
+    {
+      "loss": 0.0003208011912647635,
+      "optimizer_updated": true,
+      "loss_normalization_weight": 8.0,
+      "batch_size": 32,
+      "step_time_seconds": 0.2230834774672985,
+      "images": 32,
+      "images_per_second": 143.44406122452898,
+      "dataloader_wait_ms": 59.51090715825558,
+      "end_to_end_images_per_second": 113.23650341602132,
+      "peak_memory_bytes": 3132656640,
+      "allocated_memory_bytes": 2456334848
+    }
+  ],
+  "metrics_history_dropped": 0,
+  "metrics_history_scope": "current invocation, most recent bounded window",
+  "train_device": "cuda:0",
+  "elapsed_seconds": 27.75637978874147,
+  "steps_per_second": 0.7205550634565244,
+  "checkpoint": "/experiment/long-run-state-v2/native_ddp_4gpu/checkpoints/step-00000040/manifest.json",
+  "checkpoint_validation": {
+    "ok": true,
+    "checked_files": 5,
+    "checked_directories": 0,
+    "missing": [],
+    "checksum_mismatches": [],
+    "size_mismatches": [],
+    "errors": []
+  },
+  "resumed_from": {
+    "format": "parascale_manifest_v1",
+    "schema_version": 2,
+    "step": 20,
+    "global_step": 20,
+    "consumed_samples": 640,
+    "consumed_tokens": 0,
+    "backend": "native_ddp",
+    "parallel_plan": {
+      "backend": "native_ddp",
+      "dp_size": 4,
+      "tp_size": 1,
+      "pp_size": 1,
+      "strategy_type": "data",
+      "zero_stage": 0,
+      "zero_offload": false,
+      "precision": "bf16",
+      "fsdp_state_dict_type": "full",
+      "ddp_comm_hook": "none",
+      "ddp_bucket_cap_mb": null,
+      "ddp_gradient_as_bucket_view": true,
+      "ddp_static_graph": true,
+      "activation_checkpointing": false,
+      "batch_policy": "sample",
+      "max_tokens_per_batch": null,
+      "checkpoint_policy": "rank0_file",
+      "estimated_memory_per_gpu": 1,
+      "estimated_total_training_memory": 0,
+      "reasons": [
+        "Using user-requested backend: native_ddp."
+      ],
+      "warnings": [],
+      "topology": {},
+      "communication_plan": {
+        "backend": "native_ddp",
+        "ddp_hook": "none",
+        "bucket_cap_mb": null,
+        "use_no_sync": false,
+        "adapter_only_sync": false,
+        "overlap_h2d": false,
+        "reasons": [
+          "Verified CLIP/DataComp native-DDP path benefits from bf16 gradient compression."
+        ],
+        "evidence": {
+          "precision": "bf16",
+          "task_type": "multimodal",
+          "model_family": "clip",
+          "gradient_accumulation_steps": 1,
+          "trainable_ratio": null,
+          "dataloader_wait_ms": 0.0,
+          "bucket_cap_mb": null
+        }
+      }
+    },
+    "rng_state": {},
+    "data_state": {
+      "consumed_micro_batches": 20,
+      "resume_mode": "state_dict",
+      "state": {
+        "identity": {
+          "version": 1,
+          "shards": [
+            [
+              "0.tar",
+              "6ff5f158efe4edf14e293d8d90026cd90d3c87225160168a14e34a3263010f6a"
+            ],
+            [
+              "1.tar",
+              "a92204108442924bb3c973cb61698c8182817ab899660153e3cd1ca4247b9a39"
+            ],
+            [
+              "2.tar",
+              "9603258264a334a7da286b58b0f44e5dcffa73a95c89f549cb3ed7242a5c8eba"
+            ],
+            [
+              "3.tar",
+              "77f13712d38a6ddccbd1a131b7f1fb1826bd33900f3856b61c26bf7f3795b3d4"
+            ]
+          ],
+          "rank": 0,
+          "world_size": 4,
+          "batch_size": 8,
+          "model": "/assets/openai_clip-vit-base-patch32-pytorch",
+          "text_length": 64
+        },
+        "position": 160
+      },
+      "target": "dataloader"
+    },
+    "files": [
+      {
+        "path": "backend_state.pt",
+        "role": "backend_state",
+        "format": "torch",
+        "entry_type": "file",
+        "size_bytes": 1815846733,
+        "sha256": "e8f6f8e097008457088f6f31e692a2256b3e4a26831160d3bfe9cf2eb33c7521"
+      },
+      {
+        "path": "rank-00000/runtime_state.pt",
+        "role": "runtime_state",
+        "format": "torch",
+        "rank": 0,
+        "entry_type": "file",
+        "size_bytes": 15564,
+        "sha256": "585abe92d65bcfa35c33c04b10aba267e07e889a7cf7c4389772b9151558b6bd"
+      },
+      {
+        "path": "rank-00001/runtime_state.pt",
+        "role": "runtime_state",
+        "format": "torch",
+        "rank": 1,
+        "entry_type": "file",
+        "size_bytes": 15500,
+        "sha256": "c5fd392a3f21bcd0384e1c252282729f5a5984c917f79f9653af9c66b88e204c"
+      },
+      {
+        "path": "rank-00002/runtime_state.pt",
+        "role": "runtime_state",
+        "format": "torch",
+        "rank": 2,
+        "entry_type": "file",
+        "size_bytes": 15436,
+        "sha256": "4bf2cc235039e18f0d76debefb172eca6fa40d74d8f0cc998f434834d3f51b88"
+      },
+      {
+        "path": "rank-00003/runtime_state.pt",
+        "role": "runtime_state",
+        "format": "torch",
+        "rank": 3,
+        "entry_type": "file",
+        "size_bytes": 15500,
+        "sha256": "550613d3daaa96faa9c7d4a6a4a567e66997427a89de0c9aa4857829cc1dcc10"
+      }
+    ],
+    "shards": [],
+    "metadata": {
+      "last_metrics": {
+        "loss": 0.00011179222201462835,
+        "optimizer_updated": true,
+        "loss_normalization_weight": 8.0,
+        "batch_size": 32,
+        "step_time_seconds": 0.24384653568267822,
+        "images": 32,
+        "images_per_second": 131.23007841965884,
+        "dataloader_wait_ms": 55.15364371240139,
+        "end_to_end_images_per_second": 107.02334715899036,
+        "peak_memory_bytes": 3130133504,
+        "allocated_memory_bytes": 2455974400
+      },
+      "retention_managed": true,
+      "backend_state_written": true,
+      "backend_specific_checkpoint": false,
+      "rank": 0,
+      "world_size": 4,
+      "rank_count": 4,
+      "runtime_state_version": 1,
+      "optimizer": {
+        "type": "adamw",
+        "state_schema_version": 1,
+        "group_size": null,
+        "compensate_quant_error": null,
+        "error_compensation_dtype": null,
+        "error_compensation_mode": null,
+        "trainable_params": 151277313
+      },
+      "distributed_backend": "nccl",
+      "shard_count": 1,
+      "state_dict_type": "portable",
+      "checkpoint_write_policy": "rank0_manifest",
+      "scheduler_state_written": false,
+      "runtime_state_loaded": true,
+      "backend_state_loaded": true
+    }
+  },
+  "checkpoint_recovery": {
+    "strategy": "latest_valid",
+    "selected_step": 20,
+    "skipped": [
+      {
+        "step": 40,
+        "path": "/experiment/long-run-state-v2/native_ddp_4gpu/checkpoints/step-00000040/manifest.json",
+        "reason": "checkpoint integrity failed: {'ok': False, 'checked_files': 5, 'checked_directories': 0, 'missing': [], 'checksum_mismatches': [{'path': 'backend_state.pt', 'expected': '476564a6e0af825af17e52256517419a020e2851405b74cef62f9c39ca3a271b', 'actual': 'db29896859b3f1f509fe7a5410e688b547c8f47907dfefcb8c18ba9225c0f6ec'}], 'size_mismatches': [{'path': 'backend_state.pt', 'expected': 1815846733, 'actual': 19}], 'errors': []}"
+      }
+    ]
+  },
+  "quantization": null,
+  "distillation": null,
+  "strategy_plan": {
+    "backend": "native_ddp",
+    "dp_size": 4,
+    "tp_size": 1,
+    "pp_size": 1,
+    "strategy_type": "data",
+    "zero_stage": 0,
+    "zero_offload": false,
+    "precision": "bf16",
+    "fsdp_state_dict_type": "full",
+    "ddp_comm_hook": "none",
+    "ddp_bucket_cap_mb": null,
+    "ddp_gradient_as_bucket_view": true,
+    "ddp_static_graph": true,
+    "activation_checkpointing": false,
+    "batch_policy": "sample",
+    "max_tokens_per_batch": null,
+    "checkpoint_policy": "rank0_file",
+    "estimated_memory_per_gpu": 1,
+    "estimated_total_training_memory": 0,
+    "reasons": [
+      "Using user-requested backend: native_ddp."
+    ],
+    "warnings": [],
+    "topology": {},
+    "communication_plan": {
+      "backend": "native_ddp",
+      "ddp_hook": "none",
+      "bucket_cap_mb": null,
+      "use_no_sync": false,
+      "adapter_only_sync": false,
+      "overlap_h2d": false,
+      "reasons": [
+        "Verified CLIP/DataComp native-DDP path benefits from bf16 gradient compression."
+      ],
+      "evidence": {
+        "precision": "bf16",
+        "task_type": "multimodal",
+        "model_family": "clip",
+        "gradient_accumulation_steps": 1,
+        "trainable_ratio": null,
+        "dataloader_wait_ms": 0.0,
+        "bucket_cap_mb": null
+      }
+    }
+  },
+  "config_artifacts": {
+    "run_dir": "/experiment/long-run-state-v2/native_ddp_4gpu",
+    "resolved_config": "/experiment/long-run-state-v2/native_ddp_4gpu/config.resolved.json",
+    "deepspeed_final_config": null
+  },
+  "evidence": {
+    "mode": "train",
+    "dry_run": false,
+    "runtime_status": "real_local",
+    "capability_level": "local_native_clip_contrastive_datacomp_wds",
+    "mock": false,
+    "synthetic": false,
+    "config_artifacts": {
+      "run_dir": "/experiment/long-run-state-v2/native_ddp_4gpu",
+      "resolved_config": "/experiment/long-run-state-v2/native_ddp_4gpu/config.resolved.json",
+      "deepspeed_final_config": null
+    }
+  }
+}

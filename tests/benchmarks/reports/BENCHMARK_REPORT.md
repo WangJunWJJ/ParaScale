@@ -30,6 +30,7 @@ python tests/benchmarks/tools/build_benchmark_report.py --report-root tests/benc
 | Cross-model compression portability | recorded | Local CPU and 1x RTX A6000, host 156 | `parascale-quantization:a6000-torch25-transformers451` | [compression_portability/summary.json](compression_portability/summary.json) |
 | YOLO detection distillation | recorded | 192.168.8.156, single RTX A6000 (logical CUDA 0) | `parascale-detection:a6000-ultralytics83161` | [detection_distillation/summary.json](detection_distillation/summary.json) |
 | Runnable compression examples | recorded | Windows CPU and one NVIDIA RTX A6000 (host 156, physical GPU 0) | `parascale-detection:a6000-ultralytics83161` | [compression_examples/summary.json](compression_examples/summary.json) |
+| A6000 real CLIP recovery | recorded | Host 156, NVIDIA RTX A6000, single-node 1/2/4 GPUs | `parascale-detection:a6000-ultralytics83161` | [clip_recovery/summary.json](clip_recovery/summary.json) |
 
 ## Evidence Quality
 
@@ -316,6 +317,84 @@ Final local source validation: 796 passed, 7 skipped. CPU timing overlapped loca
 | compression_portability | [compression_portability/summary.json](compression_portability/summary.json) | n/a |
 | detection_distillation | [detection_distillation/summary.json](detection_distillation/summary.json) | n/a |
 | compression_examples | [compression_examples/summary.json](compression_examples/summary.json) | n/a |
+| clip_recovery | [clip_recovery/summary.json](clip_recovery/summary.json) | n/a |
+
+## A6000 Real CLIP Recovery
+
+COCO val2017, first 512 image IDs and first annotation by ID; WDS format, NOT DataComp
+
+FP32, batch 8/rank, 40 baseline steps; corrupt step 40, recover step 20 and train 20 more steps. This is bounded recovery evidence, not DataComp quality or 24-hour production certification. End-to-end throughput includes process/model startup and checkpoint writes; no warmup exclusion. CLIP uses rank-local negatives, so different world sizes are not equivalent global-negative objectives.
+
+| GPUs | Physical IDs | Status | End-to-end images/s | Final rank-0 loss | Weight bytes match after resume |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 0 | passed | 5.58 | 0.377918004989624 | True |
+| 2 | 0,1 | passed | 9.97 | 0.0007917045149952173 | True |
+| 4 | 0,1,3,4 | recovered_nonidentical | 19.70 | 0.0014645284973084927 | False |
+
+2026-11-20 production follow-up: [acceptance gate record](clip_recovery/production_gates/summary.json). Two- and four-GPU real CLIP jobs survived intentional launcher-group SIGKILL at checkpoint 20 and resumed to step 100 with valid checkpoints. A separate four-GPU FP16/GAS=2 small-model contract preserved model, optimizer, scaler and rank RNG state. These are bounded recovery gates, not production certification.
+Before the long-run safeguards patch, blockers included missing checkpoint retention, unbounded metric history, and replay-based data restoration. One measured checkpoint was 1,815,890,717 bytes; the old CPU bookkeeping retained all 100,000 rows and allocated about 49.6 MB. The follow-up below addresses these bounded-resource/recovery paths, but held-out retrieval thresholds and a 24-hour soak remain outstanding.
+All three cases completed real 151,277,313-parameter pretrained CLIP FP32 training, detected corrupt step 40, selected step 20, and reached step 40 with valid checkpoints.
+One and two GPUs matched model tensor bytes exactly after resume. Four GPUs with default DDP did not; the follow-up parity investigation below quantifies the difference and validates an opt-in mitigation. Default four-GPU exact-recovery acceptance remains blocked.
+The original launcher classified execution success as passed even when the weight comparison was false. This curated summary classifies that case as recovered_nonidentical and the suite as partial; the checked-in launcher now applies this stricter classification.
+An initial bootstrap run used synthetic_regression because training.workload was absent. Those results are excluded; configuration regression and runtime assertions now reject that fallback. The source archive predates the config correction; actual executed config snapshots and validation script SHA256 are archived alongside this summary.
+Persistent checkpoints are retained under /home/user/wangjun/parascale_production_20261120/persistent on host 156 (about 11 GiB); filesystem.txt records the disk. Earlier tmpfs bootstrap evidence is not used.
+No new model download was needed. The existing openai CLIP ViT-B/32 weights and 512 COCO image-caption pairs were hashed and decoded; inputs.json records exact identities. The misleading datacomp_10k_wds directory was not used for accepted runs.
+DataComp metadata source: https://huggingface.co/datasets/mlfoundations/datacomp_small ; official acquisition implementation: https://github.com/mlfoundations/datacomp . Direct access and hf-mirror access from host 156 both timed out. This is COCO WDS validation, not DataComp dataset or paper reproduction.
+Each case ran once. No held-out quality evaluation, repeated timing confidence interval, forced rank termination, or 24-hour soak was completed. Runtime loss and rank-0 memory are diagnostics, not comparative quality evidence. Logs remain on the server and in the local artifact directory.
+
+### Four-GPU Recovery Investigation
+
+| Comparison | Model max absolute error | Model relative L2 | Optimizer max absolute error | Evidence |
+| --- | --- | --- | --- | --- |
+| Default DDP: continuous A vs B, step 40 | 0.000000e+00 | 0.000000e+00 | 0.000000e+00 | [clip_recovery/parity_default/comparison.json](clip_recovery/parity_default/comparison.json) |
+| Default DDP: continuous vs resumed, step 40 | 9.289943e-07 | 6.430948e-08 | 4.860200e-05 | [clip_recovery/parity_default/comparison.json](clip_recovery/parity_default/comparison.json) |
+| find_unused_parameters=True: continuous A vs B, step 40 | 0.000000e+00 | 0.000000e+00 | 0.000000e+00 | [clip_recovery/parity_fixed_buckets/comparison.json](clip_recovery/parity_fixed_buckets/comparison.json) |
+| find_unused_parameters=True: continuous vs resumed, step 40 | 0.000000e+00 | 0.000000e+00 | 0.000000e+00 | [clip_recovery/parity_fixed_buckets/comparison.json](clip_recovery/parity_fixed_buckets/comparison.json) |
+
+2026-11-20 follow-up: two independent continuous runs plus a step-20 continuation were executed for each setting on GPUs 0,1,3,4. Full model and optimizer tensors were compared; complete checkpoints remain on host 156 under parascale_production_20261120/parity-probe.
+Default continuous runs were bitwise identical at steps 20 and 40. Resume divergence is reproducible, affects 90,792,875 model elements, and has relative L2 about 6.43e-8. Rank-0 loss first differs at step 30 in the original recorded trajectory. These are numerical diagnostics, not held-out quality measurements.
+Setting parascale.ddp_find_unused_parameters=true removed both model and optimizer differences within the tested configuration. This supports a DDP bucketing/reduction-path explanation, but no reducer-level trace was captured, so the specific mechanism is still an inference. See [PyTorch DDP design](https://docs.pytorch.org/docs/stable/notes/ddp) and [performance tuning guidance](https://docs.pytorch.org/tutorials/recipes/recipes/tuning_guide.html).
+This is an opt-in mitigation for the tested CLIP/Torch 2.5.0a0 environment, not a global default or cross-version guarantee. The extra graph traversal produces a PyTorch warning and can cost performance. For continuous_a steps 11-40, mean step time was 0.163648 s default versus 0.177359 s with the option (+8.4%); mean dataloader wait was 77.398 ms versus 80.997 ms. Single paired short runs, no confidence interval or general speed claim.
+The fixed-bucket trajectory itself differs from the default trajectory, so changing this option is a new experimental condition, not a bitwise-compatible migration of an existing run. Keep it unchanged across initial training and resume.
+DataComp acquisition under E:/ParaScale-data/datacomp_small_20261120 initially failed with 429/503, DNS failures, and a 60-second metadata timeout. Attempt 04 used a 180-second metadata timeout and obtained a verified 120,845,372-byte parquet plus 333 decoded image-caption pairs in 600.81 seconds (requested 512, attempted 1440). This is a partial availability-biased subset, not a full track. See [download evidence](clip_recovery/datacomp_download_attempt04.json) and [artifact hashes](clip_recovery/datacomp_SHA256SUMS.txt).
+Of the 333 downloaded images, 208 matched the metadata's original SHA256 and 125 did not. Original/processed hashes and captions are retained in manifest.jsonl; transformed images use thumbnail resizing and face-box blurring. This is not historical-byte reproduction or evidence of model quality. Local decoded/hash preflight passed; the downloaded subset is supplemental to the separately measured 145-to-156 WDS run.
+
+### Additional Real-Data Recovery
+
+Flickr8k-labeled existing WDS transferred from host 145 to 156: 6000 decoded image-caption pairs, 4 shards, 850780160 bytes. Original download and split provenance unverified.
+
+[Raw results](clip_recovery/flickr/summary.json)
+
+| GPUs | Status | Whole-job seconds | Weight bytes match after resume |
+| --- | --- | --- | --- |
+| 1 | passed | 57.399362210184336 | True |
+| 2 | passed | 65.32099313102663 | True |
+| 4 | passed | 66.22726489789784 | True |
+
+All runs use pretrained CLIP ViT-B/32, FP32, batch 8/rank and 40 baseline steps. Multi-GPU runs set ddp_find_unused_parameters=true from the start; GPU IDs are 0, 0/1 and 0/1/3/4. Loss was finite throughout. Corrupt step 40 was rejected, step 20 selected and 20 more steps executed. Final model tensor bytes matched in all three cases. Optimizer parity was not separately compared for this dataset.
+[Transfer and preflight evidence](clip_recovery/flickr_transfer.json): all source/destination shard hashes matched, and all 6000 jpg/txt pairs were decoded. Captions can be multiline; text_length remains 64. Full per-sample identities, model hashes, config snapshots, logs and raw metrics are in clip_recovery/flickr/.
+Whole-job timing includes startup and checkpoints; one short run per GPU count. This does not establish steady-state throughput, comparable global-negative training objectives, held-out retrieval quality, or 24-hour production readiness.
+DataComp supplemental acquisition is separate: [transfer receipt](clip_recovery/datacomp_transfer.json) records 333 verified pairs copied from E: to host 156. All six artifacts passed remote SHA256 checks and all 333 images/captions passed remote preflight; no GPU training was performed on that partial subset in this round.
+
+### Additional Real-Data Recovery
+
+Long-run safeguards follow-up: the same 6000-pair Flickr8k-labeled WDS and pretrained CLIP ViT-B/32 on host 156, with rank-local seekable cursors.
+
+[Raw results](clip_recovery/long_run_fixes/summary.json)
+
+| GPUs | Status | Whole-job seconds | Weight bytes match after resume |
+| --- | --- | --- | --- |
+| 1 | passed | 78.6574117206037 | True |
+| 2 | passed | 83.93334454484284 | True |
+| 4 | passed | 89.75033999234438 | True |
+
+All three runs rejected corrupt step 40, selected step 20, and completed 20 additional steps with bitwise-identical final model weights. FP32, batch 8/rank; DDP uses find_unused_parameters=true throughout. These are short recovery checks, not optimizer-parity or held-out quality measurements.
+This follow-up uses state_dict data resume, not replay-skip. Each rank now saves its own cursor in its runtime sidecar. Dataset hashes, exact configs, manifests, losses and logs are under clip_recovery/long_run_fixes/.
+Executed source archive on host 156: long-run-fixes-v2.tar, SHA256 1027e7284fec3f6beb8d9f2ce51bc8e50cc9c26734863d6b1ca29356fb3b2699. Final review subsequently preserved explicit sample limits/partial batches, existing local-cache routing, and symlink-target protection; these receive separate final-source validation below. Do not treat the v2 archive as the final complete patch.
+Whole-job times include additional dataset hashing/indexing and checkpoint integrity checks. This round does not establish a throughput improvement or statistical comparison against the earlier implementation. A cursor avoids replay preprocessing but still rebuilds the shard index on startup.
+Final-source rolling-retention validation: [evidence](clip_recovery/long_run_limits/summary.json). Four GPUs trained six real CLIP steps, saving at steps 2/4/6 with keep_last=2; only steps 4/6 remained and both passed integrity validation. All eight rank-local cursors were checked (positions 32 and 48). Metrics retained three rows and reported three dropped rows.
+Final local suite: 850 passed, 10 skipped; Linux long-run-limit suite: 9 passed, including the symlink test blocked by Windows permissions. A 100,000-step CPU bookkeeping probe retained 1,000 metric rows and counted 99,000 omitted rows; tracemalloc current allocation was 204,024 bytes. This is not process RSS or GPU memory measurement.
+The remaining release gates are held-out retrieval quality with agreed thresholds, 24-hour stability, individual-rank/partial-write fault injection, and broader worker/prefetch/backend coverage. The automatic retention policy covers native/native_ddp managed checkpoints only.
 
 ## Cross-model Compression Portability
 

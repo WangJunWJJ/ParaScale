@@ -1,0 +1,80 @@
+{
+  "status": "passed",
+  "dataset": "Existing WDS at /experiment/datasets/flickr8k_from145/train, 6000 decoded pairs; source provenance must be reviewed separately",
+  "find_unused_parameters_override": true,
+  "torch": "2.5.0a0+872d972e41.nv24.08",
+  "transformers": "4.51.3",
+  "cuda": "12.6",
+  "storage": "caller-provided scratch; see recorded filesystem evidence",
+  "runs": [
+    {
+      "world_size": 1,
+      "devices": "0",
+      "status": "passed",
+      "baseline_wall_seconds": 57.399362210184336,
+      "recovery_wall_seconds": 50.82877313159406,
+      "weights_bitwise_equal": true,
+      "baseline_weights_sha256": "e9bef223510824ff200c3e8ccf5d63c67870ae15f3404432f15f140e105c227e",
+      "recovered_weights_sha256": "e9bef223510824ff200c3e8ccf5d63c67870ae15f3404432f15f140e105c227e",
+      "last_metrics": {
+        "loss": 0.00020020878582727164,
+        "optimizer_updated": true,
+        "loss_normalization_weight": 8.0,
+        "batch_size": 8,
+        "step_time_seconds": 0.05235094577074051,
+        "images": 8,
+        "images_per_second": 152.81481322294053,
+        "dataloader_wait_ms": 53.964974358677864,
+        "end_to_end_images_per_second": 75.24743227789027,
+        "peak_memory_bytes": 3066333696,
+        "allocated_memory_bytes": 1833320448
+      }
+    },
+    {
+      "world_size": 2,
+      "devices": "0,1",
+      "status": "passed",
+      "baseline_wall_seconds": 65.32099313102663,
+      "recovery_wall_seconds": 57.253701535984874,
+      "weights_bitwise_equal": true,
+      "baseline_weights_sha256": "0176da9fe64801a536095531c9600f4070e0b2b9af74ce2fcbfc461211dfe20f",
+      "recovered_weights_sha256": "0176da9fe64801a536095531c9600f4070e0b2b9af74ce2fcbfc461211dfe20f",
+      "last_metrics": {
+        "loss": 0.0005180345033295453,
+        "optimizer_updated": true,
+        "loss_normalization_weight": 8.0,
+        "batch_size": 16,
+        "step_time_seconds": 0.14811505936086178,
+        "images": 16,
+        "images_per_second": 108.02412711470629,
+        "dataloader_wait_ms": 56.016745045781136,
+        "end_to_end_images_per_second": 78.3807307563256,
+        "peak_memory_bytes": 3130134016,
+        "allocated_memory_bytes": 2455974912
+      }
+    },
+    {
+      "world_size": 4,
+      "devices": "0,1,3,4",
+      "status": "passed",
+      "baseline_wall_seconds": 66.22726489789784,
+      "recovery_wall_seconds": 56.193617921322584,
+      "weights_bitwise_equal": true,
+      "baseline_weights_sha256": "5fb1c28c27af7a2a79cbc55d63a446546bb767b1348d49a02ddeb9806fccbf19",
+      "recovered_weights_sha256": "5fb1c28c27af7a2a79cbc55d63a446546bb767b1348d49a02ddeb9806fccbf19",
+      "last_metrics": {
+        "loss": 0.0003208011912647635,
+        "optimizer_updated": true,
+        "loss_normalization_weight": 8.0,
+        "batch_size": 32,
+        "step_time_seconds": 0.17766593769192696,
+        "images": 32,
+        "images_per_second": 180.11330936990328,
+        "dataloader_wait_ms": 57.17954412102699,
+        "end_to_end_images_per_second": 136.25980688649935,
+        "peak_memory_bytes": 3130134016,
+        "allocated_memory_bytes": 2455974912
+      }
+    }
+  ]
+}

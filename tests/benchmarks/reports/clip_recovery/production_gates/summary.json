@@ -1,0 +1,58 @@
+{
+  "date": "2026-11-20",
+  "status": "not_production_ready",
+  "source_revision": "8eff1aa with previously recorded configuration/test overlays; no core edits in this gate run",
+  "scope": "Host 156, single-node A6000 native/DDP CLIP candidate. No claim for other backends, models or devices.",
+  "process_group_restart": [
+    {"world_size": 2, "devices": "0,1", "status": "passed", "intentional_exit_code": -9, "checkpoint_step": 20, "final_step": 100, "resume_exit_code": 0, "checkpoint_valid": true, "evidence": "kill2/summary.json"},
+    {"world_size": 4, "devices": "0,1,3,4", "status": "passed", "intentional_exit_code": -9, "checkpoint_step": 20, "final_step": 100, "resume_exit_code": 0, "checkpoint_valid": true, "evidence": "kill4/summary.json"}
+  ],
+  "restart_limits": [
+    "Real pretrained 151277313-parameter CLIP, FP32, Flickr8k-labeled 6000-pair WDS; non-synthetic payload checked. Scenario key clip-datacomp-golden is a launcher template, not the dataset identity.",
+    "SIGKILL targeted the dedicated launcher process group after step 20 publication. This does not cover killing an individual rank, interrupting a partial write or exhausting disk capacity.",
+    "These gates verify successful continuation to step 100 and valid final checkpoints. No uninterrupted step-100 parameter comparison was performed in this round.",
+    "Runtime artifact paths inherited from the base config were isolated with dedicated kill2-runtime/kill4-runtime Docker mounts over /experiment/flickr-persistent, protecting earlier results. Core scenario config currently does not isolate runtime.run_dir itself."
+  ],
+  "fp16_contract": {
+    "status": "passed",
+    "world_size": 4,
+    "gradient_accumulation_steps": 2,
+    "steps": 4,
+    "save_step": 2,
+    "scope": "Existing distributed_checkpoint_contracts.py, small generated training case on real CUDA/NCCL; not CLIP quality or throughput",
+    "exact_state": ["model", "optimizer", "precision_scaler", "rank_rng"],
+    "checkpoint_dir": "/home/user/wangjun/parascale_production_20261120/production-gates/fp16-contract4/40f338eb0b5843e9af174879bbd5bac4",
+    "warnings": ["deprecated torch.cuda.amp.GradScaler API", "replay-skip data restoration"]
+  },
+  "packaging": {
+    "status": "build_and_cli_checks_passed",
+    "artifact_directory": "E:/ParaScale-data/production_gate_20261120/dist",
+    "wheel_sha256": "2408e8bc8a2a61bdaf1e17e564a4bb8b2ebab19054d7820d229c9b750e150e7d",
+    "sdist_sha256": "56bf0f5935549204a32499f40970d74434c760af8790d2cd5c4506158e20f2a1",
+    "wheel_python_files": 204,
+    "wheel_source_byte_mismatches": 0,
+    "checks": ["sdist and wheel build", "fresh venv --no-deps installation", "python -I CLI help outside source tree", "production 1gpu JSON dry-run outside source tree"],
+    "limits": "Local acceptance build keeps existing version 0.2.0; not published and no tag changed. This is not complete dependency installation or an installed-wheel GPU run."
+  },
+  "resource_observations": {
+    "measured_two_gpu_checkpoint_bytes": 1815890717,
+    "checkpoint_retention_implemented": false,
+    "metrics_history_limit_implemented": false,
+    "cpu_bookkeeping_only": [
+      {"steps": 10000, "retained_rows": 10000, "allocated_bytes_over_initial": 4994434},
+      {"steps": 50000, "retained_rows": 50000, "allocated_bytes_over_initial": 24873799},
+      {"steps": 100000, "retained_rows": 100000, "allocated_bytes_over_initial": 49634069}
+    ],
+    "measurement_method": "Python tracemalloc around TrainEngine.record_step with measured CLIP metric keys and varying float loss. No GPU training; not process RSS or GPU memory.",
+    "data_resume": "CLIP loader exposes no state protocol; currently replays all consumed micro-batches before resuming. Long-run recovery latency is not bounded by a production SLA."
+  },
+  "required_before_production_acceptance": [
+    "Bound checkpoint disk use while preserving validated recovery states and refusing unsafe deletion.",
+    "Bound retained metrics and preserve auditable streamed/aggregate observations.",
+    "Isolate run artifacts; validate data/config identity and bound data restoration latency.",
+    "Use disjoint, provenance-checked training and held-out retrieval data with agreed quality thresholds.",
+    "Measure repeated same-objective native PyTorch comparison and multi-GPU scaling.",
+    "Exercise individual-rank failure, partial checkpoint write and disk/I/O failure.",
+    "Complete at least 24 hours of actual stability observation with resource limits, then verify recovery and installed-package operation."
+  ]
+}

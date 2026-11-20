@@ -1,0 +1,146 @@
+{
+  "format": "parascale_manifest_v1",
+  "schema_version": 2,
+  "step": 40,
+  "global_step": 40,
+  "consumed_samples": 320,
+  "consumed_tokens": 0,
+  "backend": "native",
+  "parallel_plan": {
+    "backend": "native",
+    "dp_size": 1,
+    "tp_size": 1,
+    "pp_size": 1,
+    "strategy_type": "single",
+    "zero_stage": 0,
+    "zero_offload": false,
+    "precision": "fp32",
+    "fsdp_state_dict_type": "full",
+    "ddp_comm_hook": "none",
+    "ddp_bucket_cap_mb": null,
+    "ddp_gradient_as_bucket_view": true,
+    "ddp_static_graph": false,
+    "activation_checkpointing": false,
+    "batch_policy": "sample",
+    "max_tokens_per_batch": null,
+    "checkpoint_policy": "rank0_file",
+    "estimated_memory_per_gpu": 1,
+    "estimated_total_training_memory": 0,
+    "reasons": [
+      "Using user-requested backend: native."
+    ],
+    "warnings": [],
+    "topology": {},
+    "communication_plan": {
+      "backend": "native",
+      "ddp_hook": "none",
+      "bucket_cap_mb": null,
+      "use_no_sync": false,
+      "adapter_only_sync": false,
+      "overlap_h2d": false,
+      "reasons": [
+        "No communication hook selected without scenario-specific benchmark evidence."
+      ],
+      "evidence": {
+        "precision": "fp32",
+        "task_type": "multimodal",
+        "model_family": "clip",
+        "gradient_accumulation_steps": 1,
+        "trainable_ratio": null,
+        "dataloader_wait_ms": 0.0,
+        "bucket_cap_mb": null
+      }
+    }
+  },
+  "rng_state": {},
+  "data_state": {
+    "consumed_micro_batches": 40,
+    "resume_mode": "state_dict",
+    "state": {
+      "identity": {
+        "version": 1,
+        "shards": [
+          [
+            "0.tar",
+            "6ff5f158efe4edf14e293d8d90026cd90d3c87225160168a14e34a3263010f6a"
+          ],
+          [
+            "1.tar",
+            "a92204108442924bb3c973cb61698c8182817ab899660153e3cd1ca4247b9a39"
+          ],
+          [
+            "2.tar",
+            "9603258264a334a7da286b58b0f44e5dcffa73a95c89f549cb3ed7242a5c8eba"
+          ],
+          [
+            "3.tar",
+            "77f13712d38a6ddccbd1a131b7f1fb1826bd33900f3856b61c26bf7f3795b3d4"
+          ]
+        ],
+        "rank": 0,
+        "world_size": 1,
+        "batch_size": 8,
+        "model": "/assets/openai_clip-vit-base-patch32-pytorch",
+        "text_length": 64
+      },
+      "position": 320
+    },
+    "target": "dataloader"
+  },
+  "files": [
+    {
+      "path": "backend_state.pt",
+      "role": "backend_state",
+      "format": "torch",
+      "entry_type": "file",
+      "size_bytes": 1815840976,
+      "sha256": "7a044cd80afc4ffc280ac87878acf5ef33d227b41ea7ce87fd260c555884431a"
+    },
+    {
+      "path": "rank-00000/runtime_state.pt",
+      "role": "runtime_state",
+      "format": "torch",
+      "rank": 0,
+      "entry_type": "file",
+      "size_bytes": 14808,
+      "sha256": "9316b68bb703dfd90d27c5ee265c47897671ef67d431c89d76493ee1fa701339"
+    }
+  ],
+  "shards": [],
+  "metadata": {
+    "last_metrics": {
+      "loss": 0.00020020878582727164,
+      "optimizer_updated": true,
+      "loss_normalization_weight": 8.0,
+      "batch_size": 8,
+      "step_time_seconds": 0.06498785130679607,
+      "images": 8,
+      "images_per_second": 123.09993081989163,
+      "dataloader_wait_ms": 64.38964419066906,
+      "end_to_end_images_per_second": 61.83455607360047,
+      "peak_memory_bytes": 3066333696,
+      "allocated_memory_bytes": 1833320448
+    },
+    "retention_managed": true,
+    "backend_state_written": true,
+    "backend_specific_checkpoint": false,
+    "rank": 0,
+    "world_size": 1,
+    "rank_count": 1,
+    "runtime_state_version": 1,
+    "optimizer": {
+      "type": "adamw",
+      "state_schema_version": 1,
+      "group_size": null,
+      "compensate_quant_error": null,
+      "error_compensation_dtype": null,
+      "error_compensation_mode": null,
+      "trainable_params": 151277313
+    },
+    "distributed_backend": null,
+    "shard_count": 1,
+    "state_dict_type": "portable",
+    "checkpoint_write_policy": "rank0_manifest",
+    "scheduler_state_written": false
+  }
+}

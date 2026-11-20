@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "parascale": {
+    "task_type": "multimodal",
+    "model_family": "clip",
+    "target_scale": "single_node",
+    "training_backend": "native",
+    "precision": "fp32",
+    "data_parallel_size": 1,
+    "ddp_comm_hook": "none",
+    "checkpoint_save_path": "/experiment/flickr-persistent/native_1gpu/checkpoints",
+    "checkpoint_save_interval": 20
+  },
+  "task": {
+    "type": "multimodal",
+    "workload": "clip_contrastive"
+  },
+  "model": {
+    "type": "hf_clip",
+    "pretrained_model_name_or_path": "/assets/openai_clip-vit-base-patch32-pytorch"
+  },
+  "data": {
+    "type": "datacomp_wds",
+    "data_dir": "/experiment/datasets/flickr8k_from145/train",
+    "streaming": true,
+    "num_workers": 0,
+    "text_length": 64
+  },
+  "optimizer": {
+    "type": "adamw",
+    "lr": 1e-06
+  },
+  "hardware_profile": {
+    "num_gpus": 1,
+    "gpus_per_node": 1
+  },
+  "distributed": {
+    "nnodes": 1,
+    "nproc_per_node": 1
+  },
+  "runtime": {
+    "device": "cuda",
+    "run_dir": "/experiment/flickr-persistent/native_1gpu"
+  },
+  "training": {
+    "workload": "clip_contrastive",
+    "batch_size": 8,
+    "gradient_accumulation_steps": 1,
+    "max_steps": 20,
+    "checkpoint_interval": 20,
+    "checkpoint_dir": "/experiment/flickr-persistent/native_1gpu/checkpoints",
+    "seed": 42
+  }
+}

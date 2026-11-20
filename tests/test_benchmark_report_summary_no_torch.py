@@ -39,6 +39,118 @@ def _write_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def test_clip_recovery_report_retains_real_data_and_timing_limits(tmp_path):
+    summaries = load_summaries(tmp_path)
+    summaries["clip_recovery"] = {
+        "dataset": "COCO subset, NOT DataComp",
+        "parity_checks": [
+            {
+                "name": "Continuous vs resumed",
+                "model_max_abs": 1e-6,
+                "model_relative_l2": 1e-8,
+                "optimizer_max_abs": 1e-5,
+                "evidence": "clip_recovery/comparison.json",
+            }
+        ],
+        "parity_notes": ["Opt-in mitigation; not a cross-version guarantee."],
+        "dataset_checks": [
+            {
+                "dataset": "Existing Flickr8k-labeled WDS",
+                "notes": ["Original provenance not verified."],
+                "evidence": "clip_recovery/flickr/summary.json",
+                "runs": [
+                    {"world_size": 1, "status": "passed", "weights_bitwise_equal": True}
+                ],
+            }
+        ],
+        "runs": [
+            {
+                "world_size": 2,
+                "devices": "0,1",
+                "status": "passed",
+                "baseline_wall_seconds": 64,
+                "weights_bitwise_equal": True,
+            }
+        ],
+    }
+    text = build_report_markdown(summaries, report_root=tmp_path)
+    assert "COCO subset, NOT DataComp" in text
+    assert "10.00" in text
+    assert "no warmup exclusion" in text
+    assert "not DataComp quality" in text
+    assert "Continuous vs resumed" in text
+    assert "clip_recovery/comparison.json" in text
+    assert "not a cross-version guarantee" in text
+    assert "Existing Flickr8k-labeled WDS" in text
+    assert "Original provenance not verified" in text
+
+
+def test_clip_validation_rejects_synthetic_fallback(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    import pytest
+
+    from tests.benchmarks.scripts import validate_clip_recovery as validation
+
+    output = tmp_path / "result.json"
+    output.write_text(
+        json.dumps({"workload": "synthetic_regression", "synthetic": True})
+    )
+    monkeypatch.setattr(
+        validation,
+        "execute_training",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0),
+    )
+    with pytest.raises(AssertionError):
+        validation.run_case(tmp_path / "config.json", output, "0")
+
+
+def test_clip_timeout_terminates_training_process_tree(monkeypatch):
+    import os
+    import subprocess
+    from types import SimpleNamespace
+
+    import pytest
+
+    from tests.benchmarks.scripts import validate_clip_recovery as validation
+
+    waits = []
+    cleanup = []
+
+    class Process:
+        pid = 123456
+        returncode = 0
+
+        def wait(self, timeout=None):
+            waits.append(timeout)
+            if len(waits) == 1:
+                raise subprocess.TimeoutExpired("training", timeout)
+            return 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    monkeypatch.setattr(validation.subprocess, "Popen", lambda *a, **kw: Process())
+    monkeypatch.setattr(
+        validation.subprocess,
+        "run",
+        lambda command, **kw: cleanup.append(command) or SimpleNamespace(returncode=0),
+    )
+    monkeypatch.setattr(
+        validation.os, "killpg", lambda *args: cleanup.append(args), raising=False
+    )
+    with pytest.raises(subprocess.TimeoutExpired):
+        validation.execute_training(["training"], {}, None)
+    assert len(waits) == 2
+    if os.name == "nt":
+        assert cleanup == [["taskkill", "/PID", "123456", "/T", "/F"]]
+    else:
+        assert cleanup[0][0] == 123456
+
+
 def test_compression_examples_report_keeps_random_and_real_data_scope():
     from tests.benchmarks.tools.build_benchmark_report import (
         _compression_examples_section,

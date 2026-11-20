@@ -1,0 +1,50 @@
+{
+  "status": "passed",
+  "date": "2026-11-20",
+  "hardware": "Host 156, RTX A6000 physical GPUs 0,1,3,4",
+  "source_base": "8eff1aa plus uncommitted production-long-run fixes",
+  "source_archive": "long-run-fixes-final-v3.tar",
+  "source_archive_sha256": "db7f338059fae3d5a0f099dfe30f60154fefac67ae63a85656411e92c56b0515",
+  "image": "parascale-detection:a6000-ultralytics83161",
+  "image_id": "sha256:043573ecd623390f83f2a7dadac4d1ae55c178fb07e3b6122dd8606e6b323493",
+  "config": "native_ddp_4gpu.config.json",
+  "result": "result.json",
+  "log": "long-run-limits.log",
+  "checks": {
+    "global_step": 6,
+    "checkpoint_interval": 2,
+    "checkpoint_keep_last": 2,
+    "retained_steps": [4, 6],
+    "retained_manifests_integrity_ok": true,
+    "metrics_history_limit": 3,
+    "metrics_retained": 3,
+    "metrics_dropped": 3,
+    "rank_local_cursors": [
+      {"step": 4, "rank": 0, "position": 32},
+      {"step": 4, "rank": 1, "position": 32},
+      {"step": 4, "rank": 2, "position": 32},
+      {"step": 4, "rank": 3, "position": 32},
+      {"step": 6, "rank": 0, "position": 48},
+      {"step": 6, "rank": 1, "position": 48},
+      {"step": 6, "rank": 2, "position": 48},
+      {"step": 6, "rank": 3, "position": 48}
+    ]
+  },
+  "local_full_suite": {"passed": 850, "skipped": 10},
+  "linux_limits_suite": {"passed": 9, "skipped": 0},
+  "cpu_bookkeeping_probe": {
+    "steps": 100000,
+    "retained": 1000,
+    "dropped": 99000,
+    "tracemalloc_current_bytes": 204024,
+    "tracemalloc_peak_bytes": 1005432,
+    "scope": "TrainEngine.record_step with loss and step_time_seconds scalars; Python bookkeeping only, not process RSS or GPU memory"
+  },
+  "limits": [
+    "Six real CLIP training steps validate rolling persistence, not a long-duration soak or quality threshold.",
+    "Direct seek resume requires zero workers, no CUDA prefetch, immutable uncompressed WDS shards and unchanged rank/batch identity.",
+    "Unknown, corrupt, linked or externally referenced checkpoints may be preserved beyond the configured retention count. One writer per checkpoint root is required.",
+    "The Windows symlink regression was skipped due to host permissions and passed on Linux. The other nine local skips are environment-dependent existing tests.",
+    "1/2/4-GPU corruption/recovery parity is recorded separately in ../long_run_fixes/summary.json against the v2 snapshot; this final snapshot additionally fixes sample caps, cache routing and symlink targets."
+  ]
+}

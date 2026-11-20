@@ -26,6 +26,7 @@ SUMMARY_FILES = {
     "compression_portability": Path("compression_portability/summary.json"),
     "detection_distillation": Path("detection_distillation/summary.json"),
     "compression_examples": Path("compression_examples/summary.json"),
+    "clip_recovery": Path("clip_recovery/summary.json"),
 }
 
 CONFIG_FILES = {
@@ -116,6 +117,65 @@ def build_report_markdown(
         _compression_examples_section(summaries.get("compression_examples", {}))
     )
     lines.extend(_evidence_links(report_root, summaries))
+    recovery = summaries.get("clip_recovery", {})
+    if recovery.get("runs"):
+        lines.extend(
+            [
+                "## A6000 Real CLIP Recovery",
+                "",
+                recovery["dataset"],
+                "",
+                "FP32, batch 8/rank, 40 baseline steps; corrupt step 40, recover step 20 and train 20 more steps. "
+                "This is bounded recovery evidence, not DataComp quality or 24-hour production certification. "
+                "End-to-end throughput includes process/model startup and checkpoint writes; no warmup exclusion. "
+                "CLIP uses rank-local negatives, so different world sizes are not equivalent global-negative objectives.",
+                "",
+                "| GPUs | Physical IDs | Status | End-to-end images/s | Final rank-0 loss | Weight bytes match after resume |",
+                "| --- | --- | --- | --- | --- | --- |",
+            ]
+        )
+        for run in recovery["runs"]:
+            rate = (
+                40 * 8 * run["world_size"] / run["baseline_wall_seconds"]
+                if run.get("baseline_wall_seconds")
+                else 0
+            )
+            lines.append(
+                f"| {run['world_size']} | {run['devices']} | {run['status']} | {rate:.2f} | {run.get('last_metrics', {}).get('loss', 'n/a')} | {run.get('weights_bitwise_equal', 'n/a')} |"
+            )
+        lines.extend(["", *recovery.get("notes", []), ""])
+        if recovery.get("parity_checks"):
+            lines.extend(
+                [
+                    "### Four-GPU Recovery Investigation",
+                    "",
+                    "| Comparison | Model max absolute error | Model relative L2 | Optimizer max absolute error | Evidence |",
+                    "| --- | --- | --- | --- | --- |",
+                ]
+            )
+            for check in recovery["parity_checks"]:
+                lines.append(
+                    f"| {check['name']} | {check['model_max_abs']:.6e} | {check['model_relative_l2']:.6e} | {check['optimizer_max_abs']:.6e} | [{check['evidence']}]({check['evidence']}) |"
+                )
+            lines.extend(["", *recovery.get("parity_notes", []), ""])
+        for check in recovery.get("dataset_checks", []):
+            lines.extend(
+                [
+                    "### Additional Real-Data Recovery",
+                    "",
+                    check["dataset"],
+                    "",
+                    f"[Raw results]({check['evidence']})",
+                    "",
+                    "| GPUs | Status | Whole-job seconds | Weight bytes match after resume |",
+                    "| --- | --- | --- | --- |",
+                ]
+            )
+            for run in check["runs"]:
+                lines.append(
+                    f"| {run['world_size']} | {run['status']} | {run.get('baseline_wall_seconds', 'n/a')} | {run.get('weights_bitwise_equal', 'n/a')} |"
+                )
+            lines.extend(["", *check.get("notes", []), ""])
     portability = summaries.get("compression_portability", {})
     if portability.get("families"):
         lines.extend(
@@ -157,6 +217,7 @@ def _overview_table(summaries: Dict[str, Dict[str, Any]]) -> List[str]:
         "compression_portability": "Cross-model compression portability",
         "detection_distillation": "YOLO detection distillation",
         "compression_examples": "Runnable compression examples",
+        "clip_recovery": "A6000 real CLIP recovery",
     }
     for name, label in labels.items():
         summary = summaries.get(name, {"missing": True})
