@@ -1,7 +1,12 @@
 # CLIP / DataComp 有界候选
 
 本目录仅为历史候选环境上的待验收配置，非生产认证，不代表可直接上线。
-2026-11-19，remote156 两次连接超时，没有本次远程通过证据。
+2026-11-19，remote156 两次连接超时；2026-11-20 已恢复连接并开始真实 CLIP/COCO WebDataset 有界恢复验证。
+这不是 DataComp 数据集验收，最新结果以[统一报告](../../../tests/benchmarks/reports/BENCHMARK_REPORT.md)为准。
+
+2026-11-20 修正：必须显式设置 `training.workload: clip_contrastive`。
+此前仅设置 `task.workload` 会落入 synthetic_regression，不能作为 CLIP 验收证据；
+本次增加实际 workload、参数量和非合成数据断言，防止类似假通过。
 
 ## 范围与语义
 
@@ -77,6 +82,39 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nnodes=1 --nproc_per_node=4
 更多边界见[用户手册](../../../docs/user_manual.md#111-最新完整检查点恢复)。
 
 ## 当前本地验证记录
+
+### 已有图文数据复测
+
+可复用已校验的 JPG/TXT WebDataset，不要求必须是 DataComp：
+
+```bash
+python tests/benchmarks/scripts/validate_clip_recovery.py \
+  --wds /datasets/image_text/train --model /models/clip \
+  --scratch /runs/recovery-state --output /runs/recovery-evidence \
+  --find-unused-parameters --keep-checkpoints
+```
+
+该有界脚本使用物理 GPU `0`、`0,1`、`0,1,3,4`，仅在对应设备可用时执行。
+输出和状态目录必须为空；预检每张图片解码、图文配对及重复键，并记录分片/模型哈希。
+它执行 40 步训练、损坏最新检查点、回退到第 20 步再续训 20 步，不是长期吞吐或质量评估。
+2026-11-20 从 145 同步至 156 的 Flickr8k 标记数据含 6,000 对图文、4 个分片，传输哈希一致。
+其原始下载来源与训练/验证划分尚未恢复，不能用于宣称独立验证集质量。
+另有 E 盘下载的 DataComp 333 对可用子集，来源和变换记录位于下载清单；未达到计划的 512 对。
+具体结果及边界见[统一报告](../../../tests/benchmarks/reports/BENCHMARK_REPORT.md)。
+
+### 四卡精确恢复对照（2026-11-20）
+
+在 156 的预训练 CLIP ViT-B/32、COCO 512 对图文、FP32、40 步有界测试中，
+默认 DDP 两次连续训练完全一致，但恢复训练的模型最大绝对误差为 `9.29e-7`。
+将 `parascale.ddp_find_unused_parameters` 设置为 `true` 后，连续与恢复训练的模型及优化器状态完全一致。
+这支持分桶/归约路径相关的解释，但尚未记录 reducer 内部跟踪，不把推断当作已证明的唯一原因。
+
+需要优先验收位级恢复时，可在初始训练和恢复配置中同时开启该选项，再重新验证。
+不能只在旧检查点恢复时临时切换，不能推广到所有模型/版本。
+该选项有额外计算图遍历开销；这次短测平均训练步耗时增加约 8.4%，因此未改为全局默认。
+原始对照结果见[统一报告](../../../tests/benchmarks/reports/BENCHMARK_REPORT.md#four-gpu-recovery-investigation)。
+
+### CPU 回归
 
 2026-11-19，Windows、Python 3.12.8、PyTorch 2.15.0+cpu 环境，以下聚焦回归 **42 通过**：
 
