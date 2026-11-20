@@ -31,7 +31,12 @@ def collect_stability_results(
             continue
         last = dict(payload.get("last_metrics", {}))
         history = payload.get("metrics_history", [])
-        stable = aggregate_stable_metrics(history, warmup_steps=warmup_steps)
+        stable = aggregate_stable_metrics(
+            history,
+            warmup_steps=max(
+                0, warmup_steps - int(payload.get("metrics_history_dropped", 0))
+            ),
+        )
         row = build_stability_row(path, payload, last, stable)
         rows.append(row)
     for path in sorted(output_dir.glob("*.error.json")):
@@ -133,9 +138,7 @@ def build_resume_continuity(
         )
         loss_ratio = resume_loss / initial_loss if initial_loss > 0.0 else None
         throughput_ratio = (
-            resume_throughput / initial_throughput
-            if initial_throughput > 0.0
-            else None
+            resume_throughput / initial_throughput if initial_throughput > 0.0 else None
         )
         reasons = []
         if initial.get("status") != "ok" or resume.get("status") != "ok":

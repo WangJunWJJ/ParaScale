@@ -335,6 +335,8 @@ def run_train_from_config(
             "global_step": state.global_step,
             "last_metrics": dict(state.last_metrics),
             "metrics_history": list(state.metrics_history),
+            "metrics_history_dropped": state.metrics_history_dropped,
+            "metrics_history_scope": "current invocation, most recent bounded window",
             "train_device": model_device(model),
             "elapsed_seconds": elapsed,
             "steps_per_second": max_steps / elapsed,

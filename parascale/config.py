@@ -127,6 +127,9 @@ class TrainingRunConfig:
     seed: int = 42
     checkpoint_save_path: str = "./checkpoints"
     checkpoint_save_interval: int = 1000
+    checkpoint_keep_last: int = 3
+    metrics_history_limit: int = 1000
+    max_resume_replay_batches: int = 10000
     adapter_only_checkpoint: bool = False
     allow_world_size_change_on_resume: bool = False
 
@@ -438,6 +441,12 @@ class ParaScaleConfig:
         if self.checkpoint_save_interval < 1:
             raise ValueError(
                 f"checkpoint_save_interval must be >= 1, got {self.checkpoint_save_interval}"
+            )
+        if self.checkpoint_keep_last < 2:
+            raise ValueError("checkpoint_keep_last must be >= 2")
+        if self.metrics_history_limit < 1 or self.max_resume_replay_batches < 0:
+            raise ValueError(
+                "metrics_history_limit must be positive; max_resume_replay_batches must be nonnegative"
             )
 
     def update(self, config_dict: Dict[str, Any]) -> "ParaScaleConfig":

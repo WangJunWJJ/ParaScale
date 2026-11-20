@@ -89,6 +89,9 @@ def test_rank_sidecars_and_precision_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setitem(sys.modules, "torch", torch)
     manager = CheckpointManager(str(tmp_path))
     worker = engine(1, 2)
+    worker.data_resume.active_dataloader = SimpleNamespace(
+        state_dict=lambda: {"rank": 1, "position": 6}
+    )
     torch.cpu = [11]
     CheckpointController(worker).save(manager)
     assert manager.payload_path(3, "rank-00001/runtime_state.pt").is_file()
@@ -104,6 +107,7 @@ def test_rank_sidecars_and_precision_roundtrip(tmp_path, monkeypatch):
     CheckpointController(worker).load(manager, 3)
     assert torch.cpu == [11]
     assert worker.precision.value == {"amp_scaler": {"scale": 128.0}}
+    assert worker.state.data_state["state"] == {"rank": 1, "position": 6}
 
 
 @pytest.mark.parametrize("exhausted", [False, True])
