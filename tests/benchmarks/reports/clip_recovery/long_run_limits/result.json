@@ -1,0 +1,164 @@
+{
+  "mode": "train",
+  "dry_run": false,
+  "runtime_status": "real_local",
+  "capability_level": "local_native_clip_contrastive_datacomp_wds",
+  "synthetic": false,
+  "vision_synthetic": false,
+  "clip_contrastive": true,
+  "vlm_lora": false,
+  "yolo_world": false,
+  "yolo_detection": false,
+  "ground_dino": false,
+  "mock": false,
+  "workload": "clip_contrastive",
+  "data_type": "datacomp_wds",
+  "backend": "native_ddp",
+  "optimizer": {
+    "type": "adamw",
+    "state_schema_version": 1,
+    "group_size": null,
+    "compensate_quant_error": null,
+    "error_compensation_dtype": null,
+    "error_compensation_mode": null,
+    "trainable_params": 151277313
+  },
+  "global_step": 6,
+  "last_metrics": {
+    "loss": 0.010788345709443092,
+    "optimizer_updated": true,
+    "loss_normalization_weight": 8.0,
+    "batch_size": 32,
+    "step_time_seconds": 0.19495265185832977,
+    "images": 32,
+    "images_per_second": 164.14241968482733,
+    "dataloader_wait_ms": 76.97867043316364,
+    "end_to_end_images_per_second": 117.676771216881,
+    "peak_memory_bytes": 3130134016,
+    "allocated_memory_bytes": 2455974912
+  },
+  "metrics_history": [
+    {
+      "loss": 0.0005382213275879622,
+      "optimizer_updated": true,
+      "loss_normalization_weight": 8.0,
+      "batch_size": 32,
+      "step_time_seconds": 0.1911652833223343,
+      "images": 32,
+      "images_per_second": 167.3944109718031,
+      "dataloader_wait_ms": 64.93568606674671,
+      "end_to_end_images_per_second": 124.95071797789274,
+      "peak_memory_bytes": 3130134016,
+      "allocated_memory_bytes": 2455974912
+    },
+    {
+      "loss": 0.0004159392847213894,
+      "optimizer_updated": true,
+      "loss_normalization_weight": 8.0,
+      "batch_size": 32,
+      "step_time_seconds": 0.20750158093869686,
+      "images": 32,
+      "images_per_second": 154.21569250334485,
+      "dataloader_wait_ms": 74.27013851702213,
+      "end_to_end_images_per_second": 113.5671105028298,
+      "peak_memory_bytes": 3130134016,
+      "allocated_memory_bytes": 2455974912
+    },
+    {
+      "loss": 0.010788345709443092,
+      "optimizer_updated": true,
+      "loss_normalization_weight": 8.0,
+      "batch_size": 32,
+      "step_time_seconds": 0.19495265185832977,
+      "images": 32,
+      "images_per_second": 164.14241968482733,
+      "dataloader_wait_ms": 76.97867043316364,
+      "end_to_end_images_per_second": 117.676771216881,
+      "peak_memory_bytes": 3130134016,
+      "allocated_memory_bytes": 2455974912
+    }
+  ],
+  "metrics_history_dropped": 3,
+  "metrics_history_scope": "current invocation, most recent bounded window",
+  "train_device": "cuda:0",
+  "elapsed_seconds": 67.51380571722984,
+  "steps_per_second": 0.08887071223817518,
+  "checkpoint": "/experiment/long-run-limits/checkpoints/step-00000006/manifest.json",
+  "checkpoint_validation": {
+    "ok": true,
+    "checked_files": 5,
+    "checked_directories": 0,
+    "missing": [],
+    "checksum_mismatches": [],
+    "size_mismatches": [],
+    "errors": []
+  },
+  "resumed_from": null,
+  "checkpoint_recovery": null,
+  "quantization": null,
+  "distillation": null,
+  "strategy_plan": {
+    "backend": "native_ddp",
+    "dp_size": 4,
+    "tp_size": 1,
+    "pp_size": 1,
+    "strategy_type": "data",
+    "zero_stage": 0,
+    "zero_offload": false,
+    "precision": "bf16",
+    "fsdp_state_dict_type": "full",
+    "ddp_comm_hook": "none",
+    "ddp_bucket_cap_mb": null,
+    "ddp_gradient_as_bucket_view": true,
+    "ddp_static_graph": true,
+    "activation_checkpointing": false,
+    "batch_policy": "sample",
+    "max_tokens_per_batch": null,
+    "checkpoint_policy": "rank0_file",
+    "estimated_memory_per_gpu": 1,
+    "estimated_total_training_memory": 0,
+    "reasons": [
+      "Using user-requested backend: native_ddp."
+    ],
+    "warnings": [],
+    "topology": {},
+    "communication_plan": {
+      "backend": "native_ddp",
+      "ddp_hook": "none",
+      "bucket_cap_mb": null,
+      "use_no_sync": false,
+      "adapter_only_sync": false,
+      "overlap_h2d": false,
+      "reasons": [
+        "Verified CLIP/DataComp native-DDP path benefits from bf16 gradient compression."
+      ],
+      "evidence": {
+        "precision": "bf16",
+        "task_type": "multimodal",
+        "model_family": "clip",
+        "gradient_accumulation_steps": 1,
+        "trainable_ratio": null,
+        "dataloader_wait_ms": 0.0,
+        "bucket_cap_mb": null
+      }
+    }
+  },
+  "config_artifacts": {
+    "run_dir": "/experiment/long-run-limits/run",
+    "resolved_config": "/experiment/long-run-limits/run/config.resolved.json",
+    "deepspeed_final_config": null
+  },
+  "evidence": {
+    "mode": "train",
+    "dry_run": false,
+    "runtime_status": "real_local",
+    "capability_level": "local_native_clip_contrastive_datacomp_wds",
+    "mock": false,
+    "synthetic": false,
+    "config_artifacts": {
+      "run_dir": "/experiment/long-run-limits/run",
+      "resolved_config": "/experiment/long-run-limits/run/config.resolved.json",
+      "deepspeed_final_config": null
+    }
+  }
+}

@@ -1,0 +1,115 @@
+{
+  "format": "parascale_manifest_v1",
+  "schema_version": 2,
+  "step": 40,
+  "global_step": 40,
+  "consumed_samples": 320,
+  "consumed_tokens": 0,
+  "backend": "native",
+  "parallel_plan": {
+    "backend": "native",
+    "dp_size": 1,
+    "tp_size": 1,
+    "pp_size": 1,
+    "strategy_type": "single",
+    "zero_stage": 0,
+    "zero_offload": false,
+    "precision": "fp32",
+    "fsdp_state_dict_type": "full",
+    "ddp_comm_hook": "none",
+    "ddp_bucket_cap_mb": null,
+    "ddp_gradient_as_bucket_view": true,
+    "ddp_static_graph": false,
+    "activation_checkpointing": false,
+    "batch_policy": "sample",
+    "max_tokens_per_batch": null,
+    "checkpoint_policy": "rank0_file",
+    "estimated_memory_per_gpu": 1,
+    "estimated_total_training_memory": 0,
+    "reasons": [
+      "Using user-requested backend: native."
+    ],
+    "warnings": [],
+    "topology": {},
+    "communication_plan": {
+      "backend": "native",
+      "ddp_hook": "none",
+      "bucket_cap_mb": null,
+      "use_no_sync": false,
+      "adapter_only_sync": false,
+      "overlap_h2d": false,
+      "reasons": [
+        "No communication hook selected without scenario-specific benchmark evidence."
+      ],
+      "evidence": {
+        "precision": "fp32",
+        "task_type": "multimodal",
+        "model_family": "clip",
+        "gradient_accumulation_steps": 1,
+        "trainable_ratio": null,
+        "dataloader_wait_ms": 0.0,
+        "bucket_cap_mb": null
+      }
+    }
+  },
+  "rng_state": {},
+  "data_state": {
+    "consumed_micro_batches": 40,
+    "resume_mode": "replay_skip"
+  },
+  "files": [
+    {
+      "path": "backend_state.pt",
+      "role": "backend_state",
+      "format": "torch",
+      "entry_type": "file",
+      "size_bytes": 1815840976,
+      "sha256": "69f565ab6c3015535b7f37dee2d03d35b28993055cd6f41888fd3a9262ca0b78"
+    },
+    {
+      "path": "rank-00000/runtime_state.pt",
+      "role": "runtime_state",
+      "format": "torch",
+      "rank": 0,
+      "entry_type": "file",
+      "size_bytes": 14168,
+      "sha256": "332c5a656e0825853eff59ffd74cc2e06ed3a7481e83b7fbc2504f6667999963"
+    }
+  ],
+  "shards": [],
+  "metadata": {
+    "last_metrics": {
+      "loss": 0.00020020878582727164,
+      "optimizer_updated": true,
+      "loss_normalization_weight": 8.0,
+      "batch_size": 8,
+      "step_time_seconds": 0.05235094577074051,
+      "images": 8,
+      "images_per_second": 152.81481322294053,
+      "dataloader_wait_ms": 53.964974358677864,
+      "end_to_end_images_per_second": 75.24743227789027,
+      "peak_memory_bytes": 3066333696,
+      "allocated_memory_bytes": 1833320448
+    },
+    "backend_state_written": true,
+    "backend_specific_checkpoint": false,
+    "rank": 0,
+    "world_size": 1,
+    "rank_count": 1,
+    "runtime_state_version": 1,
+    "optimizer": {
+      "type": "adamw",
+      "state_schema_version": 1,
+      "group_size": null,
+      "compensate_quant_error": null,
+      "error_compensation_dtype": null,
+      "error_compensation_mode": null,
+      "trainable_params": 151277313
+    },
+    "distributed_backend": null,
+    "shard_count": 1,
+    "state_dict_type": "portable",
+    "checkpoint_write_policy": "rank0_manifest",
+    "scheduler_state_written": false
+  }
+}

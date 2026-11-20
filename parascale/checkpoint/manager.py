@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List
+
+from parascale.checkpoint.io import atomic_binary_writer
 
 
 @dataclass
@@ -70,6 +72,8 @@ class CheckpointManifest:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "CheckpointManifest":
+        if not isinstance(data, dict) or not isinstance(data.get("metadata", {}), dict):
+            raise ValueError("checkpoint manifest and metadata must be JSON objects")
         return cls(
             step=int(data["step"]),
             format=str(data.get("format", "parascale_manifest_v1")),
@@ -92,6 +96,78 @@ class CheckpointManifest:
 @dataclass
 class CheckpointManager:
     root: str
+
+    def prune(self, *, keep_last: int) -> list[int]:
+        """Remove only managed native states older than verified recovery fallbacks.
+
+        Unknown, corrupt, linked and externally referenced directories are retained.
+        Call only after publication, with a single writer owning this root.
+        """
+        if keep_last < 2:
+            raise ValueError("keep_last must be >= 2")
+        from parascale.checkpoint.recovery import _validate_training_contract
+
+        root = Path(self.root).resolve()
+        candidates = []
+        referenced_folders = set()
+        for path in root.glob("step-*/manifest.json"):
+            folder = path.parent
+
+            def linked(p):
+                return p.is_symlink() or getattr(p, "is_junction", lambda: False)()
+
+            try:
+                if linked(folder) and folder.resolve().is_relative_to(root):
+                    referenced_folders.add(folder.resolve())
+                manifest = self.read_manifest_path(path)
+                for entry in manifest.files:
+                    target = self.resolve_payload_path(manifest, entry).resolve()
+                    if target.is_relative_to(root) and not target.is_relative_to(
+                        folder.resolve()
+                    ):
+                        relative = target.relative_to(root)
+                        if relative.parts:
+                            referenced_folders.add(root / relative.parts[0])
+            except (OSError, ValueError, KeyError, TypeError):
+                # An unreadable manifest may reference any older payload.
+                return []
+            try:
+                if linked(folder) or any(linked(p) for p in folder.rglob("*")):
+                    continue
+                if folder.name != f"step-{manifest.step:08d}":
+                    continue
+                if manifest.backend not in {
+                    "native",
+                    "native_ddp",
+                } or not manifest.metadata.get("retention_managed"):
+                    continue
+                if not manifest.files or any(
+                    not self.resolve_payload_path(manifest, entry)
+                    .resolve()
+                    .is_relative_to(folder.resolve())
+                    for entry in manifest.files
+                ):
+                    continue
+                _validate_training_contract(self, manifest, manifest.step)
+                candidates.append((manifest.step, manifest, folder))
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+        protected = []
+        removed = []
+        for step, manifest, folder in sorted(candidates, reverse=True):
+            if len(protected) < keep_last:
+                if self.validate_manifest(manifest).ok:
+                    protected.append(step)
+                continue
+            if folder.resolve().parent != root:
+                raise ValueError("Checkpoint retention escaped its root")
+            if folder.resolve() in referenced_folders:
+                continue
+            if not self.validate_manifest(manifest).ok:
+                continue
+            shutil.rmtree(folder)
+            removed.append(step)
+        return removed
 
     def manifest_path(self, step: int) -> Path:
         return Path(self.root) / f"step-{int(step):08d}" / "manifest.json"
@@ -126,14 +202,24 @@ class CheckpointManager:
         ]
         manifest.validate()
         path = self.manifest_path(manifest.step)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-        temp_path.write_text(
-            json.dumps(manifest.to_dict(), indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-        temp_path.replace(path)
+        with atomic_binary_writer(path) as stream:
+            stream.write(
+                (
+                    json.dumps(manifest.to_dict(), indent=2, ensure_ascii=False) + "\n"
+                ).encode("utf-8")
+            )
         return path
+
+    def latest_valid_training_checkpoint(
+        self,
+    ) -> tuple[CheckpointManifest, list[dict[str, Any]]]:
+        """Select a complete native checkpoint and describe skipped newer steps.
+
+        Raises FileNotFoundError when no eligible training checkpoint exists.
+        """
+        from parascale.checkpoint.recovery import latest_valid_training_checkpoint
+
+        return latest_valid_training_checkpoint(self)
 
     def read_manifest(self, step: int) -> CheckpointManifest:
         data = json.loads(self.manifest_path(step).read_text(encoding="utf-8"))

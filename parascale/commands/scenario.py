@@ -138,6 +138,9 @@ def build_matrix_config(
     ckpt_dir = output_dir / f"{run_spec['run_id']}_{backend}_ckpt"
     parascale["checkpoint_save_path"] = str(ckpt_dir)
     training["checkpoint_dir"] = str(ckpt_dir)
+    section(config_data, "runtime")["run_dir"] = str(
+        output_dir / run_spec["run_id"] / backend
+    )
     training["skip_final_checkpoint"] = True
     if max_steps is not None:
         training["max_steps"] = int(max_steps)

@@ -1,0 +1,42 @@
+{
+  "dataset": "mlfoundations/datacomp_small",
+  "revision": "b7dd54c19199236fe33f367ce7f88f412244fab8",
+  "requested": 512,
+  "successful": 333,
+  "attempted": 1440,
+  "resources": [
+    {
+      "file": "dataset-card.md",
+      "url": "https://hf-mirror.com/datasets/mlfoundations/datacomp_small/raw/b7dd54c19199236fe33f367ce7f88f412244fab8/README.md",
+      "status": "failed",
+      "error": "curl: (28) Resolving timed out after 10015 milliseconds\r\n"
+    },
+    {
+      "file": "0020f0cbd157d470aa56bea08e304b90.parquet",
+      "url": "https://hf-mirror.com/datasets/mlfoundations/datacomp_small/resolve/b7dd54c19199236fe33f367ce7f88f412244fab8/0020f0cbd157d470aa56bea08e304b90.parquet",
+      "status": "success",
+      "sha256": "aaaa9c99f1ab5c8e16c91499268ecfb30f1b3e9304f3405281f3288e39d32568",
+      "bytes": 120845372
+    }
+  ],
+  "scope": "Bounded sequential subset, availability-biased; NOT full small track",
+  "license": "Metadata CC-BY-4.0; individual images retain their copyrights",
+  "face_policy": "Normalized face_bboxes always blurred with expanded regions; Pillow GaussianBlur, not byte-identical to img2dataset",
+  "limits": {
+    "max_rows": 5000,
+    "seconds": 600,
+    "image_bytes": 8388608,
+    "workers": 24
+  },
+  "official_source": "https://huggingface.co/datasets/mlfoundations/datacomp_small",
+  "transport": "https://hf-mirror.com",
+  "expected_metadata_sha256": "aaaa9c99f1ab5c8e16c91499268ecfb30f1b3e9304f3405281f3288e39d32568",
+  "hash_source": "Pinned resolve response X-Linked-Etag and X-Repo-Commit",
+  "metadata_sha256_verified": true,
+  "candidate_rows": 5000,
+  "shards": [
+    "wds/subset-00000.tar"
+  ],
+  "status": "partial",
+  "elapsed_seconds": 600.81
+}

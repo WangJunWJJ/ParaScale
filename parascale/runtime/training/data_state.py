@@ -53,6 +53,12 @@ class DataResumeController:
             raise ValueError(f"unsupported data resume mode: {mode}")
         iterator = iter(dataloader)
         consumed = max(0, int(data_state.get("consumed_micro_batches", 0) or 0))
+        limit = int(getattr(self.engine.config, "max_resume_replay_batches", 10000))
+        if consumed > limit:
+            raise RuntimeError(
+                f"Data resume requires {consumed} replay batches, exceeding limit {limit}; "
+                "use a stateful dataloader or explicitly increase max_resume_replay_batches."
+            )
         if consumed:
             warnings.warn(
                 "Dataloader has no state protocol; replaying and skipping "

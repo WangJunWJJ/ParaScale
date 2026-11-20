@@ -45,6 +45,7 @@ class TrainState:
     global_step: int = 0
     last_metrics: Dict[str, Any] = field(default_factory=dict)
     metrics_history: list[Dict[str, Any]] = field(default_factory=list)
+    metrics_history_dropped: int = 0
     consumed_micro_batches: int = 0
     consumed_samples: int = 0
     data_state: Dict[str, Any] = field(default_factory=dict)
@@ -377,6 +378,11 @@ class TrainEngine:
         self.state.global_step += 1
         self.state.last_metrics = dict(metrics or {})
         self.state.metrics_history.append(dict(metrics or {}))
+        limit = int(getattr(self.config, "metrics_history_limit", 1000))
+        excess = max(0, len(self.state.metrics_history) - limit)
+        if excess:
+            del self.state.metrics_history[:excess]
+            self.state.metrics_history_dropped += excess
         return self.state
 
     def shutdown(self) -> None:

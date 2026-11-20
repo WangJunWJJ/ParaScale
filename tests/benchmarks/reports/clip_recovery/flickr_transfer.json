@@ -1,0 +1,18 @@
+{
+  "date": "2026-11-20",
+  "source_host": "192.168.8.145",
+  "source_directory": "/home/user/parascale_work/data/wds_flickr8k/train",
+  "destination_host": "192.168.8.156",
+  "destination_directory": "/home/user/wangjun/parascale_production_20261120/datasets/flickr8k_from145/train",
+  "total_bytes": 850780160,
+  "decoded_pairs": 6000,
+  "source_destination_hashes_equal": true,
+  "validation_script_sha256": "c02fb456d5b3064b25c98216f55a10e122604dbd59563dd1947c25b6d5fde80e",
+  "sha256": {
+    "0.tar": "6ff5f158efe4edf14e293d8d90026cd90d3c87225160168a14e34a3263010f6a",
+    "1.tar": "a92204108442924bb3c973cb61698c8182817ab899660153e3cd1ca4247b9a39",
+    "2.tar": "9603258264a334a7da286b58b0f44e5dcffa73a95c89f549cb3ed7242a5c8eba",
+    "3.tar": "77f13712d38a6ddccbd1a131b7f1fb1826bd33900f3856b61c26bf7f3795b3d4"
+  },
+  "scope": "Existing Flickr8k-labeled WDS, full image decoding and jpg/txt pairing checked. Original download source and split provenance not recovered. Captions can contain multiple newline-separated descriptions; the existing CLIP tokenizer uses text_length=64. Not a held-out quality benchmark."
+}

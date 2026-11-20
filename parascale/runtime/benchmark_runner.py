@@ -31,7 +31,10 @@ def run_benchmark_from_config(config_data: Dict[str, Any]) -> Dict[str, Any]:
     last_metrics = dict(train_payload.get("last_metrics", {}))
     warmup_steps = int(training.get("warmup_steps", 0) or 0)
     stable_metrics = aggregate_stable_metrics(
-        train_payload.get("metrics_history", []), warmup_steps=warmup_steps
+        train_payload.get("metrics_history", []),
+        warmup_steps=max(
+            0, warmup_steps - int(train_payload.get("metrics_history_dropped", 0))
+        ),
     )
     benchmark_result = benchmark_result_from_train_payload(train_payload)
     task_type = _section(config_data, "parascale").get("task_type", "generic")

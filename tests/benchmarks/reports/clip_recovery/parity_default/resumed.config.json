@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "parascale": {
+    "task_type": "multimodal",
+    "model_family": "clip",
+    "target_scale": "single_node",
+    "training_backend": "native_ddp",
+    "precision": "fp32",
+    "data_parallel_size": 4,
+    "ddp_comm_hook": "none",
+    "checkpoint_save_path": "/probe/default/resumed/checkpoints",
+    "checkpoint_save_interval": 20
+  },
+  "task": {
+    "type": "multimodal",
+    "workload": "clip_contrastive"
+  },
+  "model": {
+    "type": "hf_clip",
+    "pretrained_model_name_or_path": "/assets/openai_clip-vit-base-patch32-pytorch"
+  },
+  "data": {
+    "type": "datacomp_wds",
+    "data_dir": "/scratch/wds",
+    "streaming": true,
+    "num_workers": 0,
+    "text_length": 64
+  },
+  "optimizer": {
+    "type": "adamw",
+    "lr": 1e-06
+  },
+  "hardware_profile": {
+    "num_gpus": 4,
+    "gpus_per_node": 4
+  },
+  "distributed": {
+    "nnodes": 1,
+    "nproc_per_node": 4
+  },
+  "runtime": {
+    "device": "cuda",
+    "run_dir": "/probe/default/resumed"
+  },
+  "training": {
+    "workload": "clip_contrastive",
+    "batch_size": 8,
+    "gradient_accumulation_steps": 1,
+    "max_steps": 20,
+    "checkpoint_interval": 20,
+    "checkpoint_dir": "/probe/default/resumed/checkpoints",
+    "seed": 42
+  }
+}

@@ -111,7 +111,7 @@ def test_checkpoint_processor_receives_original_images_and_captions(
         image_size=32,
     )
     model, _, batches, _ = build_clip_contrastive_components(spec)
-    batch = next(batches)
+    batch = next(iter(batches))
     model(**batch)
     assert hf.model_paths == hf.processor_paths == ["local/checkpoint"]
     assert len(hf.processed) == 1
@@ -138,6 +138,28 @@ def test_pretrained_rejects_sources_without_original_images(hf, data_type):
     )
     with pytest.raises(ValueError, match="original images"):
         build_clip_contrastive_components(spec)
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_pretrained_cache_and_batch_budget_are_preserved(tmp_path, hf, streaming):
+    make_shard(tmp_path)
+    cache = tmp_path / "cache"
+    spec = ClipContrastiveSpec(
+        model_type="hf_clip",
+        pretrained_model_name_or_path="local/checkpoint",
+        data_type="datacomp_wds",
+        data_dir=str(tmp_path),
+        dataset_local_cache_dir=str(cache),
+        streaming=streaming,
+        num_samples=10,
+        batch_size=1,
+        num_batches=1,
+    )
+    _, _, batches, _ = build_clip_contrastive_components(spec)
+    assert len(list(batches)) == 1
+    assert len(list(cache.glob("*.tar"))) == 1
+    if streaming:
+        assert all(path.parent == cache for path, _ in batches.samples)
 
 
 @pytest.mark.parametrize("failure", ["decode", "processor"])

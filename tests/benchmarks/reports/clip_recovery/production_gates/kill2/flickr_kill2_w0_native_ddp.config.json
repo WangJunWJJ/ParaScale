@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "parascale": {
+    "task_type": "multimodal",
+    "model_family": "clip",
+    "target_scale": "single_node",
+    "training_backend": "native_ddp",
+    "precision": "fp32",
+    "data_parallel_size": 2,
+    "ddp_comm_hook": "none",
+    "checkpoint_save_path": "/experiment/production-gates/kill2/flickr_kill2_w0_native_ddp_native_ddp_ckpt",
+    "checkpoint_save_interval": 20,
+    "ddp_find_unused_parameters": true,
+    "dataloader_num_workers": 0,
+    "dataloader_persistent_workers": false
+  },
+  "task": {
+    "type": "multimodal",
+    "workload": "clip_contrastive"
+  },
+  "model": {
+    "type": "hf_clip",
+    "pretrained_model_name_or_path": "/assets/openai_clip-vit-base-patch32-pytorch"
+  },
+  "data": {
+    "type": "datacomp_wds",
+    "data_dir": "/experiment/datasets/flickr8k_from145/train",
+    "streaming": true,
+    "num_workers": 0,
+    "text_length": 64,
+    "persistent_workers": false
+  },
+  "optimizer": {
+    "type": "adamw",
+    "lr": 1e-06
+  },
+  "hardware_profile": {
+    "num_gpus": 2,
+    "gpus_per_node": 2
+  },
+  "distributed": {
+    "nnodes": 1,
+    "nproc_per_node": 2
+  },
+  "runtime": {
+    "device": "cuda",
+    "run_dir": "/experiment/flickr-persistent/native_ddp_2gpu"
+  },
+  "training": {
+    "workload": "clip_contrastive",
+    "batch_size": 8,
+    "gradient_accumulation_steps": 1,
+    "max_steps": 1000,
+    "checkpoint_interval": 20,
+    "checkpoint_dir": "/experiment/production-gates/kill2/flickr_kill2_w0_native_ddp_native_ddp_ckpt",
+    "seed": 42,
+    "skip_final_checkpoint": false,
+    "benchmark_steps": 1000,
+    "warmup_steps": 10
+  },
+  "model_profile": {}
+}

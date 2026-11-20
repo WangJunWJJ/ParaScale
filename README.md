@@ -424,6 +424,10 @@ python -m build
 
 CI 覆盖 Python 3.10、3.11、3.12 的源码测试，并在独立 Python 3.11 环境安装 wheel 后执行 `doctor -> plan -> train -> checkpoint validate`。GPU/NPU 和真实数据长窗口验证属于远程硬件门禁，不能用依赖解析或 dry-run 替代。
 
+新增独立 CPU PyTorch 检查点门禁，覆盖写入失败、损坏检查点回退和双进程 Gloo 训练恢复。
+首条生产验收候选为 [A6000 单机 1/2/4 卡 CLIP/DataComp](configs/production/clip_datacomp/README.md)，
+目前仍待真实 GPU 质量与长期稳定性验收，不作生产就绪声明。`train --resume-latest` 的适用范围与限制见[用户手册](docs/user_manual.md#111-最新完整检查点恢复)。
+
 ## 文档
 
 | 文档 | 内容 |

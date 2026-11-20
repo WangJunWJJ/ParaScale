@@ -1,0 +1,23 @@
+{
+  "date_local": "2026-11-20",
+  "dataset": "mlfoundations/datacomp_small",
+  "revision": "b7dd54c19199236fe33f367ce7f88f412244fab8",
+  "successful_training_pairs": 0,
+  "transferred_to_156": false,
+  "official_download_method": "download_upstream.py --scale small --data_dir PATH; parquet metadata then URL downloads via img2dataset, face_bboxes blurring enabled by default",
+  "official_sources": ["https://github.com/mlfoundations/datacomp", "https://huggingface.co/datasets/mlfoundations/datacomp_small"],
+  "license": "Metadata CC-BY-4.0; individual images retain their own copyrights. Dataset card checked through web tool; no image redistribution license inferred.",
+  "probes": [
+    {"url": "https://huggingface.co/api/datasets/mlfoundations/datacomp_small", "result": "curl 28: connection timed out after 25010 milliseconds"},
+    {"url": "https://datasets-server.huggingface.co/rows?dataset=mlfoundations%2Fdatacomp_small&config=default&split=train&offset=0&length=1", "result": "curl 28: connection timed out after 20006 milliseconds"},
+    {"url": "https://hf-mirror.com/api/datasets/mlfoundations/datacomp_small", "result": "API JSON received; sha matched revision above; no training rows downloaded"},
+    {"url": "https://hf-mirror.com/datasets/mlfoundations/datacomp_small/resolve/b7dd54c19199236fe33f367ce7f88f412244fab8/0020f0cbd157d470aa56bea08e304b90.parquet", "method": "HEAD", "result": "302 then 200; Content-Length 120845372; X-Repo-Commit matched revision; X-Linked-Etag aaaa9c99f1ab5c8e16c91499268ecfb30f1b3e9304f3405281f3288e39d32568"},
+    {"url": "https://hf-mirror.com/datasets/mlfoundations/datacomp_small/resolve/b7dd54c19199236fe33f367ce7f88f412244fab8/0020f0cbd157d470aa56bea08e304b90.parquet", "method": "GET", "result": "HTTP 429; see attempt02/manifest.json"},
+    {"url": "https://huggingface.co/datasets/mlfoundations/datacomp_small/resolve/b7dd54c19199236fe33f367ce7f88f412244fab8/0020f0cbd157d470aa56bea08e304b90.parquet", "method": "GET", "result": "curl 28: Resolving timed out after 10004 milliseconds; no payload saved"},
+    {"url": "https://i.imgur.com/mXQrfNs.png", "method": "GET", "source": "First row shown by official dataset card, UID d142ae70686e14ccc379c01a571501b5; connectivity probe only, not counted as training data", "result": "curl 28: Resolving timed out after 10000 milliseconds; no payload saved"}
+  ],
+  "downloaded_resources": [],
+  "local_artifacts": ["summary.json", "SHA256SUMS", "attempt02/summary.json", "attempt02/manifest.json", "attempt02/SHA256SUMS", "attempt02/official-parquet-headers.txt (empty)", "attempt02/image-probe-headers.txt (empty)"],
+  "test_artifacts": "E:/ParaScale-data/test_datacomp_* contain synthetic test fixtures only, not real DataComp",
+  "constraints": "No TLS bypass, proxy changes, GPU use, server writes, deletion of existing files, or production directory changes"
+}

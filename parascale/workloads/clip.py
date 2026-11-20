@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import warnings
+from itertools import islice
 from typing import Any, Dict, Iterable, List
 
 from parascale.data import MultiModalCollator
@@ -24,6 +25,7 @@ from .common import (
 from .datacomp import (
     _build_datacomp_metadata_dataset,
     _build_datacomp_wds_dataset,
+    _datacomp_tar_paths,
     _stream_datacomp_wds_batches,
 )
 
@@ -294,37 +296,44 @@ def _build_hf_clip_contrastive_components(torch: Any, spec: ClipContrastiveSpec)
     model = HFContrastiveWrapper(hf_model)
     optimizer = optim.AdamW(model.parameters(), lr=spec.lr)
 
-    def dataloader() -> Iterable[Dict[str, Any]]:
-        yielded = 0
-        for samples in _clip_sample_batches(torch, spec):
-            Image = _require_pil_image()
-            images = []
-            captions = []
-            for sample in samples:
-                if "image" not in sample or not isinstance(sample.get("text"), str):
-                    raise ValueError(
-                        "Pretrained CLIP/SigLIP requires original images and captions."
-                    )
-                # Decode only: the checkpoint processor owns all spatial and numeric transforms.
-                with Image.open(io.BytesIO(sample["image"])) as image:
-                    images.append(image.convert("RGB"))
-                captions.append(sample["text"])
-            batch = dict(
-                processor(
-                    images=images,
-                    text=captions,
-                    padding="max_length",
-                    truncation=True,
-                    return_tensors="pt",
+    def prepare_batch(samples):
+        Image = _require_pil_image()
+        images = []
+        captions = []
+        for sample in samples:
+            if "image" not in sample or not isinstance(sample.get("text"), str):
+                raise ValueError(
+                    "Pretrained CLIP/SigLIP requires original images and captions."
                 )
+            with Image.open(io.BytesIO(sample["image"])) as image:
+                images.append(image.convert("RGB"))
+            captions.append(sample["text"])
+        batch = dict(
+            processor(
+                images=images,
+                text=captions,
+                padding="max_length",
+                truncation=True,
+                return_tensors="pt",
             )
-            batch["labels"] = torch.arange(
-                batch["input_ids"].shape[0], dtype=torch.long
-            )
-            yield batch
-            yielded += 1
-            if yielded >= spec.num_batches:
-                break
+        )
+        batch["labels"] = torch.arange(batch["input_ids"].shape[0], dtype=torch.long)
+        return batch
+
+    if (
+        spec.streaming
+        and spec.num_workers == 0
+        and not spec.cuda_prefetch
+        and spec.data_type in {"datacomp_wds", "webdataset", "wds"}
+    ):
+        from parascale.data.wds_cursor import WdsCursorBatches
+
+        batches = WdsCursorBatches(spec, prepare_batch, paths=_datacomp_tar_paths(spec))
+    else:
+        batches = (
+            prepare_batch(samples)
+            for samples in islice(_clip_sample_batches(torch, spec), spec.num_batches)
+        )
 
     def loss_fn(output, batch):
         logits = getattr(output, "logits_per_image", None)
@@ -345,7 +354,7 @@ def _build_hf_clip_contrastive_components(torch: Any, spec: ClipContrastiveSpec)
         text_to_image = nn.functional.cross_entropy(logits.T, labels)
         return (image_to_text + text_to_image) * 0.5
 
-    return model, optimizer, dataloader(), loss_fn
+    return model, optimizer, batches, loss_fn
 
 
 def _clip_sample_batches(

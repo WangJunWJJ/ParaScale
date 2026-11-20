@@ -1,0 +1,18 @@
+{
+  "date": "2026-11-20",
+  "local_directory": "E:/ParaScale-data/datacomp_small_20261120/attempt04",
+  "destination_host": "192.168.8.156",
+  "destination_directory": "/home/user/wangjun/parascale_production_20261120/datasets/datacomp_download_20261120",
+  "requested_pairs": 512,
+  "decoded_pairs": 333,
+  "original_image_hash_matches": 208,
+  "original_image_hash_mismatches": 125,
+  "remote_artifact_hashes_verified": 6,
+  "remote_decoded_pairs": 333,
+  "training_run_performed_on_this_subset": false,
+  "notes": [
+    "All six downloaded artifacts matched SHA256SUMS after transfer; the Windows-generated checksum manifest required CR removal while parsing on Linux. Future tool output uses LF.",
+    "Remote CPU preflight verified each processed image hash, exact caption text, unique pairing, sample count and full image decode. No GPU training or quality claim is made for this partial subset.",
+    "The separately measured 1/2/4-GPU experiment uses the Flickr8k-labeled 6000-pair dataset transferred from host 145."
+  ]
+}

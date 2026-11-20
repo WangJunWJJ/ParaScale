@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "parascale": {
+    "task_type": "multimodal",
+    "model_family": "clip",
+    "target_scale": "single_node",
+    "training_backend": "native_ddp",
+    "precision": "fp32",
+    "data_parallel_size": 4,
+    "ddp_comm_hook": "none",
+    "checkpoint_save_path": "runs/production_candidate/4gpu/checkpoints",
+    "checkpoint_save_interval": 100
+  },
+  "task": {"type": "multimodal", "workload": "clip_contrastive"},
+  "model": {"type": "hf_clip", "pretrained_model_name_or_path": "/models/clip"},
+  "data": {
+    "type": "datacomp_wds",
+    "data_dir": "/datasets/datacomp",
+    "streaming": true,
+    "num_workers": 0,
+    "text_length": 64
+  },
+  "optimizer": {"type": "adamw", "lr": 0.000001},
+  "hardware_profile": {"num_gpus": 4, "gpus_per_node": 4},
+  "distributed": {"nnodes": 1, "nproc_per_node": 4},
+  "runtime": {"device": "cuda", "run_dir": "runs/production_candidate/4gpu"},
+  "training": {
+    "workload": "clip_contrastive",
+    "batch_size": 8,
+    "gradient_accumulation_steps": 1,
+    "max_steps": 1000,
+    "checkpoint_interval": 100,
+    "checkpoint_dir": "runs/production_candidate/4gpu/checkpoints",
+    "seed": 42
+  }
+}
