@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from parascale.configuration import normalize_execution_config, validate_config_schema
+from parascale.workloads.capability import describe_workload
 from parascale.workloads.specs.clip import ClipContrastiveSpec
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,6 +33,7 @@ def test_candidate_execution_contract(world_size, filename):
     assert raw["schema_version"] == 1
     assert validate_config_schema(raw)["ok"]
     normalized, config = normalize_execution_config(raw)
+    assert describe_workload(normalized).workload == "clip_contrastive"
     spec = ClipContrastiveSpec.from_config(normalized)
     backend = "native" if world_size == 1 else "native_ddp"
     assert config.training_backend == backend
@@ -82,6 +84,7 @@ def test_candidate_execution_contract(world_size, filename):
         "distributed": {"nnodes", "nproc_per_node"},
         "runtime": {"device", "run_dir"},
         "training": {
+            "workload",
             "batch_size",
             "gradient_accumulation_steps",
             "max_steps",

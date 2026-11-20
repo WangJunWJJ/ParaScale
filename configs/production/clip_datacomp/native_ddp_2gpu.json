@@ -25,6 +25,7 @@
   "distributed": {"nnodes": 1, "nproc_per_node": 2},
   "runtime": {"device": "cuda", "run_dir": "runs/production_candidate/2gpu"},
   "training": {
+    "workload": "clip_contrastive",
     "batch_size": 8,
     "gradient_accumulation_steps": 1,
     "max_steps": 1000,
