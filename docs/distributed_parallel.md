@@ -147,6 +147,11 @@ an independent copy for reference comparisons. Each PP rank owns a contiguous
 decoder range; only the first owns embedding and only the last owns norm/head.
 Attention and MLP projections are TP-sharded; embedding, norms and head remain
 replicated within TP. Q heads, KV heads and projection widths must divide TP.
+Within attention, Q/K/V share one replicated DTensor input; gate/up share one
+within the MLP. Their partial input gradients combine before redistribution,
+instead of reducing each branch separately. Child outputs stay local tensors,
+so RoPE, attention and residual operations retain the pinned HF behavior.
+This changes floating-point reduction order and still requires numerical checks.
 
 The contract is packed causal token blocks starting at position zero, zero
 attention dropout, no KV cache, no padding/custom mask and no AMP. Both eager

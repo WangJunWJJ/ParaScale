@@ -116,14 +116,27 @@ class LlamaStage(nn.Module):
             raise ValueError("input token is outside the configured vocabulary")
 
     def tensor_parallel_plan(self) -> dict[str, Any]:
-        """Shard attention/MLP projections; keep embedding, norm and head replicated."""
-        from torch.distributed.tensor.parallel import ColwiseParallel, RowwiseParallel
+        """Shard projections and share input-gradient reductions within each block."""
+        from torch.distributed.tensor import Replicate
+        from torch.distributed.tensor.parallel import (
+            ColwiseParallel,
+            PrepareModuleInput,
+            RowwiseParallel,
+        )
 
         if self.tp_size == 1:
             return {}
         plan = {}
         for index in self.model.layers:
             prefix = f"model.layers.{index}"
+            # Keep one DTensor input so branch gradients combine before reduction.
+            plan[f"{prefix}.self_attn"] = PrepareModuleInput(
+                input_kwarg_layouts={"hidden_states": Replicate()},
+                desired_input_kwarg_layouts={"hidden_states": Replicate()},
+            )
+            plan[f"{prefix}.mlp"] = PrepareModuleInput(
+                input_layouts=Replicate(), desired_input_layouts=Replicate()
+            )
             for projection in ("q_proj", "k_proj", "v_proj"):
                 plan[f"{prefix}.self_attn.{projection}"] = ColwiseParallel()
             plan[f"{prefix}.self_attn.o_proj"] = RowwiseParallel()

@@ -129,6 +129,9 @@ def test_nondivisible_tp_configuration_rejected(setting, value):
 
 
 def test_tensor_plan_covers_only_owned_attention_and_mlp():
+    from torch.distributed.tensor import Replicate
+    from torch.distributed.tensor.parallel import PrepareModuleInput
+
     from parascale.parallel.llama import LlamaStage
 
     stage = LlamaStage(model_fixture(), 1, 2, tp_size=2)
@@ -137,10 +140,12 @@ def test_tensor_plan_covers_only_owned_attention_and_mlp():
         f"model.layers.{index}.{projection}"
         for index in (2, 3)
         for projection in (
+            "self_attn",
             "self_attn.q_proj",
             "self_attn.k_proj",
             "self_attn.v_proj",
             "self_attn.o_proj",
+            "mlp",
             "mlp.gate_proj",
             "mlp.up_proj",
             "mlp.down_proj",
@@ -148,6 +153,16 @@ def test_tensor_plan_covers_only_owned_attention_and_mlp():
     }
     assert set(plan) == expected
     assert set(plan) <= set(dict(stage.named_modules()))
+    for index in (2, 3):
+        attention = plan[f"model.layers.{index}.self_attn"]
+        mlp = plan[f"model.layers.{index}.mlp"]
+        assert isinstance(attention, PrepareModuleInput)
+        assert attention.input_kwarg_layouts == {"hidden_states": Replicate()}
+        assert attention.desired_input_kwarg_layouts == attention.input_kwarg_layouts
+        assert isinstance(mlp, PrepareModuleInput)
+        assert mlp.input_layouts == (Replicate(),)
+        assert mlp.desired_input_layouts == mlp.input_layouts
+        assert not attention.use_local_output and not mlp.use_local_output
     assert LlamaStage(model_fixture()).tensor_parallel_plan() == {}
 
 
