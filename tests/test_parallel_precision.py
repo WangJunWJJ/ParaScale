@@ -126,7 +126,7 @@ def test_pipeline_schedule_disables_ambient_backward_autocast(monkeypatch):
     trainer.mesh = {"pp": SimpleNamespace(get_group=lambda: None)}
     seen = []
     trainer.schedule = SimpleNamespace(
-        step=lambda inputs: seen.append(torch.is_autocast_enabled("cpu"))
+        step=lambda inputs, **kwargs: seen.append(torch.is_autocast_enabled("cpu"))
     )
     monkeypatch.setattr(torch.distributed, "broadcast", lambda *args, **kwargs: None)
     with torch.autocast("cpu", dtype=torch.bfloat16):

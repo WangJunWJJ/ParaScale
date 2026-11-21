@@ -241,6 +241,7 @@ class DistributedTrainer:
             from torch.distributed.pipelining import ScheduleGPipe
 
             from .pipeline_stage import (
+                OutputAwareGPipe,
                 PrecisionPipelineStage,
                 validate_pipeline_contract,
             )
@@ -258,7 +259,7 @@ class DistributedTrainer:
             kwargs = {}
             if "scale_grads" in inspect.signature(ScheduleGPipe).parameters:
                 kwargs["scale_grads"] = False
-            self.schedule = ScheduleGPipe(
+            self.schedule = OutputAwareGPipe(
                 stage, config.microbatches, loss_fn=self._microbatch_loss, **kwargs
             )
 
@@ -305,7 +306,7 @@ class DistributedTrainer:
         Last-stage targets must match the loss output contract. No optimizer or
         data-loader work is hidden inside this operation.
         Outputs are opt-in: ordinary training does not retain/concatenate logits
-        in the non-pipeline path. GPipe still owns its internal output merge.
+        in either path; pipeline loss/backward caches remain schedule-owned.
         """
         with autocast_context("fp32", self.device):
             self._prepare_step(inputs, targets)
@@ -348,11 +349,13 @@ class DistributedTrainer:
                 del prediction, loss
             output = torch.cat(outputs) if return_outputs else None
         elif self.pp_rank == 0:
-            self.schedule.step(inputs)
+            self.schedule.step(inputs, return_outputs=return_outputs)
         elif self.pp_rank == self.config.pp_size - 1:
-            output = self.schedule.step(target=targets, losses=losses)
+            output = self.schedule.step(
+                target=targets, losses=losses, return_outputs=return_outputs
+            )
         else:
-            self.schedule.step()
+            self.schedule.step(return_outputs=return_outputs)
         value = torch.zeros((), device=self.device)
         if losses:
             value.copy_(torch.stack([loss.detach() for loss in losses]).sum())

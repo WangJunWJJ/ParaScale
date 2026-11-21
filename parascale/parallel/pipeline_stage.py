@@ -7,7 +7,7 @@
 
 from typing import Any
 
-from torch.distributed.pipelining import PipelineStage
+from torch.distributed.pipelining import PipelineStage, ScheduleGPipe
 
 from .precision import autocast_context
 
@@ -52,6 +52,7 @@ class PrecisionPipelineStage(PipelineStage):
         precision: str,
     ) -> None:
         self.precision = precision
+        self.retain_outputs = False
         with autocast_context(precision, device):
             super().__init__(module, index, count, device, example, group=group)
 
@@ -59,3 +60,27 @@ class PrecisionPipelineStage(PipelineStage):
         """Keep the native wrapper's synchronization behavior inside forward AMP."""
         with autocast_context(self.precision, self.device):
             return super().forward_maybe_with_nosync(*args, **kwargs)
+
+    def forward_one_chunk(self, *args: Any, **kwargs: Any) -> Any:
+        """Keep native backward caches, dropping only optional output references."""
+        output = super().forward_one_chunk(*args, **kwargs)
+        if not self.retain_outputs:
+            self.output_chunks.clear()
+        return output
+
+
+class OutputAwareGPipe(ScheduleGPipe):
+    """Preserve native scheduling while making merged outputs opt-in per step."""
+
+    def step(self, *args: Any, return_outputs: bool = False, **kwargs: Any) -> Any:
+        self._stage.retain_outputs = return_outputs
+        try:
+            return super().step(*args, **kwargs)
+        finally:
+            self._stage.output_chunks.clear()
+            self._stage.retain_outputs = False
+
+    def _merge_outputs(self, output_chunks: list[Any]) -> Any:
+        if not self._stage.retain_outputs:
+            return None
+        return super()._merge_outputs(output_chunks)
