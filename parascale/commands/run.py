@@ -154,6 +154,7 @@ def run_inference_from_config(config_data: Dict[str, Any]) -> Dict[str, Any]:
     ).run(
         batches,
         warmup_steps=int(inference.get("warmup_steps", 1) or 0),
+        max_outputs=inference.get("max_outputs", 32),
     )
     return attach_runtime_evidence(
         {

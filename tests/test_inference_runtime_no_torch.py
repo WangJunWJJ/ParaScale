@@ -7,6 +7,153 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
+import pytest
+
+
+def _identity_runner():
+    from parascale.runtime.inference.runner import InferenceRunner
+
+    return InferenceRunner(
+        SimpleNamespace(predict=lambda batch: batch),
+        "vision_detection",
+        memory_getter=lambda: None,
+    )
+
+
+def test_inference_outputs_are_bounded_by_default_without_losing_counts():
+    result = _identity_runner().run(iter(range(100)), warmup_steps=0)
+    assert result["outputs"] == list(range(32))
+    assert result["metrics"]["requests"] == 100
+    assert result["output_retention"] == {
+        "max_outputs": 32,
+        "retained": 32,
+        "dropped": 68,
+        "callback_enabled": False,
+    }
+
+
+@pytest.mark.parametrize("limit", [0, 2, None])
+def test_inference_callback_consumes_all_measured_outputs_in_order(limit):
+    received = []
+    result = _identity_runner().run(
+        iter(range(8)), warmup_steps=2, max_outputs=limit, on_output=received.append
+    )
+    assert received == list(range(2, 8))
+    assert result["outputs"] == received[:limit]
+    assert result["metrics"]["requests"] == 6
+    assert result["output_retention"]["dropped"] == 6 - len(result["outputs"])
+    assert result["output_retention"]["callback_enabled"] is True
+
+
+def test_inference_callback_failure_stops_consuming_input():
+    consumed = []
+
+    def batches():
+        for value in range(10):
+            consumed.append(value)
+            yield value
+
+    def sink(value):
+        if value == 2:
+            raise OSError("output sink unavailable")
+
+    with pytest.raises(OSError, match="output sink unavailable"):
+        _identity_runner().run(batches(), warmup_steps=0, max_outputs=0, on_output=sink)
+    assert consumed == [0, 1, 2]
+
+
+def test_inference_callback_mutation_does_not_change_metric_counts():
+    result = _identity_runner().run(
+        [{"num_images": 7}],
+        warmup_steps=0,
+        max_outputs=0,
+        on_output=lambda output: output.clear(),
+    )
+    assert result["metrics"]["requests"] == 1
+    assert result["metrics"]["images"] == 7
+
+
+@pytest.mark.parametrize("limit", [-1, True, 1.5, "2"])
+def test_inference_rejects_invalid_retention_before_model_preparation(limit):
+    runner = _identity_runner()
+    prepared = []
+    runner.model.eval = lambda: prepared.append(True)
+    with pytest.raises(ValueError, match="max_outputs"):
+        runner.run([1], max_outputs=limit)
+    assert not prepared
+
+
+def test_inference_rejects_noncallable_output_callback():
+    with pytest.raises(TypeError, match="on_output must be callable"):
+        _identity_runner().run([1], on_output=42)
+
+
+def test_inference_rejects_async_output_callbacks():
+    async def sink(value):
+        pass
+
+    with pytest.raises(TypeError, match="synchronous"):
+        _identity_runner().run([1], warmup_steps=0, on_output=sink)
+    with pytest.raises(TypeError, match="synchronous"):
+        _identity_runner().run([1], warmup_steps=0, on_output=lambda value: sink(value))
+
+
+def test_streaming_inference_releases_consumed_objects():
+    import weakref
+
+    runner = _identity_runner()
+    live = weakref.WeakSet()
+
+    class Output:
+        pass
+
+    def predict(batch):
+        assert len(live) <= 1
+        output = Output()
+        live.add(output)
+        return output
+
+    runner.model.predict = predict
+    result = runner.run(range(1000), warmup_steps=0, max_outputs=0)
+    assert result["outputs"] == []
+    assert result["metrics"]["requests"] == 1000
+    assert not live
+
+
+def test_streaming_inference_does_not_retain_per_request_latency_history():
+    import tracemalloc
+
+    runner = _identity_runner()
+    runner.run([None], warmup_steps=0, max_outputs=0)
+    tracemalloc.start()
+    try:
+        result = runner.run((None for _ in range(20000)), warmup_steps=0, max_outputs=0)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert result["metrics"]["requests"] == 20000
+    assert peak < 256 * 1024
+
+
+@pytest.mark.parametrize("limit", [0, 2, None])
+def test_inference_configuration_exposes_output_retention(limit, monkeypatch):
+    from parascale.commands.run import run_inference_from_config
+
+    monkeypatch.setattr(
+        "parascale.commands.run.build_inference_components",
+        lambda config: (_identity_runner().model, iter(range(8)), "vision_detection"),
+    )
+    result = run_inference_from_config(
+        {
+            "runtime": {"accelerator": "cpu"},
+            "inference": {"warmup_steps": 0, "max_outputs": limit},
+        }
+    )
+    assert result["outputs"] == list(range(8))[:limit]
+    assert result["output_retention"]["max_outputs"] == limit
+
 
 def test_inference_runner_moves_nested_batch_and_reports_metrics_without_torch():
     from parascale.runtime.inference.runner import InferenceRunner
