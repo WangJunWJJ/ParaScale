@@ -76,10 +76,14 @@ The runnable example below supplies all of them.
   microbatch. Intermediate forward/backward passes use DDP's `no_sync` context.
   FSDP2 and pipeline schedules retain their own synchronization behavior.
 - Output tensors are opt-in via `forward_backward(..., return_outputs=True)` and
-  returned only on the last PP stage. Without PP, the default avoids retaining
-  and concatenating each microbatch's logits. GPipe still merges its outputs
-  internally, so this is not a bounded-memory pipeline schedule. Optimizer steps,
-  dataloaders, schedulers and process-group teardown remain caller-owned.
+  returned only on the last PP stage. The default avoids auxiliary retention and
+  concatenation of microbatch logits in both execution paths. When requested,
+  pipeline outputs retain native order/dtype; the schedule releases its output
+  chunk references after the call, while the returned tensor remains caller-owned.
+  Native GPipe still retains forward graphs until backward and allocates receive
+  buffers per microbatch: this is not a constant-memory pipeline schedule.
+  Optimizer steps, dataloaders, schedulers and process-group teardown remain
+  caller-owned. Model/communication failures still require teardown, not reuse.
 
 ### Execution Precision
 

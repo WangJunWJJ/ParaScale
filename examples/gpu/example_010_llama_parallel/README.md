@@ -210,6 +210,58 @@ outside the timed window; peak allocated memory is measured during training.
 Outputs remain `diagnostic` and include per-step timings plus model, data, source
 and script digests. Keep these generated files outside the repository.
 
+## Pipeline Output Retention and Memory
+
+Pipeline training defaults to `return_outputs=False`: it does not keep auxiliary
+logit chunks or concatenate them after backward. `return_outputs=True` preserves
+ordered output tensors on the last stage. Native GPipe still keeps the forward
+graphs needed for backward and per-microbatch receive buffers; this change alone
+does not bound activation memory or guarantee a throughput gain.
+
+The numerical validator supports `--output-policy alternate` to switch between
+retained and discarded outputs across updates while checking the same native
+reference. `discard` checks gradients/updates without returning logits; `retain`
+remains the default for output-level numerical comparisons.
+
+For real model memory/timing observations, use this separate pipeline benchmark:
+
+```bash
+MODEL=/path/to/tinyllama-1.1b-59f6f375
+DATA=/path/to/wikitext/train.txt
+OUTPUT=$(mktemp -d /tmp/parascale-pipeline-memory.XXXXXX)
+COMMON=(--model "$MODEL" --data-file "$DATA" --dp 1 --tp 1 --pp 2
+        --precision bf16 --global-batch 16 --microbatches 2
+        --sequence-length 256 --steps 16 --warmup 4)
+for MODE in no-return-outputs return-outputs; do
+  CUDA_VISIBLE_DEVICES=0,1 OMP_NUM_THREADS=1 HF_HUB_OFFLINE=1 \
+  python -m torch.distributed.run \
+    --master_addr=127.0.0.1 --master_port=29500 --nproc_per_node=2 \
+    tests/benchmarks/scripts/benchmark_llama_pipeline.py \
+    "${COMMON[@]}" --"$MODE" --output "$OUTPUT/$MODE.json"
+done
+```
+
+For DP2+PP2 or TP2+PP2, select four devices/processes and change `--dp 2` or
+`--tp 2`, not both. To sweep retention at fixed microbatch shape, increase
+`--microbatches` and `--global-batch` together. Respect memory limits; do not infer
+four-card performance from a two-card measurement.
+
+The result includes per-rank allocated/reserved peaks, post-backward/post-step
+allocated bytes, output/backward cache counts and backing-storage bytes, losses,
+and exact final model/optimizer fingerprints. Cache storage measurements exclude
+autograd-saved tensors, and storage can overlap between different caches.
+Fingerprints are computed only after timing/peak capture and do not write a
+checkpoint. The script deletes caller-owned returned results before the optimizer
+in both modes, so post-step retention is not an artificial caller-held output.
+
+Timing sums separately synchronized forward/backward and optimizer segments,
+excluding inspection, H2D, preprocessing and fingerprints. It is not end-to-end
+latency and should not be compared directly with differently instrumented tools.
+Compare source versions using identical benchmark/helper files, assets, topology,
+precision, batch budget and affinity; alternate order and repeat. Require matching
+losses and final per-rank state fingerprints before interpreting memory or speed.
+The status remains `diagnostic`, not convergence or production acceptance.
+
 ## Fresh-process Checkpoint Validation
 
 This separate validator compares a continuous four-update run with an independent
