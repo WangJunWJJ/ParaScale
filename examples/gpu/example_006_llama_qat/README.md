@@ -46,4 +46,20 @@ bash examples/gpu/example_006_llama_qat/run.sh \
 PowerShell 对应入口：
 `python tests/benchmarks/scripts/validate_llama_quantization.py --tiny --mode qat --bits 8 --qat-steps 16 --device cpu --output runs/examples/llama_qat_windows`。
 
+## Observer 训练性能回归
+
+比较两个代码版本的 observer 实现时，在同一空闲 GPU 上运行：
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python tests/benchmarks/scripts/benchmark_qat_observer.py \
+  --baseline-source /path/to/before-change-checkout \
+  --widths 128 512 1024 2048 --steps 30 --warmup 5 --repeats 3 \
+  --output /tmp/qat-observer-comparison.json
+```
+
+程序交替运行基线与当前实现，检查输入、训练后模型状态及梯度哈希一致，
+记录包含 forward、backward、SGD 更新的步耗时。输出文件必须尚不存在。
+这是固定随机 Llama 输入的热点诊断，不包含数据加载，也不代表预训练质量或
+完整生产训练吞吐；不能替代上面的真实文本评测。生成结果无需提交到源码仓库。
+
 实测记录见[统一测试报告](../../../tests/benchmarks/reports/BENCHMARK_REPORT.md)。
