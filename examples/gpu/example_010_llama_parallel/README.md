@@ -107,5 +107,12 @@ executor: it isolates adapter error, not the entire distributed trainer. Its res
 is always `diagnostic`, never adapter qualification. `--observe-errors` records
 gate failures without declaring a pass. Keep generated results out of commits.
 
+`--adam-eps` explicitly sets the same positive finite AdamW epsilon in both paths
+and records it in the result; the default remains `1e-8`. Use this only for
+controlled optimizer-sensitivity experiments. Changing epsilon changes training,
+not the acceptance tolerance, and requires independent quality validation. A
+smaller parameter drift alone does not qualify a topology or justify changing
+production optimizer settings.
+
 This example does not establish convergence, held-out quality, throughput speedup,
 fresh-process recovery, tied cross-stage optimization or 24-hour production readiness.

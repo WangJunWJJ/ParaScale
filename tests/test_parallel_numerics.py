@@ -52,3 +52,21 @@ def test_dp_normalization_error_is_rejected():
 
     expected = torch.randn(8, 8)
     assert not compare_training_tensor(expected / 2, expected, "gradient")["passed"]
+
+
+@pytest.mark.parametrize("epsilon", ["0", "-1", "nan", "inf"])
+def test_llama_validator_rejects_invalid_adam_epsilon_before_cuda(
+    epsilon, monkeypatch, capsys
+):
+    import sys
+
+    pytest.importorskip("transformers")
+    from tests.benchmarks.scripts.validate_llama_parallel import main
+
+    monkeypatch.setattr(
+        sys, "argv", ["validate", "--output", "unused.json", "--adam-eps", epsilon]
+    )
+    with pytest.raises(SystemExit) as error:
+        main()
+    assert error.value.code == 2
+    assert "adam-eps must be finite and positive" in capsys.readouterr().err

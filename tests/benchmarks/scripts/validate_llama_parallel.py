@@ -50,6 +50,12 @@ def main():
     parser.add_argument("--sequence-length", type=int, default=8)
     parser.add_argument("--global-batch", type=int, default=8)
     parser.add_argument("--steps", type=int, default=4)
+    parser.add_argument(
+        "--adam-eps",
+        type=float,
+        default=1e-8,
+        help="Matched AdamW epsilon for both paths; changing it requires quality validation",
+    )
     parser.add_argument("--attention", choices=["eager", "sdpa"], default="eager")
     parser.add_argument("--native-forward-control", action="store_true")
     parser.add_argument(
@@ -76,6 +82,8 @@ def main():
         parser.error("native-forward-control requires a single pipeline stage")
     if not math.isfinite(args.logits_atol) or args.logits_atol < 0:
         parser.error("logits-atol must be finite and nonnegative")
+    if not math.isfinite(args.adam_eps) or args.adam_eps <= 0:
+        parser.error("adam-eps must be finite and positive")
     local_rank = int(os.environ["LOCAL_RANK"])
     torch.cuda.set_device(local_rank)
     device = torch.device("cuda", local_rank)
@@ -145,9 +153,11 @@ def main():
             summed_loss=objective,
             tensor_plan=stage.tensor_parallel_plan() or None,
         )
-        optimizer = torch.optim.AdamW(trainer.parameters(), lr=1e-5, foreach=False)
+        optimizer = torch.optim.AdamW(
+            trainer.parameters(), lr=1e-5, eps=args.adam_eps, foreach=False
+        )
         reference_optimizer = torch.optim.AdamW(
-            reference.parameters(), lr=1e-5, foreach=False
+            reference.parameters(), lr=1e-5, eps=args.adam_eps, foreach=False
         )
         expected_parameters = dict(reference.named_parameters())
         errors = dict.fromkeys(GATES, 0.0)
