@@ -138,7 +138,7 @@ def test_label_free_causal_shift_and_classification_mask():
 
 @pytest.mark.parametrize("length", [0, 1])
 def test_causal_empty_sequences(length):
-    logits = torch.empty(2, length, 3)
+    logits = torch.zeros(2, length, 3)
     with pytest.raises(ValueError, match="nonempty|length"):
         distillation_loss(
             logits, logits, config=DistillationConfig(task="causal_lm", alpha=1)
