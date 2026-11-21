@@ -262,6 +262,39 @@ precision, batch budget and affinity; alternate order and repeat. Require matchi
 losses and final per-rank state fingerprints before interpreting memory or speed.
 The status remains `diagnostic`, not convergence or production acceptance.
 
+## Pipeline Schedule Comparison
+
+All validation, checkpoint and pipeline benchmark commands accept
+`--pipeline-schedule gpipe|1f1b`, defaulting to GPipe. Use `--pp 2` and
+`--microbatches >= 2` for 1F1B. The selected policy must be the same for saving
+and resuming; schema4 checkpoints reject older schemas or schedule mismatches
+before reading weight payloads. A GPipe checkpoint cannot be silently reused
+for a 1F1B run.
+
+For a fixed microbatch-size memory sweep, reuse the model/data paths above:
+
+```bash
+OUTPUT=$(mktemp -d /tmp/parascale-pipeline-schedule.XXXXXX)
+for MICRO in 2 4 8; do
+  for SCHEDULE in gpipe 1f1b; do
+    CUDA_VISIBLE_DEVICES=0,1 OMP_NUM_THREADS=1 HF_HUB_OFFLINE=1 \
+    python -m torch.distributed.run \
+      --master_addr=127.0.0.1 --master_port=29500 --nproc_per_node=2 \
+      tests/benchmarks/scripts/benchmark_llama_pipeline.py \
+      --model "$MODEL" --data-file "$DATA" --pp 2 --precision bf16 \
+      --pipeline-schedule "$SCHEDULE" --microbatches "$MICRO" \
+      --global-batch "$((2 * MICRO))" --sequence-length 256 \
+      --steps 16 --warmup 4 --output "$OUTPUT/$SCHEDULE-m$MICRO.json"
+  done
+done
+```
+
+Each comparison pair processes identical tokens at microbatch size 2. Repeat in
+reverse order for timing; compare all ranks' allocated peaks, not only rank 0.
+Different microbatch counts change the global batch and total token budget, so
+do not treat the sweep as a convergence comparison. 1F1B still allocates native
+per-microbatch receive buffers and is not a constant-total-memory algorithm.
+
 ## Fresh-process Checkpoint Validation
 
 This separate validator compares a continuous four-update run with an independent

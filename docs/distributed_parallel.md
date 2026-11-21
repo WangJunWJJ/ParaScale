@@ -70,7 +70,7 @@ The runnable example below supplies all of them.
   pipeline output/input shape and dtype must agree. The positional `loss_fn` remains a scalar mean over
   equal-size microbatches with equal denominators. Use `summed_loss` below for
   ignored labels and unequal valid-token counts; do not pass both objectives.
-- GPipe handles inter-stage forward/backward communication. Loss scaling occurs
+- Native GPipe or 1F1B handles inter-stage forward/backward communication. Loss scaling occurs
   exactly once; the result reports DP-averaged loss on every rank.
 - Replicated DDP without TP/PP synchronizes gradients only on the final
   microbatch. Intermediate forward/backward passes use DDP's `no_sync` context.
@@ -84,6 +84,23 @@ The runnable example below supplies all of them.
   buffers per microbatch: this is not a constant-memory pipeline schedule.
   Optimizer steps, dataloaders, schedulers and process-group teardown remain
   caller-owned. Model/communication failures still require teardown, not reuse.
+
+### Pipeline Schedule
+
+`DistributedParallelConfig(pp_size=2, pipeline_schedule="1f1b")` opts into
+PyTorch's native single-stage-per-rank 1F1B schedule. `"gpipe"` remains the default.
+`trainer.config` is read-only. The selection is frozen, must agree across ranks before mesh creation, and is
+part of checkpoint identity. 1F1B requires PP and at least as many microbatches
+as stages; it is not a different tensor-parallel plan or virtual-stage schedule.
+
+1F1B alternates backward and forward work after warmup, releasing backward graphs
+earlier than all-forward/all-backward GPipe. Receive buffers still exist for each
+microbatch, and requested output tensors still occupy memory: total allocation
+is not constant. Compare identical per-microbatch shapes and measure all ranks'
+peaks. Lower activation occupancy does not guarantee higher throughput.
+Loss normalization, native DDP synchronization, BF16 forward scope and caller-owned
+optimizer steps are unchanged. Cross-schedule bitwise equivalence is not promised;
+validate each policy numerically and restore only with the same schedule.
 
 ### Execution Precision
 
@@ -220,7 +237,7 @@ checks precede model state capture. Shared parameters use their first registered
 name, and optimizing only a subset is allowed. Saved hyperparameters are restored,
 not compared with constructor defaults.
 
-Schema v3 requires an explicit `checkpoint_context` when constructing the trainer
+Schema v4 binds `pipeline_schedule` and requires an explicit `checkpoint_context` when constructing the trainer
 if checkpoints will be used. Training without checkpoints may omit it. The context
 contains `model`, `loss`, `data`, `tokenizer` and `precision` descriptors; the first
 four must be nonblank strings or nonempty objects. Precision is `"fp32"` or
@@ -250,7 +267,7 @@ returns a copy. All ranks declare the same global context, not their PP ownershi
 or local batch. Context JSON must have string object keys and finite values;
 tuples, cycles and duplicate manifest keys are rejected. Object order is ignored,
 array order is retained, and `true`, `1` and `1.0` are distinct identities.
-Schema 1/2 checkpoints are rejected rather than inventing missing identity.
+Schema 1/2/3 checkpoints are rejected rather than inventing missing identity.
 Load preflight checks context before deserializing any rank payload.
 
 This verifies **matching declarations**, not arbitrary runtime behavior. Callers
@@ -260,7 +277,7 @@ sampler position, scheduler state or data-loader state; those require separate
 application-owned restoration. Automatic discovery of undeclared changes is not
 supported.
 
-Only trusted local checkpoint files may be loaded. Topology, microbatch count
+Only trusted local checkpoint files may be loaded. Topology, microbatch count, schedule
 and rank/device mapping must remain unchanged. This format is not portable
 inference export, topology-changing resharding, dataloader state or automatic
 fault recovery. Python validation failures are coordinated; a dead process or
