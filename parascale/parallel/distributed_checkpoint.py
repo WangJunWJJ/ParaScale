@@ -17,6 +17,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from .checkpoint_context import canonical_checkpoint_context
+
 
 def _digest(path: Path) -> str:
     digest = hashlib.sha256()
@@ -24,6 +26,16 @@ def _digest(path: Path) -> str:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Reject ambiguous manifests instead of accepting the last duplicate key."""
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"Checkpoint manifest contains duplicate key: {key}")
+        result[key] = value
+    return result
 
 
 @contextmanager
@@ -82,23 +94,52 @@ def _validate_execution(trainer: Any) -> None:
         raise ValueError("Checkpoint rank does not match process group")
 
 
+def _optimizer_identity(module: Any, optimizer: Any) -> dict[str, Any]:
+    """Bind optimizer slots to ordered stage parameter names, including subsets.
+
+    Shared parameters use their first registered name. External or repeated
+    parameters cannot be mapped unambiguously and are rejected before saving.
+    Hyperparameters are intentionally excluded: resume restores their saved values.
+    """
+    names = {id(parameter): name for name, parameter in module.named_parameters()}
+    seen, groups = set(), []
+    for group in optimizer.param_groups:
+        parameters = []
+        for parameter in group["params"]:
+            identity = id(parameter)
+            if identity not in names or identity in seen:
+                raise ValueError(
+                    "Checkpoint optimizer has external or duplicate parameters"
+                )
+            seen.add(identity)
+            parameters.append(names[identity])
+        groups.append(parameters)
+    cls = type(optimizer)
+    return {"type": f"{cls.__module__}.{cls.__qualname__}", "parameter_groups": groups}
+
+
 def _validate_manifest(metadata: Any, trainer: Any) -> None:
     if not isinstance(metadata, dict) or set(metadata) != {
         "schema_version",
         "topology",
         "step",
         "files",
+        "context",
     }:
         raise ValueError("Checkpoint manifest schema mismatch")
     topology = metadata["topology"]
     if (
         type(metadata["schema_version"]) is not int
-        or metadata["schema_version"] != 1
+        or metadata["schema_version"] != 3
         or not isinstance(topology, dict)
         or topology != asdict(trainer.config)
         or any(type(value) is not int for value in topology.values())
     ):
         raise ValueError("Checkpoint topology/schema does not match execution")
+    if canonical_checkpoint_context(
+        metadata["context"]
+    ) != canonical_checkpoint_context(getattr(trainer, "checkpoint_context", None)):
+        raise ValueError("Checkpoint training context mismatch")
     if type(metadata["step"]) is not int or metadata["step"] < 0:
         raise ValueError("Checkpoint step must be a nonnegative integer")
     entries = metadata["files"]
@@ -116,12 +157,51 @@ def _validate_manifest(metadata: Any, trainer: Any) -> None:
             raise ValueError("Checkpoint rank entry schema mismatch")
 
 
+def _validate_optimizer_binding(state: dict, identity: Any) -> None:
+    """Validate ordered parameter names and unique serialized optimizer slots."""
+    if (
+        not isinstance(identity, dict)
+        or set(identity) != {"type", "parameter_groups"}
+        or not isinstance(identity["type"], str)
+        or not identity["type"]
+        or not isinstance(identity["parameter_groups"], list)
+        or len(identity["parameter_groups"]) != len(state["param_groups"])
+    ):
+        raise ValueError("Checkpoint optimizer identity schema mismatch")
+    names, slots = set(), set()
+    for group, parameters in zip(state["param_groups"], identity["parameter_groups"]):
+        if (
+            not isinstance(group, dict)
+            or not isinstance(group.get("params"), list)
+            or not isinstance(parameters, list)
+            or len(group["params"]) != len(parameters)
+        ):
+            raise ValueError("Checkpoint optimizer identity group mismatch")
+        for slot, name in zip(group["params"], parameters):
+            if (
+                type(slot) is not int
+                or slot < 0
+                or slot in slots
+                or not isinstance(name, str)
+                or not name
+                or name in names
+            ):
+                raise ValueError(
+                    "Checkpoint optimizer identity has invalid parameter slots"
+                )
+            slots.add(slot)
+            names.add(name)
+    if any(type(slot) is not int or slot not in slots for slot in state["state"]):
+        raise ValueError("Checkpoint optimizer state has unbound parameter slots")
+
+
 def _validate_payload(payload: Any, metadata: dict, device: Any) -> None:
     import torch
 
     if not isinstance(payload, dict) or set(payload) != {
         "model",
         "optimizer",
+        "optimizer_identity",
         "cpu_rng",
         "cuda_rng",
         "step",
@@ -139,6 +219,7 @@ def _validate_payload(payload: Any, metadata: dict, device: Any) -> None:
         or not isinstance(state["param_groups"], list)
     ):
         raise ValueError("Checkpoint optimizer schema mismatch")
+    _validate_optimizer_binding(state, payload["optimizer_identity"])
     # Validate RNG states on private generators without changing global RNG.
     torch.Generator(device="cpu").set_state(payload["cpu_rng"])
     if device.type == "cuda":
@@ -169,8 +250,19 @@ def save_checkpoint(trainer: Any, directory: Any, optimizer: Any, *, step: int) 
             raise FileExistsError(f"Checkpoint already committed: {directory}")
         device = torch.device(trainer.device)
         path = directory / f"rank-{trainer.rank:05d}.pt"
+        context = canonical_checkpoint_context(
+            getattr(trainer, "checkpoint_context", None)
+        )
+        optimizer_identity = _optimizer_identity(trainer.module, optimizer)
+        optimizer_state = optimizer.state_dict()
+        _validate_optimizer_binding(optimizer_state, optimizer_identity)
     _agree_identity(
-        dict(directory=str(directory), topology=asdict(trainer.config), step=step),
+        dict(
+            directory=str(directory),
+            topology=asdict(trainer.config),
+            step=step,
+            context=context,
+        ),
         "save",
     )
     with _phase("directory creation"):
@@ -179,7 +271,8 @@ def save_checkpoint(trainer: Any, directory: Any, optimizer: Any, *, step: int) 
     with _phase("state capture"):
         payload = {
             "model": trainer.module.state_dict(),
-            "optimizer": optimizer.state_dict(),
+            "optimizer": optimizer_state,
+            "optimizer_identity": optimizer_identity,
             "cpu_rng": torch.get_rng_state(),
             "cuda_rng": torch.cuda.get_rng_state(device)
             if device.type == "cuda"
@@ -199,7 +292,11 @@ def save_checkpoint(trainer: Any, directory: Any, optimizer: Any, *, step: int) 
     dist.all_gather_object(entries, entry)
     with _phase("manifest publication"):
         metadata = dict(
-            schema_version=1, topology=asdict(trainer.config), step=step, files=entries
+            schema_version=3,
+            topology=asdict(trainer.config),
+            step=step,
+            files=entries,
+            context=json.loads(context),
         )
         _validate_manifest(metadata, trainer)
         if trainer.rank == 0:
@@ -224,9 +321,18 @@ def load_checkpoint(trainer: Any, directory: Any, optimizer: Any) -> int:
         _validate_execution(trainer)
         device = torch.device(trainer.device)
         directory = Path(directory).resolve()
-        metadata = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+        metadata = json.loads(
+            (directory / "manifest.json").read_text(encoding="utf-8"),
+            object_pairs_hook=_unique_json_object,
+        )
         _validate_manifest(metadata, trainer)
-    _agree_identity(dict(directory=str(directory), manifest=metadata), "load")
+    _agree_identity(
+        dict(
+            directory=str(directory),
+            manifest=json.dumps(metadata, sort_keys=True, allow_nan=False),
+        ),
+        "load",
+    )
     with _phase("payload read"):
         entry = metadata["files"][trainer.rank]
         path = directory / entry["path"]
@@ -234,6 +340,10 @@ def load_checkpoint(trainer: Any, directory: Any, optimizer: Any) -> int:
             raise ValueError("Checkpoint rank file missing or checksum mismatch")
         payload = torch.load(path, weights_only=False)
         _validate_payload(payload, metadata, device)
+        if payload["optimizer_identity"] != _optimizer_identity(
+            trainer.module, optimizer
+        ):
+            raise ValueError("Checkpoint optimizer identity mismatch")
     with _phase("state inspection"):
         current = trainer.module.state_dict()
     with _phase("state validation"):

@@ -28,7 +28,7 @@ checkpoint and DDP/pipeline composition failures during development.
 These are the admission/test matrix, not a blanket compatibility guarantee for
 all models. Keep run results in the selected output directory. Full
 DP2 x TP2 x PP2 requires eight ranks and is rejected, not simulated on four GPUs.
-Ascend, multi-node execution, AMP, variable shapes, interleaved stages and
+Ascend, multi-node execution, FP16/GradScaler, variable shapes, interleaved stages and
 unvalidated topology combinations are outside this implementation's boundary.
 
 ## Python API
@@ -65,8 +65,9 @@ The runnable example below supplies all of them.
 - TP/PP peers must process the same local samples; DP replicas process disjoint
   samples. Global batch = DP x microbatches x microbatch size, not world size x
   local batch.
-- Stage parameters and floating stage inputs are FP32. The first stage also
-  accepts int64 token IDs. The positional `loss_fn` remains a scalar mean over
+- Stage parameters remain FP32. Stage inputs accept FP32 or first-stage int64
+  token IDs; BF16 execution also admits BF16 inputs on later stages. Adjacent
+  pipeline output/input shape and dtype must agree. The positional `loss_fn` remains a scalar mean over
   equal-size microbatches with equal denominators. Use `summed_loss` below for
   ignored labels and unequal valid-token counts; do not pass both objectives.
 - GPipe handles inter-stage forward/backward communication. Loss scaling occurs
@@ -74,8 +75,37 @@ The runnable example below supplies all of them.
 - Replicated DDP without TP/PP synchronizes gradients only on the final
   microbatch. Intermediate forward/backward passes use DDP's `no_sync` context.
   FSDP2 and pipeline schedules retain their own synchronization behavior.
-- Output tensors are returned only on the last PP stage. Optimizer steps,
+- Output tensors are opt-in via `forward_backward(..., return_outputs=True)` and
+  returned only on the last PP stage. Without PP, the default avoids retaining
+  and concatenating each microbatch's logits. GPipe still merges its outputs
+  internally, so this is not a bounded-memory pipeline schedule. Optimizer steps,
   dataloaders, schedulers and process-group teardown remain caller-owned.
+
+### Execution Precision
+
+`DistributedTrainer(..., precision="fp32")` is the default. Explicit
+`precision="bf16"` enables CUDA BF16 autocast for forward/loss operations only,
+on devices with native BF16 support. Parameters, gradients and Adam moments stay
+FP32; FSDP2 retains its default parameter/reduction policy. This is not BF16
+parameter storage, automatic communication compression, or support for AMP QAT/KD.
+
+The policy is fixed at construction and must agree across ranks. The trainer
+overrides an ambient autocast context during execution and restores it on exit;
+backward runs outside autocast. Weight casts are not cached across calls, so an
+outer autocast context cannot retain stale casts over optimizer updates.
+
+Pipeline metadata inference uses the same forward precision. Before constructing
+the schedule, every rank checks adjacent output/input shape and dtype. Supply
+the actual receiving activation dtype, not simply the parameter dtype. For the
+current Llama adapter, FP32 embedding/residual streams keep the inter-stage hidden
+state FP32, while the final linear head produces BF16 logits. Generic linear
+stages can instead need BF16 receiving examples. A mismatch fails collectively
+before pipeline send/receive. These checks do not recover from arbitrary failures
+inside model execution or NCCL; keep launcher timeouts.
+
+BF16 and FP32 need separate numerical and held-out quality controls. A native
+matched-TP comparison isolates the adapter/executor but does not prove equality
+to an unsharded FP32 model or establish long-run convergence.
 
 ### Token-Weighted Loss
 
@@ -113,8 +143,62 @@ labels. Errors inside arbitrary user model/loss code or native communication
 still require launcher timeouts and teardown.
 
 This contract does not automatically partition pretrained models, synchronize
-tied weights across stages, implement vocabulary-sharded cross entropy or enable
-AMP. The checkpoint does not store loss configuration; restore it explicitly.
+tied weights across stages or implement vocabulary-sharded cross entropy.
+Checkpoint context stores and compares the declared loss configuration;
+the caller must still reconstruct the objective before loading state.
+
+### Llama Stages
+
+`parascale.parallel.llama.LlamaStage` adapts an explicitly loaded
+`transformers==4.51.3` `LlamaForCausalLM`. It reuses the original embedding,
+decoder layers, norm and head, preserving parameter names. It does not load
+weights, download assets, create optimizers or automatically choose a topology.
+
+```python
+from parascale.parallel.llama import LlamaStage
+
+replica, pipeline_stage, tensor_rank = config.coordinates(dist.get_rank())
+stage = LlamaStage(
+    loaded_model, pipeline_stage, config.pp_size, tp_size=config.tp_size,
+).to(device)
+del loaded_model
+trainer = DistributedTrainer(
+    stage, config, example_microbatch,
+    summed_loss=CausalLMLoss(vocab_size),
+    tensor_plan=stage.tensor_parallel_plan() or None,
+)
+```
+
+The source model's parameters must be materialized FP32. The source modules are
+shared with the stage, not cloned; release the source after partitioning and use
+an independent copy for reference comparisons. Each PP rank owns a contiguous
+decoder range; only the first owns embedding and only the last owns norm/head.
+Attention and MLP projections are TP-sharded; embedding, norms and head remain
+replicated within TP. Q heads, KV heads and projection widths must divide TP.
+Within attention, Q/K/V share one replicated DTensor input; gate/up share one
+within the MLP. Their partial input gradients combine before redistribution,
+instead of reducing each branch separately. Child outputs stay local tensors,
+so RoPE, attention and residual operations retain the pinned HF behavior.
+This changes floating-point reduction order and still requires numerical checks.
+
+The contract is packed causal token blocks starting at position zero, zero
+attention dropout, no KV cache and no padding/custom mask. Both eager
+attention and SDPA use Hugging Face operators; SDPA retains native mask-free
+causal dispatch. The stage's `validate_inputs` hook checks embedding indices
+inside the trainer's coordinated batch preflight, separately from loss labels.
+
+Single-stage weight ties are preserved. Cross-stage tied embedding/head is
+rejected, so SmolLM2 is suitable for DP but not this PP path; its 9 Q / 3 KV heads
+also exclude TP2. TinyLlama has untied weights and divisible heads. Do not change
+ties or head counts to force an unsupported topology. Adapter construction and
+model loading precede trainer preflight and still require launcher-level failure
+handling. Checkpoints compare caller-declared Llama/RoPE identity but do not
+introspect or reconstruct the live model. Reconstruct the exact pinned configuration
+and loss before loading. Bounded fresh-process cases do not establish complete
+pretrained production recovery qualification.
+
+See the [full-model validation example](../examples/gpu/example_010_llama_parallel/README.md)
+for real local weights/data and independent HF numerical controls.
 
 ## Checkpoints
 
@@ -125,6 +209,52 @@ final manifest; an existing committed directory cannot be overwritten.
 All ranks must agree on the canonical checkpoint directory, topology and step
 before saving, and on the directory and complete manifest before loading any
 payload. Mixed snapshots are rejected before applying model or optimizer state.
+The format also binds each rank's optimizer class and ordered parameter groups to
+canonical stage parameter names. Type, order, group membership, duplicate slots
+and external parameters are checked before state application; save-side ownership
+checks precede model state capture. Shared parameters use their first registered
+name, and optimizing only a subset is allowed. Saved hyperparameters are restored,
+not compared with constructor defaults.
+
+Schema v3 requires an explicit `checkpoint_context` when constructing the trainer
+if checkpoints will be used. Training without checkpoints may omit it. The context
+contains `model`, `loss`, `data`, `tokenizer` and `precision` descriptors; the first
+four must be nonblank strings or nonempty objects. Precision is `"fp32"` or
+`"bf16"` and must match the trainer's execution policy; cross-precision resume
+is rejected rather than silently changing the numerical computation.
+Include effective model/RoPE/tie configuration, objective/reduction settings, asset
+hashes, tokenizer configuration and packing/sampling policy, not just file paths.
+Never include credentials or access tokens in this persisted, shared context.
+Synthetic data can explicitly use `"tokenizer": "none"`.
+
+```python
+trainer = DistributedTrainer(
+    stage, parallel_config, example_input, summed_loss=objective,
+    tensor_plan=tensor_plan,
+    checkpoint_context={
+        "model": effective_model_config,
+        "loss": objective_config,
+        "data": dataset_manifest,
+        "tokenizer": tokenizer_manifest,
+        "precision": "fp32",
+    },
+)
+```
+
+The constructor freezes a detached declaration; `trainer.checkpoint_context`
+returns a copy. All ranks declare the same global context, not their PP ownership
+or local batch. Context JSON must have string object keys and finite values;
+tuples, cycles and duplicate manifest keys are rejected. Object order is ignored,
+array order is retained, and `true`, `1` and `1.0` are distinct identities.
+Schema 1/2 checkpoints are rejected rather than inventing missing identity.
+Load preflight checks context before deserializing any rank payload.
+
+This verifies **matching declarations**, not arbitrary runtime behavior. Callers
+must keep descriptors faithful to actual configuration/code/assets. Optimizer
+class names do not fingerprint implementations or custom hooks. Context is not
+sampler position, scheduler state or data-loader state; those require separate
+application-owned restoration. Automatic discovery of undeclared changes is not
+supported.
 
 Only trusted local checkpoint files may be loaded. Topology, microbatch count
 and rank/device mapping must remain unchanged. This format is not portable

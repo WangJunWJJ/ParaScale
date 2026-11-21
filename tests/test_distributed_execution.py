@@ -5,7 +5,9 @@
 
 """Local contract tests; real multi-rank coverage lives in the GPU validator."""
 
+import weakref
 from contextlib import contextmanager
+from types import SimpleNamespace
 
 import pytest
 
@@ -43,6 +45,8 @@ def test_untested_torch_version_rejected_before_mutation(torch, monkeypatch):
 
 def test_microbatch_mean_loss_normalization(torch):
     trainer = DistributedTrainer.__new__(DistributedTrainer)
+    trainer._precision = "fp32"
+    trainer.device = torch.device("cpu")
     trainer.config = DistributedParallelConfig(microbatches=4)
     trainer.loss_fn = torch.nn.MSELoss()
     trainer.summed_loss = None
@@ -51,6 +55,8 @@ def test_microbatch_mean_loss_normalization(torch):
 
 def test_non_scalar_loss_rejected(torch):
     trainer = DistributedTrainer.__new__(DistributedTrainer)
+    trainer._precision = "fp32"
+    trainer.device = torch.device("cpu")
     trainer.config = DistributedParallelConfig()
     trainer.loss_fn = torch.nn.MSELoss(reduction="none")
     trainer.summed_loss = None
@@ -61,6 +67,7 @@ def test_non_scalar_loss_rejected(torch):
 @pytest.mark.parametrize("batch", [0, 1, 3, 5])
 def test_uneven_batches_fail_before_collectives(torch, batch):
     trainer = DistributedTrainer.__new__(DistributedTrainer)
+    trainer._precision = "fp32"
     trainer.config = DistributedParallelConfig(microbatches=2)
     trainer.input_shape = (2, 3)
     trainer.device = torch.device("cpu")
@@ -77,11 +84,74 @@ def test_numerical_validator_does_not_hide_nonfinite_errors(torch, value):
     assert math.isinf(maximum_error(torch.tensor([value]), torch.zeros(1)))
 
 
+def _reporting_trainer(torch, *, dp_size=1):
+    trainer = DistributedTrainer.__new__(DistributedTrainer)
+    trainer._precision = "fp32"
+    trainer.config = DistributedParallelConfig(dp_size=dp_size, microbatches=1)
+    trainer.device = torch.device("cpu")
+    trainer.pp_rank = 0
+    trainer.schedule = None
+    trainer.execution_module = torch.nn.Linear(2, 2)
+    trainer.loss_fn = torch.nn.MSELoss()
+    trainer.summed_loss = None
+    trainer._normalization_count = None
+    trainer._prepare_step = lambda inputs, targets: None
+    trainer.mesh = {"dp": SimpleNamespace(get_group=lambda: None)}
+    return trainer
+
+
+def test_loss_reporting_extracts_one_scalar_without_changing_gradients(torch):
+    trainer = _reporting_trainer(torch)
+    inputs, targets = torch.randn(3, 2), torch.randn(3, 2)
+    expected = trainer.loss_fn(trainer.execution_module(inputs), targets)
+    expected_gradients = torch.autograd.grad(
+        expected, tuple(trainer.execution_module.parameters())
+    )
+    with torch.profiler.profile(
+        activities=[torch.profiler.ProfilerActivity.CPU]
+    ) as profile:
+        result = trainer.forward_backward(inputs, targets)
+    scalar_reads = sum(
+        event.count
+        for event in profile.key_averages()
+        if event.key == "aten::_local_scalar_dense"
+    )
+    assert scalar_reads == 1
+    assert result.loss == expected.item()
+    for parameter, gradient in zip(
+        trainer.execution_module.parameters(), expected_gradients
+    ):
+        torch.testing.assert_close(parameter.grad, gradient)
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
+def test_loss_reporting_rejects_nonfinite_value_after_reduction(
+    torch, monkeypatch, value
+):
+    trainer = _reporting_trainer(torch, dp_size=2)
+    reductions = []
+
+    def reduce(tensor, **kwargs):
+        reductions.append(tensor)
+        tensor.fill_(value)
+
+    monkeypatch.setattr(torch.distributed, "all_reduce", reduce)
+    with pytest.raises(FloatingPointError, match="Nonfinite distributed loss"):
+        trainer.forward_backward(torch.randn(3, 2), torch.randn(3, 2))
+    assert len(reductions) == 1
+    assert all(
+        parameter.grad is not None
+        for parameter in trainer.execution_module.parameters()
+    )
+
+
 @pytest.mark.parametrize("dp,tp", [(1, 1), (2, 1), (2, 2)])
+@pytest.mark.parametrize("return_outputs", [False, True])
 def test_ddp_accumulation_syncs_only_final_forward_and_backward(
-    torch, monkeypatch, dp, tp
+    torch, monkeypatch, dp, tp, return_outputs
 ):
     forward_sync, backward_sync = [], []
+    predictions = []
 
     class Wrapped(torch.nn.Linear):
         syncing = True
@@ -95,18 +165,24 @@ def test_ddp_accumulation_syncs_only_final_forward_and_backward(
                 self.syncing = True
 
         def forward(self, inputs):
+            if predictions and not return_outputs:
+                assert predictions[-1]() is None
             forward_sync.append(self.syncing)
-            return super().forward(inputs)
+            prediction = super().forward(inputs)
+            predictions.append(weakref.ref(prediction))
+            return prediction
 
     model = Wrapped(2, 2)
     model.weight.register_hook(lambda grad: backward_sync.append(model.syncing))
     trainer = DistributedTrainer.__new__(DistributedTrainer)
+    trainer._precision = "fp32"
     trainer.config = DistributedParallelConfig(dp_size=dp, tp_size=tp, microbatches=3)
     trainer.input_shape = (2, 2)
     trainer.device = torch.device("cpu")
     trainer.pp_rank = 0
     trainer.schedule = None
     trainer.execution_module = model
+    trainer.module = model
     trainer.loss_fn = torch.nn.MSELoss()
     trainer.summed_loss = None
     trainer.input_dtype = torch.float32
@@ -122,7 +198,11 @@ def test_ddp_accumulation_syncs_only_final_forward_and_backward(
     trainer.mesh = Mesh()
     monkeypatch.setattr(torch.distributed, "all_reduce", lambda *args, **kwargs: None)
     inputs, targets = torch.randn(6, 2), torch.randn(6, 2)
-    trainer.forward_backward(inputs, targets)
+    result = trainer.forward_backward(inputs, targets, return_outputs=return_outputs)
+    assert (result.output is not None) == return_outputs
+    if return_outputs:
+        assert result.output.shape == targets.shape
+        assert not result.output.requires_grad
     expected = [False, False, True] if dp == 2 and tp == 1 else [True] * 3
     assert forward_sync == expected
     assert backward_sync == expected

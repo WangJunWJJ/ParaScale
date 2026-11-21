@@ -57,3 +57,14 @@ two-dimensional combinations. Residual-MLP and Llama decoder fixtures test
 numerical parity and checkpoints using synthetic inputs. This does not enable
 TP/PP in the ordinary workload CLI or certify full eight-GPU 3D parallelism.
 See [the API boundary](../docs/distributed_parallel.md).
+
+[010 Complete Llama parallel validation](gpu/example_010_llama_parallel/README.md)
+adds local pretrained weights and real text, including embedding, causal loss and
+AdamW update checks. SmolLM2 is a DP case; untied TinyLlama admits PP/TP layouts.
+These bounded correctness cases do not establish production throughput, model
+quality or fresh-process recovery.
+The same example also provides a separate real-model TP throughput benchmark
+against matched native PyTorch plans, with bounded validation NLL and explicit
+measurement exclusions.
+It also includes a fresh-process checkpoint comparison with exact per-rank
+parameter, Adam-state, RNG and continuation-loss checks on real local Llama/text.
