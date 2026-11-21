@@ -531,7 +531,39 @@ python -m parascale.cli serve \
 
 请先完成 quickstart 训练。当前 `serve` 仅内置 tiny 模型检查点路径，执行配置中的 `serving.requests` 后排空队列并返回，不监听 HTTP/gRPC 端口。真实 CLIP/YOLO-World 的一次性推理使用 `infer`；`clip_real`、`yolo_world_real` 是真实模型入口，而 `clip`、`yolo_world` 等部分别名是 synthetic 路径，使用前核对配置。
 
-推理执行使用 eval/no-grad 并恢复原模型训练状态，输出数量必须与请求匹配。生产 tokenizer、流式生成、paged KV 和通用模型部署不在当前交付范围。标准 YOLO 检测蒸馏导出通过 Ultralytics 使用，不能与 YOLO-World 推理入口混淆。
+推理执行使用 eval/no-grad，调用后模型保持 eval 状态；继续训练前应显式切回 train 模式。Serving 响应的输出数量必须与请求匹配，批量 `infer` 的结果保留策略见下一节。生产 tokenizer、流式生成、paged KV 和通用模型部署不在当前交付范围。标准 YOLO 检测蒸馏导出通过 Ultralytics 使用，不能与 YOLO-World 推理入口混淆。
+
+### 12.1 批量推理的结果保留与消费
+
+`infer` 的 `inference.max_outputs` 默认是 `32`：只将前 32 个测量批次的结果放进返回的
+`outputs`，但仍处理全部输入并统计全部测量批次。`output_retention` 返回 `retained`、
+`dropped` 和配置上限，不能用 `len(outputs)` 推算总请求数。设为 `0` 时不保留结果，
+显式设为 JSON `null` 才会完整收集；后者仅适合已知大小的有限输入。
+
+Python API 可逐批消费结果，例如将 `runner` 的后处理结果写为 JSON Lines：
+
+```python
+import json
+
+with open("predictions.jsonl", "w", encoding="utf-8") as stream:
+    summary = runner.run(
+        batches,
+        warmup_steps=0,
+        max_outputs=0,
+        on_output=lambda output: stream.write(json.dumps(output) + "\n"),
+    )
+```
+
+回调同步执行，为下游处理提供背压；回调异常或设备同步失败会终止调用，不返回虚假的成功结果。
+回调不接收预热批次，返回值被忽略，不支持异步回调。回调与保留列表使用相同的结果对象；
+不要原地修改需要保留的结果。示例要求结果可 JSON 序列化，张量需要由任务后处理转换。
+这不是 token 流式生成，也不会自动释放模型缓存、上游已收集的数据或回调自行保存的对象。
+上限按批次数而非字节数计算，大结果或长跑优先使用 `max_outputs=0`。
+
+`latency_ms_*` 和相应吞吐只衡量预测及后处理，排除预热、batch 准备/传输和回调耗时；
+不等于含数据读取、排队和输出写入的端到端服务吞吐。内存指标仍覆盖本次调用的预热和测量阶段。
+长跑只累计计数和延迟总量，不保留逐批延迟历史。若每条输入都必须交付，使用
+`warmup_steps=0`，将预热放到正式数据流之外，并提供可靠的结果消费回调。
 
 ## 13. 远程 GPU/NPU 验证
 

@@ -67,13 +67,11 @@ class RuntimeMemoryTracker:
             metrics.setdefault("allocated_memory_bytes", 0)
 
     def synchronize_device(self) -> None:
+        """Wait for device completion; execution failures must abort the caller."""
         accelerator = self.accelerator()
         if accelerator is None:
             return
-        try:
-            accelerator.synchronize()
-        except Exception:
-            return
+        accelerator.synchronize()
 
     def elapsed_since(self, start: float, *, synchronized: bool = False) -> float:
         if not synchronized:
