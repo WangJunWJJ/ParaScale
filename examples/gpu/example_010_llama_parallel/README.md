@@ -2,7 +2,7 @@
 
 This example trains a complete Llama model through integer tokens, embedding,
 decoder, norm, output head and next-token loss. It compares each distributed
-update with an independent unsharded Hugging Face reference. It is a correctness
+update with an independent Hugging Face reference (unsharded by default). It is a correctness
 validator, not an end-to-end throughput benchmark or a long-running training CLI.
 
 ## Environment and Assets
@@ -118,12 +118,54 @@ These correctness checks alone do not establish convergence, held-out quality,
 throughput speedup, fresh-process recovery, tied cross-stage optimization or
 24-hour production readiness.
 
+## BF16 with FP32 Master Parameters
+
+Use `--precision bf16` explicitly; the default remains FP32. CUDA BF16 autocast
+applies to forward/loss operations, while parameters, gradients and Adam moments
+stay FP32. This does not enable FP16, distributed QAT, or distributed distillation.
+
+For a matched native TP reference, add `--reference-layout matched-tp`. The
+reference is the complete Hugging Face model using an independent PyTorch TP
+plan, not a ParaScale executor. PP ranks compare their stages with that full
+model. The original unsharded reference remains available and no numerical
+tolerances are relaxed by selecting BF16 or matched TP.
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 OMP_NUM_THREADS=1 HF_HUB_OFFLINE=1 \
+python -m torch.distributed.run \
+  --master_addr=127.0.0.1 --master_port=29500 --nproc_per_node=2 \
+  tests/benchmarks/scripts/validate_llama_parallel.py \
+  --dp 1 --tp 2 --pp 1 --attention sdpa --precision bf16 \
+  --reference-layout matched-tp \
+  --model-path "$MODEL" --data-file "$DATA" \
+  --sequence-length 32 --global-batch 8 --microbatches 2 --steps 4 \
+  --output "$OUTPUT/bf16-native-tp.json"
+```
+
+Here `MODEL` is the TinyLlama directory and `DATA` is `train.txt`, as in the
+correctness example above. A matched-TP pass means agreement with the native TP
+computation, not unsharded equivalence or pretrained quality retention.
+
+The dedicated boundary validator exercises BF16 activation transport and rejects
+shape/dtype mismatches on every rank before pipeline communication:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 OMP_NUM_THREADS=1 \
+python -m torch.distributed.run \
+  --master_addr=127.0.0.1 --master_port=29500 --nproc_per_node=2 \
+  tests/benchmarks/scripts/validate_pipeline_precision.py \
+  --dp 1 --output "$OUTPUT/bf16-boundaries.json"
+```
+
+For DP2+PP2, change visible devices and process count to four, and use `--dp 2`.
+This is a small linear-stage transport/control test, not Llama quality evidence.
+
 ## Bounded Throughput Measurement
 
 The separate benchmark measures training without a retained reference model. It
 loads the same pinned weights, packs `train.txt` and `validation.txt` from `--data`,
 and reports initial/final validation NLL alongside optimizer-inclusive timings.
-It supports one-node FP32 TP1/TP2, not DP/PP or an end-to-end data pipeline benchmark.
+It supports one-node FP32/BF16 TP1/TP2, not DP/PP or an end-to-end data pipeline benchmark.
 
 ```bash
 MODEL=/path/to/tinyllama-1.1b-59f6f375
@@ -154,6 +196,8 @@ visible devices, process count and `--tp 1` together, keeping the global token
 budget, optimizer, sequence length and microbatch shape matched when memory allows.
 
 Run modes sequentially, alternate their order and repeat before claiming gains.
+To compare BF16, add `--precision bf16` to `COMMON` for both drivers; do not compare
+ParaScale BF16 with native FP32 and attribute the entire gain to the framework.
 Compare asset/token hashes, training losses, validation block sums, device mapping
 and optimizer settings as well as throughput. Validation uses a bounded prefix;
 a finite or improved NLL is not a convergence or production acceptance gate.
@@ -199,6 +243,10 @@ only when every rank has identical final parameter/Adam-state/RNG fingerprints a
 an exact matching loss suffix. Nonfinite tensor state is rejected. To test TP2,
 use `--tp 2 --pp 1`; for DP2+TP2 or TP2+PP2, use four visible devices/processes and
 adjust the three topology options together.
+
+For BF16 continuation, add `--precision bf16` to `COMMON` for both commands and
+use a fresh checkpoint/result directory. The result explicitly records execution
+precision, and the checkpoint context rejects a different precision on resume.
 
 This verifies bounded same-topology continuation, not equivalence to unsharded
 training, data-loader/scheduler restoration, convergence, crash injection or long-run

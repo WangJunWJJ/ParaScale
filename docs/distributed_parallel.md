@@ -28,7 +28,7 @@ checkpoint and DDP/pipeline composition failures during development.
 These are the admission/test matrix, not a blanket compatibility guarantee for
 all models. Keep run results in the selected output directory. Full
 DP2 x TP2 x PP2 requires eight ranks and is rejected, not simulated on four GPUs.
-Ascend, multi-node execution, AMP, variable shapes, interleaved stages and
+Ascend, multi-node execution, FP16/GradScaler, variable shapes, interleaved stages and
 unvalidated topology combinations are outside this implementation's boundary.
 
 ## Python API
@@ -65,8 +65,9 @@ The runnable example below supplies all of them.
 - TP/PP peers must process the same local samples; DP replicas process disjoint
   samples. Global batch = DP x microbatches x microbatch size, not world size x
   local batch.
-- Stage parameters and floating stage inputs are FP32. The first stage also
-  accepts int64 token IDs. The positional `loss_fn` remains a scalar mean over
+- Stage parameters remain FP32. Stage inputs accept FP32 or first-stage int64
+  token IDs; BF16 execution also admits BF16 inputs on later stages. Adjacent
+  pipeline output/input shape and dtype must agree. The positional `loss_fn` remains a scalar mean over
   equal-size microbatches with equal denominators. Use `summed_loss` below for
   ignored labels and unequal valid-token counts; do not pass both objectives.
 - GPipe handles inter-stage forward/backward communication. Loss scaling occurs
@@ -79,6 +80,32 @@ The runnable example below supplies all of them.
   and concatenating each microbatch's logits. GPipe still merges its outputs
   internally, so this is not a bounded-memory pipeline schedule. Optimizer steps,
   dataloaders, schedulers and process-group teardown remain caller-owned.
+
+### Execution Precision
+
+`DistributedTrainer(..., precision="fp32")` is the default. Explicit
+`precision="bf16"` enables CUDA BF16 autocast for forward/loss operations only,
+on devices with native BF16 support. Parameters, gradients and Adam moments stay
+FP32; FSDP2 retains its default parameter/reduction policy. This is not BF16
+parameter storage, automatic communication compression, or support for AMP QAT/KD.
+
+The policy is fixed at construction and must agree across ranks. The trainer
+overrides an ambient autocast context during execution and restores it on exit;
+backward runs outside autocast. Weight casts are not cached across calls, so an
+outer autocast context cannot retain stale casts over optimizer updates.
+
+Pipeline metadata inference uses the same forward precision. Before constructing
+the schedule, every rank checks adjacent output/input shape and dtype. Supply
+the actual receiving activation dtype, not simply the parameter dtype. For the
+current Llama adapter, FP32 embedding/residual streams keep the inter-stage hidden
+state FP32, while the final linear head produces BF16 logits. Generic linear
+stages can instead need BF16 receiving examples. A mismatch fails collectively
+before pipeline send/receive. These checks do not recover from arbitrary failures
+inside model execution or NCCL; keep launcher timeouts.
+
+BF16 and FP32 need separate numerical and held-out quality controls. A native
+matched-TP comparison isolates the adapter/executor but does not prove equality
+to an unsharded FP32 model or establish long-run convergence.
 
 ### Token-Weighted Loss
 
@@ -116,8 +143,8 @@ labels. Errors inside arbitrary user model/loss code or native communication
 still require launcher timeouts and teardown.
 
 This contract does not automatically partition pretrained models, synchronize
-tied weights across stages, implement vocabulary-sharded cross entropy or enable
-AMP. Checkpoint context stores and compares the declared loss configuration;
+tied weights across stages or implement vocabulary-sharded cross entropy.
+Checkpoint context stores and compares the declared loss configuration;
 the caller must still reconstruct the objective before loading state.
 
 ### Llama Stages
@@ -155,7 +182,7 @@ so RoPE, attention and residual operations retain the pinned HF behavior.
 This changes floating-point reduction order and still requires numerical checks.
 
 The contract is packed causal token blocks starting at position zero, zero
-attention dropout, no KV cache, no padding/custom mask and no AMP. Both eager
+attention dropout, no KV cache and no padding/custom mask. Both eager
 attention and SDPA use Hugging Face operators; SDPA retains native mask-free
 causal dispatch. The stage's `validate_inputs` hook checks embedding indices
 inside the trainer's coordinated batch preflight, separately from loss labels.
@@ -192,7 +219,9 @@ not compared with constructor defaults.
 Schema v3 requires an explicit `checkpoint_context` when constructing the trainer
 if checkpoints will be used. Training without checkpoints may omit it. The context
 contains `model`, `loss`, `data`, `tokenizer` and `precision` descriptors; the first
-four must be nonblank strings or nonempty objects, and precision is `"fp32"`.
+four must be nonblank strings or nonempty objects. Precision is `"fp32"` or
+`"bf16"` and must match the trainer's execution policy; cross-precision resume
+is rejected rather than silently changing the numerical computation.
 Include effective model/RoPE/tie configuration, objective/reduction settings, asset
 hashes, tokenizer configuration and packing/sampling policy, not just file paths.
 Never include credentials or access tokens in this persisted, shared context.
