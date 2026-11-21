@@ -114,5 +114,54 @@ not the acceptance tolerance, and requires independent quality validation. A
 smaller parameter drift alone does not qualify a topology or justify changing
 production optimizer settings.
 
-This example does not establish convergence, held-out quality, throughput speedup,
-fresh-process recovery, tied cross-stage optimization or 24-hour production readiness.
+These correctness checks alone do not establish convergence, held-out quality,
+throughput speedup, fresh-process recovery, tied cross-stage optimization or
+24-hour production readiness.
+
+## Bounded Throughput Measurement
+
+The separate benchmark measures training without a retained reference model. It
+loads the same pinned weights, packs `train.txt` and `validation.txt` from `--data`,
+and reports initial/final validation NLL alongside optimizer-inclusive timings.
+It supports one-node FP32 TP1/TP2, not DP/PP or an end-to-end data pipeline benchmark.
+
+```bash
+MODEL=/path/to/tinyllama-1.1b-59f6f375
+DATA=/path/to/wikitext
+OUTPUT=$(mktemp -d /tmp/parascale-tp-throughput.XXXXXX)
+COMMON=(--model "$MODEL" --data "$DATA" --tp 2
+        --global-batch 16 --microbatch 8 --sequence-length 256
+        --steps 32 --warmup 8 --validation-tokens 8192)
+for DRIVER in native parascale; do
+  CUDA_VISIBLE_DEVICES=0,1 OMP_NUM_THREADS=1 HF_HUB_OFFLINE=1 \
+  python -m torch.distributed.run \
+    --master_addr=127.0.0.1 --master_port=29500 --nproc_per_node=2 \
+    tests/benchmarks/scripts/benchmark_llama_parallel.py \
+    "${COMMON[@]}" --driver "$DRIVER" --output "$OUTPUT/$DRIVER.json"
+done
+```
+
+Select GPUs using the actual `nvidia-smi topo -m` output, not their numeric order.
+For example, the tested 156 host has a PIX-connected pair at physical GPU1/2;
+GPU0/1 is NODE-connected. This is not a portable device-selection rule. The tool
+does not select GPUs or pin CPU cores automatically; optional `--cpu-affinity`
+accepts explicit allowed CPU indices.
+
+The native baseline defaults to the same shared-input PyTorch TP optimization.
+`--driver native --native-plan layerwise` is a separate ablation of independent
+projection inputs, not the default baseline. For a single-device control, change
+visible devices, process count and `--tp 1` together, keeping the global token
+budget, optimizer, sequence length and microbatch shape matched when memory allows.
+
+Run modes sequentially, alternate their order and repeat before claiming gains.
+Compare asset/token hashes, training losses, validation block sums, device mapping
+and optimizer settings as well as throughput. Validation uses a bounded prefix;
+a finite or improved NLL is not a convergence or production acceptance gate.
+
+`tokens_per_second` uses all measured steps divided by their total time;
+`median_step_tokens_per_second` separately reports inverse median step latency.
+`scored_tokens_per_second` excludes the first label of each causal block. TP ranks
+do not multiply the token count. Startup, tokenization, H2D and validation are
+outside the timed window; peak allocated memory is measured during training.
+Outputs remain `diagnostic` and include per-step timings plus model, data, source
+and script digests. Keep these generated files outside the repository.

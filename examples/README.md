@@ -63,3 +63,6 @@ adds local pretrained weights and real text, including embedding, causal loss an
 AdamW update checks. SmolLM2 is a DP case; untied TinyLlama admits PP/TP layouts.
 These bounded correctness cases do not establish production throughput, model
 quality or fresh-process recovery.
+The same example also provides a separate real-model TP throughput benchmark
+against matched native PyTorch plans, with bounded validation NLL and explicit
+measurement exclusions.
