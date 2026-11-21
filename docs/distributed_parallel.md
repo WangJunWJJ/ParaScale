@@ -60,13 +60,15 @@ The runnable example below supplies all of them.
 - Parameters and buffers are synchronized within TP and DP groups before
   partitioning. Each stage's DP=0/TP=0 rank supplies its initial state.
 - Use non-fused, `foreach=False` optimizers for mixed Tensor/DTensor parameter
-  sets. SGD with momentum is the validated optimizer in this matrix.
+  sets. The hidden-state fixture validates SGD with momentum; the token-loss
+  fixture additionally compares AdamW parameters and optimizer state.
 - TP/PP peers must process the same local samples; DP replicas process disjoint
   samples. Global batch = DP x microbatches x microbatch size, not world size x
   local batch.
-- Inputs and stage parameters are FP32. The scalar loss must be mean-reduced
-  over equal-size microbatches with equal denominators. Variable valid-token
-  counts, ignored labels and sum-reduced losses require a separate adapter.
+- Stage parameters and floating stage inputs are FP32. The first stage also
+  accepts int64 token IDs. The positional `loss_fn` remains a scalar mean over
+  equal-size microbatches with equal denominators. Use `summed_loss` below for
+  ignored labels and unequal valid-token counts; do not pass both objectives.
 - GPipe handles inter-stage forward/backward communication. Loss scaling occurs
   exactly once; the result reports DP-averaged loss on every rank.
 - Replicated DDP without TP/PP synchronizes gradients only on the final
@@ -74,6 +76,45 @@ The runnable example below supplies all of them.
   FSDP2 and pipeline schedules retain their own synchronization behavior.
 - Output tensors are returned only on the last PP stage. Optimizer steps,
   dataloaders, schedulers and process-group teardown remain caller-owned.
+
+### Token-Weighted Loss
+
+For a caller-supplied causal model/stage with replicated full-vocabulary logits:
+
+```python
+from parascale.parallel import CausalLMLoss
+
+trainer = DistributedTrainer(
+    local_stage, config, example_microbatch,
+    summed_loss=CausalLMLoss(vocab_size),
+    tensor_plan=model_specific_tp_plan,
+)
+```
+
+`CausalLMLoss` shifts logits/labels for next-token prediction and excludes
+`ignore_index=-100` labels. Targets have shape `[batch, sequence]`, dtype int64;
+logits have shape `[batch, sequence, vocab_size]`. Ignored labels are not an
+attention mask. The caller still supplies causal attention and any padding mask.
+
+The trainer counts valid shifted labels across DP replicas, without counting
+TP/PP copies again, and scales each summed microbatch loss by
+`dp_size / global_valid_tokens` to compensate DP gradient averaging. Empty local
+replicas/microbatches keep a backward graph; an entirely empty global objective
+is rejected. `ParallelStepResult.normalization_count` exposes the denominator.
+Custom `SummedLoss` implementations must return a differentiable scalar sum and
+a nonnegative device-local int64 scalar from `normalization_count(targets)`.
+That method must also validate all labels before model execution.
+
+Constructor argument errors and topology/microbatch/loss-mode disagreements are
+coordinated before mesh creation. Step preflight coordinates invalid batches and
+rejects inconsistent global counts before forward/backward. Callers must still
+provide identical data/objectives to TP/PP peers; equal counts do not prove equal
+labels. Errors inside arbitrary user model/loss code or native communication
+still require launcher timeouts and teardown.
+
+This contract does not automatically partition pretrained models, synchronize
+tied weights across stages, implement vocabulary-sharded cross entropy or enable
+AMP. The checkpoint does not store loss configuration; restore it explicitly.
 
 ## Checkpoints
 
