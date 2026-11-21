@@ -129,7 +129,15 @@ def test_benchmark_greedy_policy_overrides_model_sampling_defaults(monkeypatch):
     ).eval()
     model.generation_config.do_sample = True
     model.generation_config.temperature = 0.6
+    model.generation_config.num_beams = 3
+    model.generation_config.num_return_sequences = 2
+    model.generation_config.max_new_tokens = 1
+    model.generation_config.min_new_tokens = 0
+    model.generation_config.forced_eos_token_id = 2
+    model.generation_config.pad_token_id = 2
+    model.generation_config.return_dict_in_generate = True
     model.generation_config.transformers_version = "4.51.3"
+    original_defaults = copy.deepcopy(model.generation_config.to_dict())
     original_prepare = model._prepare_generation_config
     observed = []
 
@@ -146,8 +154,50 @@ def test_benchmark_greedy_policy_overrides_model_sampling_defaults(monkeypatch):
     assert first.shape == (1, 7)
     torch.testing.assert_close(first, second)
     assert all(
-        not config.do_sample and config.eos_token_id is None for config in observed
+        not config.do_sample
+        and config.num_beams == config.num_return_sequences == 1
+        and config.min_new_tokens == config.max_new_tokens == 4
+        and config.eos_token_id is config.forced_eos_token_id is None
+        and config.pad_token_id == 0
+        and not config.return_dict_in_generate
+        for config in observed
     )
+    assert model.generation_config.to_dict() == original_defaults
+
+
+@pytest.mark.parametrize("supports_model_defaults", [False, True])
+def test_benchmark_generation_policy_matches_generate_signature(
+    supports_model_defaults,
+):
+    pytest.importorskip("transformers")
+    from tests.benchmarks.scripts.benchmark_quantized_inference import (
+        fixed_length_generation,
+    )
+
+    class Model:
+        def generate(self, **kwargs):
+            assert "use_model_defaults" not in kwargs
+            return kwargs
+
+    class LegacyModel:
+        def generate(self, *, use_model_defaults=None, **kwargs):
+            assert use_model_defaults is False
+            return kwargs
+
+    model = LegacyModel() if supports_model_defaults else Model()
+    prompt = torch.tensor([[1, 3, 4]])
+    attention = torch.ones_like(prompt)
+    result = fixed_length_generation(model, prompt, attention, 4, 0)
+    config = result["generation_config"]
+    assert result["input_ids"] is prompt
+    assert result["attention_mask"] is attention
+    assert result["do_sample"] is config.do_sample is False
+    assert result["eos_token_id"] is config.eos_token_id is None
+    assert result["forced_eos_token_id"] is config.forced_eos_token_id is None
+    assert config.num_beams == config.num_return_sequences == 1
+    assert config.max_new_tokens == config.min_new_tokens == 4
+    assert config.pad_token_id == 0
+    assert config.return_dict_in_generate is False
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA SM80+")
