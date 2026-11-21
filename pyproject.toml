@@ -21,6 +21,17 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+inference-int8 = [
+    "torch==2.9.1",
+    "torchvision==0.24.1",
+    "gemlite==0.6.0.post2",
+    "triton==3.5.1; platform_system == 'Linux'",
+]
+inference-int4 = [
+    "torch==2.9.1",
+    "torchvision==0.24.1",
+    "torchao==0.15.0",
+]
 gpu = [
     "torch>=2.4.0",
     "torchvision>=0.19.0",

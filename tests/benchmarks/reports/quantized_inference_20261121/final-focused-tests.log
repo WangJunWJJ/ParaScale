@@ -1,0 +1,29 @@
+Running 36 items in this shard
+....................................                                     [100%]
+=============================== warnings summary ===============================
+tests/test_quantized_inference.py::test_benchmark_greedy_policy_overrides_model_sampling_defaults
+  /usr/local/lib/python3.10/dist-packages/torchao/dtypes/floatx/__init__.py:5: DeprecationWarning: Importing from torchao.dtypes.floatx.floatx_tensor_core_layout is deprecated. Please use 'from torchao.prototype.dtypes.floatx.floatx_tensor_core_layout import ...' instead. This import path will be removed in a future torchao release. Please check issue: https://github.com/pytorch/ao/issues/2752 for more details. 
+    from .floatx_tensor_core_layout import (
+
+tests/test_quantized_inference.py::test_benchmark_greedy_policy_overrides_model_sampling_defaults
+  /usr/local/lib/python3.10/dist-packages/torchao/dtypes/uintx/__init__.py:1: DeprecationWarning: Importing from torchao.dtypes.uintx.dyn_int8_act_int4_wei_cpu_layout is deprecated. Please use 'from torchao.prototype.dtypes import Int8DynamicActInt4WeightCPULayout' instead. This import path will be removed in a future release of torchao. See https://github.com/pytorch/ao/issues/2752 for more details.
+    from .dyn_int8_act_int4_wei_cpu_layout import (
+
+tests/test_quantized_inference.py::test_benchmark_greedy_policy_overrides_model_sampling_defaults
+  /usr/local/lib/python3.10/dist-packages/torchao/dtypes/uintx/__init__.py:10: DeprecationWarning: Importing from torchao.dtypes.uintx.marlin_qqq_tensor is deprecated. Please use 'from torchao.prototype.dtypes import MarlinQQQLayout, MarlinQQQTensor' instead. This import path will be removed in a future release of torchao. See https://github.com/pytorch/ao/issues/2752 for more details.
+    from .marlin_qqq_tensor import (
+
+tests/test_quantized_inference.py::test_benchmark_greedy_policy_overrides_model_sampling_defaults
+  /usr/local/lib/python3.10/dist-packages/torchao/dtypes/uintx/__init__.py:30: DeprecationWarning: Importing from torchao.dtypes.uintx.uintx_layout is deprecated. Please use 'from torchao.prototype.dtypes import UintxLayout, UintxTensor' instead. This import path will be removed in a future release of torchao. See https://github.com/pytorch/ao/issues/2752 for more details.
+    from .uintx_layout import (
+
+tests/test_quantized_inference.py::test_benchmark_greedy_policy_overrides_model_sampling_defaults
+  /usr/local/lib/python3.10/dist-packages/torchao/dtypes/__init__.py:25: DeprecationWarning: Importing BlockSparseLayout from torchao.dtypes is deprecated. Please use 'from torchao.prototype.dtypes import BlockSparseLayout' instead. This import path will be removed in a future torchao release. Please check issue: https://github.com/pytorch/ao/issues/2752 for more details. 
+    from .uintx.block_sparse_layout import BlockSparseLayout
+
+tests/test_quantized_inference.py::test_benchmark_greedy_policy_overrides_model_sampling_defaults
+  /usr/local/lib/python3.10/dist-packages/torchao/dtypes/__init__.py:26: DeprecationWarning: Importing from torchao.dtypes is deprecated. Please use 'from torchao.prototype.dtypes import CutlassInt4PackedLayout' instead. This import path will be removed in a future torchao release. Please check issue: https://github.com/pytorch/ao/issues/2752 for more details. 
+    from .uintx.cutlass_int4_packed_layout import CutlassInt4PackedLayout
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+36 passed, 6 warnings in 12.13s

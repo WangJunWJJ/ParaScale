@@ -1,0 +1,21 @@
+{
+  "created_at": "2026-11-20T16:56:04.755892+00:00",
+  "python": "3.12.8",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "torch": "2.9.1+cpu",
+  "cuda_available": false,
+  "base_commit": "ed2bb8235eaa41b54b136de83164bd436a353699",
+  "packages": {
+    "pytest": "9.2.0",
+    "torchvision": "0.24.1+cpu",
+    "numpy": "2.5.5",
+    "PyYAML": "6.0.3"
+  },
+  "node145_probe": {
+    "host": "192.168.8.145",
+    "port": 22,
+    "tcp_connected": false,
+    "error": "[WinError 10061] 由于目标计算机积极拒绝，无法连接。",
+    "winerror": 10061
+  }
+}

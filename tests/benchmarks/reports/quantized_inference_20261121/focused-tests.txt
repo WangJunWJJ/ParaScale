@@ -1,0 +1,9 @@
+.....s....................................ss............................ [ 75%]
+sss.....................                                                 [100%]
+============================== warnings summary ===============================
+tests/test_quantization_runtime_no_torch.py::test_native_qat_exports_and_resumes
+  C:\Users\unnch\.codex\worktrees\6cc4\2-ParaScale-master\parascale\runtime\training\data_state.py:32: RuntimeWarning: Dataloader has no state protocol; replaying and skipping 2 consumed micro-batches. Exact resume requires a repeatable deterministic data source.
+    return self._restore_iterator(dataloader, data_state)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+90 passed, 6 skipped, 1 warning in 5.98s
