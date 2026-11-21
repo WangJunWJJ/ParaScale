@@ -12,6 +12,7 @@ one local stage, its input example, a TP plan and an initialized process group.
 from __future__ import annotations
 
 import inspect
+import json
 import math
 import os
 from contextlib import nullcontext
@@ -111,6 +112,7 @@ class DistributedTrainer:
         *,
         tensor_plan: dict[str, Any] | None = None,
         summed_loss: SummedLoss | None = None,
+        checkpoint_context: dict[str, Any] | None = None,
     ) -> None:
         import torch
         import torch.distributed as dist
@@ -123,12 +125,20 @@ class DistributedTrainer:
             _validate_constructor(
                 module, config, example_input, loss_fn, summed_loss, tensor_plan
             )
+            from .checkpoint_context import canonical_checkpoint_context
+
+            context = (
+                canonical_checkpoint_context(checkpoint_context)
+                if checkpoint_context is not None
+                else None
+            )
             signature = (
                 config.dp_size,
                 config.tp_size,
                 config.pp_size,
                 config.microbatches,
                 summed_loss is not None,
+                context,
             )
         except Exception as exc:
             error = str(exc)
@@ -145,8 +155,9 @@ class DistributedTrainer:
             )
         if any(item[1] != records[0][1] for item in records):
             raise ValueError(
-                "Parallel constructor preflight failed: topology, microbatches and loss mode must agree"
+                "Parallel constructor preflight failed: topology, microbatches, loss mode and checkpoint context must agree"
             )
+        self._checkpoint_context = context
         self.config = config
         self.device = example_input.device
         self.rank = dist.get_rank()
@@ -218,6 +229,15 @@ class DistributedTrainer:
             self.schedule = ScheduleGPipe(
                 stage, config.microbatches, loss_fn=self._microbatch_loss, **kwargs
             )
+
+    @property
+    def checkpoint_context(self) -> dict[str, Any] | None:
+        """Return a detached view of the constructor's immutable declaration."""
+        return (
+            json.loads(self._checkpoint_context)
+            if self._checkpoint_context is not None
+            else None
+        )
 
     def parameters(self):
         """Return only this rank's local stage parameters for optimizer creation."""

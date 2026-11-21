@@ -11,6 +11,7 @@ import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -20,6 +21,16 @@ import torch.distributed as dist
 
 from parascale.parallel import distributed_checkpoint as checkpoint
 from parascale.parallel.distributed import DistributedParallelConfig
+
+
+def training_context():
+    return {
+        "model": {"kind": "linear", "width": 2},
+        "loss": {"kind": "sum"},
+        "data": {"kind": "deterministic-test", "revision": 1},
+        "tokenizer": "none",
+        "precision": "fp32",
+    }
 
 
 @pytest.fixture
@@ -63,6 +74,7 @@ def _rank_trainers():
             rank=rank,
             config=DistributedParallelConfig(dp_size=2),
             device=torch.device("cpu"),
+            checkpoint_context=training_context(),
         )
         for rank in range(2)
     ]
@@ -120,6 +132,7 @@ def runtime(monkeypatch):
         rank=0,
         config=DistributedParallelConfig(),
         device=torch.device("cpu"),
+        checkpoint_context=training_context(),
     )
     optimizer = torch.optim.Adam(trainer.module.parameters())
     calls = []
@@ -160,7 +173,8 @@ def write_checkpoint(
     path = directory / "rank-00000.pt"
     torch.save(payload, path)
     metadata = dict(
-        schema_version=2,
+        schema_version=3,
+        context=trainer.checkpoint_context,
         topology=asdict(trainer.config),
         step=7,
         files=[
@@ -190,6 +204,113 @@ def test_cpu_roundtrip_restores_model_optimizer_rng(tmp_path, runtime):
     assert len(optimizer.state) == 2
     assert all(value["step"].item() == 1 for value in optimizer.state.values())
     assert torch.equal(torch.get_rng_state(), rng)
+
+
+@pytest.mark.parametrize("field", ["model", "loss", "data", "tokenizer", "precision"])
+def test_training_context_mismatch_rejected_before_payload_read(
+    tmp_path, runtime, monkeypatch, field
+):
+    trainer, optimizer, _ = runtime
+    checkpoint.save_checkpoint(trainer, tmp_path, optimizer, step=7)
+    trainer.checkpoint_context[field] = "changed"
+    read = Mock(side_effect=AssertionError("payload read"))
+    monkeypatch.setattr(torch, "load", read)
+    with pytest.raises(RuntimeError, match="context"):
+        checkpoint.load_checkpoint(trainer, tmp_path, optimizer)
+    read.assert_not_called()
+
+
+@pytest.mark.parametrize("invalid", [None, {}, {"model": "incomplete"}])
+def test_missing_training_context_rejected_before_directory(tmp_path, runtime, invalid):
+    trainer, optimizer, _ = runtime
+    trainer.checkpoint_context = invalid
+    with pytest.raises(RuntimeError, match="context"):
+        checkpoint.save_checkpoint(trainer, tmp_path / "new", optimizer, step=7)
+    assert not (tmp_path / "new").exists()
+
+
+def test_peer_training_context_mismatch_prevents_publication(tmp_path, two_ranks):
+    trainers, optimizers = _rank_trainers()
+    trainers[1].checkpoint_context["data"]["revision"] = 2
+    outcomes = two_ranks(
+        lambda rank: checkpoint.save_checkpoint(
+            trainers[rank], tmp_path / "new", optimizers[rank], step=7
+        )
+    )
+    assert all(isinstance(result, RuntimeError) for result in outcomes)
+    assert not (tmp_path / "new").exists()
+
+
+def test_peer_training_context_load_failure_precedes_all_reads(
+    tmp_path, two_ranks, monkeypatch
+):
+    trainers, optimizers = _rank_trainers()
+    assert two_ranks(
+        lambda rank: checkpoint.save_checkpoint(
+            trainers[rank], tmp_path, optimizers[rank], step=7
+        )
+    ) == [None, None]
+    trainers[1].checkpoint_context["model"]["width"] = 3
+    read = Mock(side_effect=AssertionError("payload read"))
+    monkeypatch.setattr(torch, "load", read)
+    outcomes = two_ranks(
+        lambda rank: checkpoint.load_checkpoint(
+            trainers[rank], tmp_path, optimizers[rank]
+        )
+    )
+    assert all(
+        isinstance(result, RuntimeError) and "context" in str(result)
+        for result in outcomes
+    )
+    read.assert_not_called()
+
+
+def test_duplicate_manifest_context_key_rejected(tmp_path, runtime, monkeypatch):
+    trainer, optimizer, _ = runtime
+    checkpoint.save_checkpoint(trainer, tmp_path, optimizer, step=7)
+    path = tmp_path / "manifest.json"
+    path.write_text(path.read_text().replace('"width": 2', '"width": 1, "width": 2'))
+    read = Mock()
+    monkeypatch.setattr(torch, "load", read)
+    with pytest.raises(RuntimeError, match="duplicate key"):
+        checkpoint.load_checkpoint(trainer, tmp_path, optimizer)
+    read.assert_not_called()
+
+
+def test_load_agreement_distinguishes_boolean_and_integer_context(
+    tmp_path, two_ranks, monkeypatch
+):
+    trainers, optimizers = _rank_trainers()
+    assert two_ranks(
+        lambda rank: checkpoint.save_checkpoint(
+            trainers[rank], tmp_path, optimizers[rank], step=7
+        )
+    ) == [None, None]
+    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    trainers[0].checkpoint_context["model"]["width"] = 1
+    trainers[1].checkpoint_context["model"]["width"] = True
+    real_read = Path.read_text
+
+    def divergent_read(path, *args, **kwargs):
+        if path.name == "manifest.json":
+            return json.dumps(
+                manifest | {"context": trainers[dist.get_rank()].checkpoint_context}
+            )
+        return real_read(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", divergent_read)
+    load = Mock()
+    monkeypatch.setattr(torch, "load", load)
+    outcomes = two_ranks(
+        lambda rank: checkpoint.load_checkpoint(
+            trainers[rank], tmp_path, optimizers[rank]
+        )
+    )
+    assert all(
+        isinstance(result, RuntimeError) and "identity" in str(result)
+        for result in outcomes
+    )
+    load.assert_not_called()
 
 
 @pytest.mark.parametrize("change", ["type", "order", "groups"])
@@ -431,6 +552,7 @@ def test_committed_checkpoint_is_immutable(tmp_path, runtime, monkeypatch):
     [
         lambda m: m.update(schema_version=True),
         lambda m: m.update(schema_version=1),
+        lambda m: m.update(schema_version=2),
         lambda m: m.update(extra=1),
         lambda m: m.pop("step"),
         lambda m: m.update(step=True),

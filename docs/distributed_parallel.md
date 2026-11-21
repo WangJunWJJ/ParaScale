@@ -117,7 +117,8 @@ still require launcher timeouts and teardown.
 
 This contract does not automatically partition pretrained models, synchronize
 tied weights across stages, implement vocabulary-sharded cross entropy or enable
-AMP. The checkpoint does not store loss configuration; restore it explicitly.
+AMP. Checkpoint context stores and compares the declared loss configuration;
+the caller must still reconstruct the objective before loading state.
 
 ### Llama Stages
 
@@ -164,9 +165,10 @@ rejected, so SmolLM2 is suitable for DP but not this PP path; its 9 Q / 3 KV hea
 also exclude TP2. TinyLlama has untied weights and divisible heads. Do not change
 ties or head counts to force an unsupported topology. Adapter construction and
 model loading precede trainer preflight and still require launcher-level failure
-handling. Checkpoints do not verify Llama/RoPE configuration identity: reconstruct
-the exact pinned configuration and loss before loading. This is not yet complete
-pretrained checkpoint/resume qualification.
+handling. Checkpoints compare caller-declared Llama/RoPE identity but do not
+introspect or reconstruct the live model. Reconstruct the exact pinned configuration
+and loss before loading. Bounded fresh-process cases do not establish complete
+pretrained production recovery qualification.
 
 See the [full-model validation example](../examples/gpu/example_010_llama_parallel/README.md)
 for real local weights/data and independent HF numerical controls.
@@ -180,18 +182,50 @@ final manifest; an existing committed directory cannot be overwritten.
 All ranks must agree on the canonical checkpoint directory, topology and step
 before saving, and on the directory and complete manifest before loading any
 payload. Mixed snapshots are rejected before applying model or optimizer state.
-Schema v2 also binds each rank's optimizer class and ordered parameter groups to
+The format also binds each rank's optimizer class and ordered parameter groups to
 canonical stage parameter names. Type, order, group membership, duplicate slots
 and external parameters are checked before state application; save-side ownership
 checks precede model state capture. Shared parameters use their first registered
 name, and optimizing only a subset is allowed. Saved hyperparameters are restored,
-not compared with constructor defaults. Schema v1 checkpoints are rejected rather
-than inferring missing optimizer identity.
+not compared with constructor defaults.
 
-This binding is not a complete training-semantic fingerprint: changed model/RoPE
-configuration, weight-tying topology, loss, tokenizer or data are not identified.
-Optimizer class names are not implementation or custom-hook fingerprints. Those
-inputs must remain unchanged; their automatic validation is not yet supported.
+Schema v3 requires an explicit `checkpoint_context` when constructing the trainer
+if checkpoints will be used. Training without checkpoints may omit it. The context
+contains `model`, `loss`, `data`, `tokenizer` and `precision` descriptors; the first
+four must be nonblank strings or nonempty objects, and precision is `"fp32"`.
+Include effective model/RoPE/tie configuration, objective/reduction settings, asset
+hashes, tokenizer configuration and packing/sampling policy, not just file paths.
+Never include credentials or access tokens in this persisted, shared context.
+Synthetic data can explicitly use `"tokenizer": "none"`.
+
+```python
+trainer = DistributedTrainer(
+    stage, parallel_config, example_input, summed_loss=objective,
+    tensor_plan=tensor_plan,
+    checkpoint_context={
+        "model": effective_model_config,
+        "loss": objective_config,
+        "data": dataset_manifest,
+        "tokenizer": tokenizer_manifest,
+        "precision": "fp32",
+    },
+)
+```
+
+The constructor freezes a detached declaration; `trainer.checkpoint_context`
+returns a copy. All ranks declare the same global context, not their PP ownership
+or local batch. Context JSON must have string object keys and finite values;
+tuples, cycles and duplicate manifest keys are rejected. Object order is ignored,
+array order is retained, and `true`, `1` and `1.0` are distinct identities.
+Schema 1/2 checkpoints are rejected rather than inventing missing identity.
+Load preflight checks context before deserializing any rank payload.
+
+This verifies **matching declarations**, not arbitrary runtime behavior. Callers
+must keep descriptors faithful to actual configuration/code/assets. Optimizer
+class names do not fingerprint implementations or custom hooks. Context is not
+sampler position, scheduler state or data-loader state; those require separate
+application-owned restoration. Automatic discovery of undeclared changes is not
+supported.
 
 Only trusted local checkpoint files may be loaded. Topology, microbatch count
 and rank/device mapping must remain unchanged. This format is not portable

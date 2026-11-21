@@ -172,6 +172,23 @@ def main():
             example,
             nn.MSELoss(),
             tensor_plan=plan if args.tp > 1 else None,
+            checkpoint_context={
+                "model": {
+                    "kind": args.model,
+                    "width": args.width,
+                    "layers": 4,
+                    "implementation": "validate-distributed-parallel-v1",
+                },
+                "loss": "torch-mse-mean-v1",
+                "data": {
+                    "kind": "synthetic-normal",
+                    "seed_offset": 2000,
+                    "global_batch": args.global_batch,
+                    "length": args.sequence_length,
+                },
+                "tokenizer": "none",
+                "precision": "fp32",
+            },
         )
         optimizer = torch.optim.SGD(
             trainer.parameters(), lr=0.01, momentum=0.9, foreach=False
