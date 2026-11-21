@@ -10,9 +10,10 @@ from __future__ import annotations
 from typing import Any, List
 
 from parascale.communication import build_communication_plan, recommend_ddp_hook
+from parascale.parallel.capabilities import validate_legacy_parallelism
 
 from .plan import BackendName, BatchPolicy, StrategyPlan
-from .utils import get_value, largest_divisor_at_most
+from .utils import get_value
 
 
 def _estimate_training_memory(
@@ -29,6 +30,7 @@ def build_strategy_plan(
     hardware_profile: Any,
     config: Any,
 ) -> StrategyPlan:
+    validate_legacy_parallelism(config)
     topology = _extract_topology(hardware_profile)
     world_size = max(1, int(get_value(hardware_profile, "num_gpus", 1)))
     topology_metadata = {}
@@ -43,9 +45,6 @@ def build_strategy_plan(
             "cross_group_parallelism": topology_plan.cross_group_parallelism,
             "groups": [group.to_dict() for group in topology_plan.groups],
         }
-    gpus_per_node = max(
-        1, int(get_value(hardware_profile, "gpus_per_node", world_size))
-    )
     available_memory = int(
         get_value(hardware_profile, "available_memory", 0)
         or get_value(hardware_profile, "gpu_memory", 0)
@@ -57,7 +56,6 @@ def build_strategy_plan(
 
     total_params = int(get_value(model_profile, "total_params", 0))
     model_memory = int(get_value(model_profile, "total_memory", total_params * 4))
-    num_layers = max(1, int(get_value(model_profile, "num_layers", 1) or 1))
     model_type = str(get_value(model_profile, "model_type", "unknown"))
     task_type = str(get_value(config, "task_type", "") or "").lower()
     model_family = str(get_value(config, "model_family", "") or "").lower()
@@ -111,8 +109,6 @@ def build_strategy_plan(
         and explicit_zero_stage < 3
     )
 
-    max_tp = int(get_value(config, "max_tensor_parallel_size", 8))
-    max_pp = int(get_value(config, "max_pipeline_parallel_size", 16))
     tp_size = 1
     pp_size = 1
     reasons: List[str] = []
@@ -225,52 +221,13 @@ def build_strategy_plan(
         elif ddp_comm_hook == "auto":
             ddp_comm_hook = "none"
 
-    requested_tp = int(get_value(config, "tensor_parallel_size", 1) or 1)
-    requested_pp = int(get_value(config, "pipeline_parallel_size", 1) or 1)
-
-    if backend in {"fsdp", "deepspeed"}:
-        if requested_tp > 1:
-            tp_size = largest_divisor_at_most(
-                world_size, min(requested_tp, max_tp, gpus_per_node)
-            )
-            warnings.append(
-                "TP with FSDP/DeepSpeed is experimental in v1 and requires explicit backend support."
-            )
-        if requested_pp > 1:
-            pp_size = largest_divisor_at_most(
-                world_size // max(1, tp_size), min(requested_pp, max_pp, num_layers)
-            )
-            warnings.append(
-                "PP with FSDP/DeepSpeed is experimental in v1 and requires benchmark validation."
-            )
-        if tp_size == 1 and pp_size == 1 and world_size > 1:
-            reasons.append(
-                "Using backend-managed sharding/data parallelism without eager TP/PP wrappers."
-            )
-    elif world_size > 1 and params_b >= 1.0:
-        tp_size = largest_divisor_at_most(world_size, min(max_tp, gpus_per_node))
-        if tp_size > 1:
-            reasons.append(f"Chose TP={tp_size} within node-local GPU budget.")
-
-    remaining = max(1, world_size // max(1, tp_size))
-    if (
-        backend == "native"
-        and world_size >= 16
-        and num_layers >= 8
-        and params_b >= 10.0
-    ):
-        pp_size = largest_divisor_at_most(remaining, min(max_pp, num_layers, remaining))
-        if pp_size > 1:
-            reasons.append(f"Chose PP={pp_size} for very large layered model.")
-
-    dp_size = max(1, world_size // max(1, tp_size * pp_size))
-    if dp_size * tp_size * pp_size != world_size:
-        warnings.append(
-            "Parallel factors did not exactly divide world_size; falling back to pure data parallel."
+    dp_size = world_size
+    if world_size > 1:
+        reasons.append(
+            "Using backend-managed sharding/data parallelism without TP/PP execution."
         )
-        dp_size, tp_size, pp_size = world_size, 1, 1
 
-    estimated_per_gpu = max(1, estimated_total // max(1, tp_size * pp_size))
+    estimated_per_gpu = max(1, estimated_total)
     if backend in {"fsdp", "deepspeed"}:
         estimated_per_gpu = max(1, estimated_per_gpu // max(1, dp_size))
 
