@@ -25,6 +25,7 @@ import sys
 import time
 import traceback
 from datetime import datetime, timezone
+from inspect import signature
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -197,6 +198,9 @@ def fixed_length_generation(
 
     config = GenerationConfig(
         do_sample=False,
+        num_beams=1,
+        num_return_sequences=1,
+        return_dict_in_generate=False,
         max_new_tokens=new_tokens,
         min_new_tokens=new_tokens,
         eos_token_id=None,
@@ -207,13 +211,18 @@ def fixed_length_generation(
         disable_compile=not compile_static,
         compile_config=CompileConfig(mode="max-autotune", fullgraph=True),
     )
-    # Default-valued GenerationConfig fields can otherwise inherit sampling
-    # settings from model defaults in Transformers >=4.50.
+    # Transformers 4.51 exposes this switch; newer APIs may omit it.
+    defaults = (
+        {"use_model_defaults": False}
+        if "use_model_defaults" in signature(model.generate).parameters
+        else {}
+    )
+    # Explicit None kwargs prevent EOS defaults from being filled by the model.
     return model.generate(
         input_ids=prompt,
         attention_mask=attention,
         generation_config=config,
-        use_model_defaults=False,
+        **defaults,
         do_sample=False,
         eos_token_id=None,
         forced_eos_token_id=None,
