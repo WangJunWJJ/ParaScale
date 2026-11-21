@@ -7,6 +7,7 @@
 
 import weakref
 from contextlib import contextmanager
+from types import SimpleNamespace
 
 import pytest
 
@@ -76,6 +77,66 @@ def test_numerical_validator_does_not_hide_nonfinite_errors(torch, value):
     from tests.benchmarks.scripts.validate_distributed_parallel import maximum_error
 
     assert math.isinf(maximum_error(torch.tensor([value]), torch.zeros(1)))
+
+
+def _reporting_trainer(torch, *, dp_size=1):
+    trainer = DistributedTrainer.__new__(DistributedTrainer)
+    trainer.config = DistributedParallelConfig(dp_size=dp_size, microbatches=1)
+    trainer.device = torch.device("cpu")
+    trainer.pp_rank = 0
+    trainer.schedule = None
+    trainer.execution_module = torch.nn.Linear(2, 2)
+    trainer.loss_fn = torch.nn.MSELoss()
+    trainer.summed_loss = None
+    trainer._normalization_count = None
+    trainer._prepare_step = lambda inputs, targets: None
+    trainer.mesh = {"dp": SimpleNamespace(get_group=lambda: None)}
+    return trainer
+
+
+def test_loss_reporting_extracts_one_scalar_without_changing_gradients(torch):
+    trainer = _reporting_trainer(torch)
+    inputs, targets = torch.randn(3, 2), torch.randn(3, 2)
+    expected = trainer.loss_fn(trainer.execution_module(inputs), targets)
+    expected_gradients = torch.autograd.grad(
+        expected, tuple(trainer.execution_module.parameters())
+    )
+    with torch.profiler.profile(
+        activities=[torch.profiler.ProfilerActivity.CPU]
+    ) as profile:
+        result = trainer.forward_backward(inputs, targets)
+    scalar_reads = sum(
+        event.count
+        for event in profile.key_averages()
+        if event.key == "aten::_local_scalar_dense"
+    )
+    assert scalar_reads == 1
+    assert result.loss == expected.item()
+    for parameter, gradient in zip(
+        trainer.execution_module.parameters(), expected_gradients
+    ):
+        torch.testing.assert_close(parameter.grad, gradient)
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
+def test_loss_reporting_rejects_nonfinite_value_after_reduction(
+    torch, monkeypatch, value
+):
+    trainer = _reporting_trainer(torch, dp_size=2)
+    reductions = []
+
+    def reduce(tensor, **kwargs):
+        reductions.append(tensor)
+        tensor.fill_(value)
+
+    monkeypatch.setattr(torch.distributed, "all_reduce", reduce)
+    with pytest.raises(FloatingPointError, match="Nonfinite distributed loss"):
+        trainer.forward_backward(torch.randn(3, 2), torch.randn(3, 2))
+    assert len(reductions) == 1
+    assert all(
+        parameter.grad is not None
+        for parameter in trainer.execution_module.parameters()
+    )
 
 
 @pytest.mark.parametrize("dp,tp", [(1, 1), (2, 1), (2, 2)])

@@ -12,6 +12,7 @@ one local stage, its input example, a TP plan and an initialized process group.
 from __future__ import annotations
 
 import inspect
+import math
 import os
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -297,10 +298,11 @@ class DistributedTrainer:
         if self.config.dp_size > 1:
             dist.all_reduce(value, group=self.mesh["dp"].get_group())
             value.div_(self.config.dp_size)
-        if not torch.isfinite(value):
+        reported_loss = value.item()
+        if not math.isfinite(reported_loss):
             raise FloatingPointError("Nonfinite distributed loss")
         return ParallelStepResult(
-            value.item(),
+            reported_loss,
             output.detach() if return_outputs and output is not None else None,
             self._normalization_count,
         )
