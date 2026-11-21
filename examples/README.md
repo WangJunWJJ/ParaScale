@@ -66,3 +66,5 @@ quality or fresh-process recovery.
 The same example also provides a separate real-model TP throughput benchmark
 against matched native PyTorch plans, with bounded validation NLL and explicit
 measurement exclusions.
+It also includes a fresh-process checkpoint comparison with exact per-rank
+parameter, Adam-state, RNG and continuation-loss checks on real local Llama/text.

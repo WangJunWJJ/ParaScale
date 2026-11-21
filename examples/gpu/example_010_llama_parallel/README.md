@@ -165,3 +165,42 @@ do not multiply the token count. Startup, tokenization, H2D and validation are
 outside the timed window; peak allocated memory is measured during training.
 Outputs remain `diagnostic` and include per-step timings plus model, data, source
 and script digests. Keep these generated files outside the repository.
+
+## Fresh-process Checkpoint Validation
+
+This separate validator compares a continuous four-update run with an independent
+`torchrun` that resumes after update two. It uses real local weights/text, without
+a retained full-model reference. The checkpoint context is constructed from the
+effective model configuration, code/asset hashes, actual token stream, loss and
+packing policy. Use the same source snapshot, devices, topology and paths for both
+commands. Allow roughly 15 GB of free checkpoint space for untied TinyLlama TP2/PP2.
+
+```bash
+RUN=$(mktemp -d /tmp/parascale-llama-resume.XXXXXX)
+COMMON=(--model /path/to/tinyllama-1.1b-59f6f375
+        --data /path/to/wikitext/train.txt
+        --dp 1 --tp 1 --pp 2 --steps 4 --save-step 2
+        --global-batch 8 --sequence-length 32 --microbatches 2)
+CUDA_VISIBLE_DEVICES=0,1 OMP_NUM_THREADS=1 HF_HUB_OFFLINE=1 \
+python -m torch.distributed.run \
+  --master_addr=127.0.0.1 --master_port=29500 --nproc_per_node=2 \
+  tests/benchmarks/scripts/validate_llama_checkpoint.py "${COMMON[@]}" \
+  --checkpoint-dir "$RUN/checkpoint" --output "$RUN/reference.json"
+CUDA_VISIBLE_DEVICES=0,1 OMP_NUM_THREADS=1 HF_HUB_OFFLINE=1 \
+python -m torch.distributed.run \
+  --master_addr=127.0.0.1 --master_port=29500 --nproc_per_node=2 \
+  tests/benchmarks/scripts/validate_llama_checkpoint.py "${COMMON[@]}" \
+  --resume-from "$RUN/checkpoint" --reference-result "$RUN/reference.json" \
+  --output "$RUN/resumed.json"
+```
+
+The first result is `reference`, not a recovery pass. The second reports `passed`
+only when every rank has identical final parameter/Adam-state/RNG fingerprints and
+an exact matching loss suffix. Nonfinite tensor state is rejected. To test TP2,
+use `--tp 2 --pp 1`; for DP2+TP2 or TP2+PP2, use four visible devices/processes and
+adjust the three topology options together.
+
+This verifies bounded same-topology continuation, not equivalence to unsharded
+training, data-loader/scheduler restoration, convergence, crash injection or long-run
+readiness. Input position is reconstructed from the checkpoint step in a fixed,
+unshuffled packed token stream. Keep the result JSON and checkpoints outside Git.
