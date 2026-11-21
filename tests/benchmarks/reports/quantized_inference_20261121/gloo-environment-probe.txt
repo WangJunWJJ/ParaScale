@@ -1,0 +1,15 @@
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+  File "C:\Users\unnch\.codex\tmp\parascale-quant-venv\Lib\site-packages\torch\distributed\c10d_logger.py", line 81, in wrapper
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\unnch\.codex\tmp\parascale-quant-venv\Lib\site-packages\torch\distributed\c10d_logger.py", line 95, in wrapper
+    func_return = func(*args, **kwargs)
+                  ^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\unnch\.codex\tmp\parascale-quant-venv\Lib\site-packages\torch\distributed\distributed_c10d.py", line 1769, in init_process_group
+    default_pg, _ = _new_process_group_helper(
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\unnch\.codex\tmp\parascale-quant-venv\Lib\site-packages\torch\distributed\distributed_c10d.py", line 1996, in _new_process_group_helper
+    backend_class = ProcessGroupGloo(
+                    ^^^^^^^^^^^^^^^^^
+RuntimeError: makeDeviceForHostname(): unsupported gloo device

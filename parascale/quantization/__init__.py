@@ -7,8 +7,10 @@
 from importlib import import_module
 
 from .base import QuantizationConfig
+from .inference_config import InferenceQuantizationConfig
 
 _EXPORTS = {
+    "inference": ["quantize_inference_model"],
     "observers": ["MinMaxObserver", "MovingAverageObserver"],
     "fake_quantize": ["FakeQuantize", "FakeQuantizedLinear", "FakeQuantizedConv2d"],
     "quantized_layers": [
@@ -30,6 +32,7 @@ _EXPORTS = {
 }
 __all__ = [
     "QuantizationConfig",
+    "InferenceQuantizationConfig",
     *[name for names in _EXPORTS.values() for name in names],
 ]
 

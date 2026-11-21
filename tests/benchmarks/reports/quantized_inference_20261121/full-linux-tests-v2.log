@@ -1,0 +1,76 @@
+
+[ParaScale test] syntax check
+
+[ParaScale test] /usr/bin/python -m pytest tests -q
+Running 894 items in this shard
+................................................s....................... [  8%]
+........................................................................ [ 16%]
+........................................................................ [ 24%]
+........................................................................ [ 32%]
+.............................................s.......................... [ 40%]
+........................................................................ [ 48%]
+........................................................................ [ 56%]
+........................................................................ [ 64%]
+........................................................................ [ 72%]
+........................................................................ [ 80%]
+........................................................................ [ 88%]
+........................................................................ [ 96%]
+..............................                                           [100%]
+=============================== warnings summary ===============================
+tests/test_backend_smoke.py::test_cli_native_synthetic_train_checkpoint_resume_and_serve
+tests/test_backend_smoke.py::test_cli_benchmark_can_validate_resume
+tests/test_distillation_runtime_no_torch.py::test_distillation_train_resume_and_teacher_contract
+tests/test_quantization_runtime_no_torch.py::test_native_qat_exports_and_resumes
+  /work/src/parascale/runtime/training/data_state.py:32: RuntimeWarning: Dataloader has no state protocol; replaying and skipping 2 consumed micro-batches. Exact resume requires a repeatable deterministic data source.
+    return self._restore_iterator(dataloader, data_state)
+
+tests/test_checkpoint_recovery.py::test_real_native_training_recovers_previous_complete_step
+  /work/src/parascale/runtime/training/data_state.py:32: RuntimeWarning: Dataloader has no state protocol; replaying and skipping 1 consumed micro-batches. Exact resume requires a repeatable deterministic data source.
+    return self._restore_iterator(dataloader, data_state)
+
+tests/test_compression_portability.py::test_cross_family_ptq_qat_and_reload[4-bert]
+  /usr/local/lib/python3.10/dist-packages/torchao/dtypes/floatx/__init__.py:5: DeprecationWarning: Importing from torchao.dtypes.floatx.floatx_tensor_core_layout is deprecated. Please use 'from torchao.prototype.dtypes.floatx.floatx_tensor_core_layout import ...' instead. This import path will be removed in a future torchao release. Please check issue: https://github.com/pytorch/ao/issues/2752 for more details. 
+    from .floatx_tensor_core_layout import (
+
+tests/test_compression_portability.py::test_cross_family_ptq_qat_and_reload[4-bert]
+  /usr/local/lib/python3.10/dist-packages/torchao/dtypes/uintx/__init__.py:1: DeprecationWarning: Importing from torchao.dtypes.uintx.dyn_int8_act_int4_wei_cpu_layout is deprecated. Please use 'from torchao.prototype.dtypes import Int8DynamicActInt4WeightCPULayout' instead. This import path will be removed in a future release of torchao. See https://github.com/pytorch/ao/issues/2752 for more details.
+    from .dyn_int8_act_int4_wei_cpu_layout import (
+
+tests/test_compression_portability.py::test_cross_family_ptq_qat_and_reload[4-bert]
+  /usr/local/lib/python3.10/dist-packages/torchao/dtypes/uintx/__init__.py:10: DeprecationWarning: Importing from torchao.dtypes.uintx.marlin_qqq_tensor is deprecated. Please use 'from torchao.prototype.dtypes import MarlinQQQLayout, MarlinQQQTensor' instead. This import path will be removed in a future release of torchao. See https://github.com/pytorch/ao/issues/2752 for more details.
+    from .marlin_qqq_tensor import (
+
+tests/test_compression_portability.py::test_cross_family_ptq_qat_and_reload[4-bert]
+  /usr/local/lib/python3.10/dist-packages/torchao/dtypes/uintx/__init__.py:30: DeprecationWarning: Importing from torchao.dtypes.uintx.uintx_layout is deprecated. Please use 'from torchao.prototype.dtypes import UintxLayout, UintxTensor' instead. This import path will be removed in a future release of torchao. See https://github.com/pytorch/ao/issues/2752 for more details.
+    from .uintx_layout import (
+
+tests/test_compression_portability.py::test_cross_family_ptq_qat_and_reload[4-bert]
+  /usr/local/lib/python3.10/dist-packages/gemlite/triton_kernels/config.py:5: DeprecationWarning: the imp module is deprecated in favour of importlib and slated for removal in Python 3.12; see the module's documentation for alternative uses
+    if sys.version_info < (3, 12): import imp
+
+tests/test_compression_portability.py::test_cross_family_ptq_qat_and_reload[4-bert]
+  /usr/local/lib/python3.10/dist-packages/torchao/dtypes/__init__.py:25: DeprecationWarning: Importing BlockSparseLayout from torchao.dtypes is deprecated. Please use 'from torchao.prototype.dtypes import BlockSparseLayout' instead. This import path will be removed in a future torchao release. Please check issue: https://github.com/pytorch/ao/issues/2752 for more details. 
+    from .uintx.block_sparse_layout import BlockSparseLayout
+
+tests/test_compression_portability.py::test_cross_family_ptq_qat_and_reload[4-bert]
+  /usr/local/lib/python3.10/dist-packages/torchao/dtypes/__init__.py:26: DeprecationWarning: Importing from torchao.dtypes is deprecated. Please use 'from torchao.prototype.dtypes import CutlassInt4PackedLayout' instead. This import path will be removed in a future torchao release. Please check issue: https://github.com/pytorch/ao/issues/2752 for more details. 
+    from .uintx.cutlass_int4_packed_layout import CutlassInt4PackedLayout
+
+tests/test_compression_portability.py::test_cross_family_ptq_qat_and_reload[4-bert]
+  /usr/local/lib/python3.10/dist-packages/torchao/quantization/quant_api.py:2511: DeprecationWarning: invalid escape sequence '\.'
+    """Configuration class for applying different quantization configs to modules or parameters based on their fully qualified names (FQNs).
+
+tests/test_ground_dino_workload.py: 16 warnings
+  /usr/local/lib/python3.10/dist-packages/torch/utils/data/_utils/pin_memory.py:57: DeprecationWarning: The argument 'device' of Tensor.pin_memory() is deprecated. Please do not pass this argument. (Triggered internally at /pytorch/aten/src/ATen/native/Memory.cpp:46.)
+    return data.pin_memory(device)
+
+tests/test_ground_dino_workload.py: 16 warnings
+  /usr/local/lib/python3.10/dist-packages/torch/utils/data/_utils/pin_memory.py:57: DeprecationWarning: The argument 'device' of Tensor.is_pinned() is deprecated. Please do not pass this argument. (Triggered internally at /pytorch/aten/src/ATen/native/Memory.cpp:31.)
+    return data.pin_memory(device)
+
+tests/test_multi_node.py::test_distributed_utility_functions_on_single_process_group
+  /usr/local/lib/python3.10/dist-packages/torch/distributed/distributed_c10d.py:4876: UserWarning: barrier(): using the device under current context. You can specify `device_id` in `init_process_group` to mute this warning.
+    warnings.warn(  # warn only once
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+892 passed, 3 skipped, 46 warnings in 387.83s (0:06:27)
