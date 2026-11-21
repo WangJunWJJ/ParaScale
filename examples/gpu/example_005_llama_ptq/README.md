@@ -42,6 +42,56 @@ bash examples/gpu/example_005_llama_ptq/run.sh \
 正式质量评估还需自行保证语料无语义重叠，固定模型版本及数据划分。
 默认排除 `lm_head`，仅转换精确类型的 Linear/Conv2d。
 
+## 固定版本的轻量预训练案例
+
+可使用 [SmolLM2-135M](https://huggingface.co/HuggingFaceTB/SmolLM2-135M/tree/93efa2f097d58c2a74874c7e644dbc9b0cee75a2)
+验证完整预训练模型，而非随机网络。它采用 Llama 架构；共享的 embedding / `lm_head`
+保持浮点表示。以下准备步骤需要网络，资产目录应位于源码仓库之外：
+
+```bash
+python -m pip install pyarrow
+export ASSET_DIR=/tmp/parascale-compression-assets
+python - <<'PY'
+import os
+from pathlib import Path
+
+import pyarrow.parquet as pq
+from huggingface_hub import snapshot_download
+
+root = Path(os.environ["ASSET_DIR"])
+snapshot_download(
+    "HuggingFaceTB/SmolLM2-135M",
+    revision="93efa2f097d58c2a74874c7e644dbc9b0cee75a2",
+    local_dir=root / "smollm2-135m",
+    allow_patterns=["*.json", "*.txt", "*.safetensors", "README.md"],
+)
+source = Path(snapshot_download(
+    "Salesforce/wikitext", repo_type="dataset",
+    revision="b08601e04326c79dfdd32d625aee71d232d685c3",
+    allow_patterns=["wikitext-2-raw-v1/*.parquet"],
+)) / "wikitext-2-raw-v1"
+target = root / "wikitext"
+target.mkdir(parents=True, exist_ok=True)
+for split in ("train", "validation", "test"):
+    rows = pq.read_table(source / f"{split}-00000-of-00001.parquet")["text"]
+    (target / f"{split}.txt").write_text(
+        "\n".join(rows.to_pylist()), encoding="utf-8"
+    )
+PY
+
+DEVICE=cuda OUTPUT_DIR=runs/examples/smollm2_ptq8 \
+bash examples/gpu/example_005_llama_ptq/run.sh \
+  --model "$ASSET_DIR/smollm2-135m" --local-files-only \
+  --revision 93efa2f097d58c2a74874c7e644dbc9b0cee75a2 --bits 8 \
+  --calibration-text "$ASSET_DIR/wikitext/train.txt" \
+  --evaluation-text "$ASSET_DIR/wikitext/validation.txt" \
+  --seqlen 128 --batch-size 1 --batches 32 --warmup 5 --repeats 20
+```
+
+保留原始行序，不混合数据划分。`validation` 用于调参；确定配置后再使用 `test.txt`
+做独立评估。此命令仅评估前 32 个固定长度 batch，不是完整 WikiText 排行榜成绩。
+同资产的 QAT 命令见 [QAT 案例](../example_006_llama_qat/README.md)。
+
 ## 结果与检查
 
 - `report.json`：应为 `status: passed`；检查 `model_source.kind` 区分随机/预训练来源。
@@ -51,6 +101,8 @@ bash examples/gpu/example_005_llama_ptq/run.sh \
 
 出现缺依赖、无 CUDA、文本不足或不支持的共享层时应修正输入，不要绕过检查。
 这不是训练恢复检查点，也不能直接送入 ParaScale `serve`。
+`status: passed` 表示执行、有限值和重载检查通过，不表示满足业务质量或性能门槛。
+reference 路径每次前向都解量化权重，可能比浮点模型更慢；部署加速需单独验证融合内核路径。
 
 Windows 可在 Git Bash 中执行同一命令；PowerShell 可直接执行
 `python tests/benchmarks/scripts/validate_llama_quantization.py --tiny --mode ptq --bits 8 --device cpu --output runs/examples/llama_ptq_windows`。

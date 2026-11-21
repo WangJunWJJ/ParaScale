@@ -32,12 +32,34 @@ bash examples/gpu/example_006_llama_qat/run.sh \
 学习率和训练步数只是起始配置，不能保证质量保持。报告会对照同一浮点基线，
 但不会自动运行独立的 PTQ 实验；比较 PTQ/QAT 时应使用相同模型、语料和位宽。
 
+## 固定版本的 SmolLM2 QAT
+
+先按 [PTQ 案例](../example_005_llama_ptq/README.md) 准备固定版本的 SmolLM2-135M
+和 WikiText-2 原始数据，并设置 `ASSET_DIR`。复用相同资产运行：
+
+```bash
+DEVICE=cuda OUTPUT_DIR=runs/examples/smollm2_qat8 \
+bash examples/gpu/example_006_llama_qat/run.sh \
+  --model "$ASSET_DIR/smollm2-135m" --local-files-only \
+  --revision 93efa2f097d58c2a74874c7e644dbc9b0cee75a2 --bits 8 \
+  --calibration-text "$ASSET_DIR/wikitext/train.txt" \
+  --evaluation-text "$ASSET_DIR/wikitext/validation.txt" \
+  --seqlen 128 --batch-size 1 --batches 32 --qat-steps 64 \
+  --learning-rate 0.00001 --warmup 5 --repeats 20
+```
+
+训练循环使用前 32 个训练 batch，64 步会重复两遍；评估使用另一数据划分的前 32 个 batch。
+这是有界验证，不是完整收敛训练。QAT 后质量改善也可能来自文本微调；要归因于 QAT，
+还需比较相同数据、步数和优化器的无量化微调基线，不能只比较未训练的浮点模型。
+
 ## 结果与检查
 
 - `report.json` 应为 `status: passed`，`qat.training` 包含真实梯度与权重更新证据。
 - `qat` 和 `baseline` 包含评测 CE/困惑度、输出误差、执行时间与存储体积。
 - `qat.roundtrip_max_abs_error` 验证转换模型重载一致性。
 - `qat-4bit.pt` / `qat-8bit.pt` 是导出的量化权重，不是可续训的 optimizer checkpoint。
+
+`status: passed` 不包含业务质量或速度门槛；请独立检查困惑度、耗时与内存指标。
 
 单设备 FP32 reference 路径，不支持 AMP、FSDP/DeepSpeed、分布式或 QAT+KD；
 没有融合整数推理内核，不能仅凭文件变小宣称显存或速度收益。
