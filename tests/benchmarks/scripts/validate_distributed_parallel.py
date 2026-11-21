@@ -256,6 +256,30 @@ def main():
                         raise
                 else:
                     raise AssertionError("Committed checkpoint was overwritten")
+                # One rank changes slot order; every rank must reject before mutation.
+                wrong_optimizer = (
+                    torch.optim.SGD(
+                        list(reversed(list(trainer.parameters()))),
+                        lr=0.01,
+                        momentum=0.9,
+                        foreach=False,
+                    )
+                    if dist.get_rank() == 0
+                    else optimizer
+                )
+                cpu_rng, cuda_rng = torch.get_rng_state(), torch.cuda.get_rng_state()
+                try:
+                    trainer.load_checkpoint(args.output / "checkpoint", wrong_optimizer)
+                except RuntimeError as error:
+                    if "optimizer identity" not in str(error):
+                        raise
+                else:
+                    raise AssertionError("Reordered optimizer slots were accepted")
+                if not torch.equal(torch.get_rng_state(), cpu_rng) or not torch.equal(
+                    torch.cuda.get_rng_state(), cuda_rng
+                ):
+                    raise AssertionError("Rejected checkpoint changed RNG state")
+                del wrong_optimizer
                 shard = args.output / "checkpoint" / "rank-00000.pt"
                 if dist.get_rank() == 0:
                     original_size = shard.stat().st_size

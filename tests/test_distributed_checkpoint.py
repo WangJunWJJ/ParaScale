@@ -150,6 +150,7 @@ def write_checkpoint(
     payload = dict(
         model=trainer.module.state_dict(),
         optimizer=optimizer.state_dict(),
+        optimizer_identity=checkpoint._optimizer_identity(trainer.module, optimizer),
         cpu_rng=torch.get_rng_state(),
         cuda_rng=None,
         step=7,
@@ -159,7 +160,7 @@ def write_checkpoint(
     path = directory / "rank-00000.pt"
     torch.save(payload, path)
     metadata = dict(
-        schema_version=1,
+        schema_version=2,
         topology=asdict(trainer.config),
         step=7,
         files=[
@@ -189,6 +190,214 @@ def test_cpu_roundtrip_restores_model_optimizer_rng(tmp_path, runtime):
     assert len(optimizer.state) == 2
     assert all(value["step"].item() == 1 for value in optimizer.state.values())
     assert torch.equal(torch.get_rng_state(), rng)
+
+
+@pytest.mark.parametrize("change", ["type", "order", "groups"])
+def test_optimizer_identity_rejected_before_any_mutation(
+    tmp_path, runtime, monkeypatch, change
+):
+    trainer, _, _ = runtime
+    trainer.module = torch.nn.Sequential(torch.nn.Linear(2, 2), torch.nn.Linear(2, 2))
+    parameters = list(trainer.module.parameters())
+    optimizer = torch.optim.AdamW(
+        [{"params": parameters[:2]}, {"params": parameters[2:]}], lr=0.01
+    )
+    trainer.module(torch.ones(1, 2)).sum().backward()
+    optimizer.step()
+    checkpoint.save_checkpoint(trainer, tmp_path, optimizer, step=7)
+    if change == "type":
+        replacement = torch.optim.Adam(optimizer.param_groups, lr=0.01)
+    elif change == "order":
+        replacement = torch.optim.AdamW(
+            [{"params": parameters[2:]}, {"params": parameters[:2]}], lr=0.01
+        )
+    else:
+        replacement = torch.optim.AdamW(
+            [{"params": parameters[::2]}, {"params": parameters[1::2]}], lr=0.01
+        )
+    model_load, optimizer_load, rng = Mock(), Mock(), Mock()
+    monkeypatch.setattr(trainer.module, "load_state_dict", model_load)
+    monkeypatch.setattr(replacement, "load_state_dict", optimizer_load)
+    monkeypatch.setattr(torch, "set_rng_state", rng)
+    with pytest.raises(RuntimeError, match="optimizer identity"):
+        checkpoint.load_checkpoint(trainer, tmp_path, replacement)
+    model_load.assert_not_called()
+    optimizer_load.assert_not_called()
+    rng.assert_not_called()
+
+
+@pytest.mark.parametrize("invalid", ["external", "duplicate"])
+def test_optimizer_invalid_ownership_rejected_before_writing(
+    tmp_path, runtime, invalid
+):
+    trainer, optimizer, _ = runtime
+    if invalid == "external":
+        optimizer.param_groups[0]["params"].append(torch.nn.Parameter(torch.ones(2)))
+    else:
+        optimizer.param_groups[0]["params"].append(trainer.module.weight)
+    with pytest.raises(RuntimeError, match="optimizer"):
+        checkpoint.save_checkpoint(trainer, tmp_path, optimizer, step=7)
+    assert not list(tmp_path.iterdir())
+
+
+def test_peer_optimizer_identity_mismatch_prevents_all_mutation(
+    tmp_path, two_ranks, monkeypatch
+):
+    trainers, optimizers = _rank_trainers()
+    assert two_ranks(
+        lambda rank: checkpoint.save_checkpoint(
+            trainers[rank], tmp_path, optimizers[rank], step=7
+        )
+    ) == [None, None]
+    optimizers[1] = torch.optim.Adam(trainers[1].module.parameters())
+    rng = Mock()
+    monkeypatch.setattr(torch, "set_rng_state", rng)
+    for trainer, optimizer in zip(trainers, optimizers):
+        trainer.module.state_dict = Mock(side_effect=AssertionError("state inspection"))
+        trainer.module.load_state_dict = Mock()
+        optimizer.load_state_dict = Mock()
+    outcomes = two_ranks(
+        lambda rank: checkpoint.load_checkpoint(
+            trainers[rank], tmp_path, optimizers[rank]
+        )
+    )
+    assert all(
+        isinstance(result, RuntimeError) and "optimizer identity" in str(result)
+        for result in outcomes
+    )
+    for trainer, optimizer in zip(trainers, optimizers):
+        trainer.module.state_dict.assert_not_called()
+        trainer.module.load_state_dict.assert_not_called()
+        optimizer.load_state_dict.assert_not_called()
+    rng.assert_not_called()
+
+
+@pytest.mark.parametrize("invalid", ["external", "duplicate", "slots"])
+def test_peer_optimizer_save_failure_precedes_model_capture(
+    tmp_path, two_ranks, invalid
+):
+    trainers, optimizers = _rank_trainers()
+    parameters = optimizers[1].param_groups[0]["params"]
+    if invalid == "slots":
+        state = optimizers[1].state_dict()
+        state["param_groups"][0]["params"] = [0, 0]
+        optimizers[1].state_dict = Mock(return_value=state)
+    else:
+        parameters.append(
+            torch.nn.Parameter(torch.ones(2))
+            if invalid == "external"
+            else parameters[0]
+        )
+    for trainer in trainers:
+        trainer.module.state_dict = Mock(side_effect=AssertionError("model capture"))
+    directory = tmp_path / "not-created"
+    outcomes = two_ranks(
+        lambda rank: checkpoint.save_checkpoint(
+            trainers[rank], directory, optimizers[rank], step=7
+        )
+    )
+    assert all(
+        isinstance(result, RuntimeError)
+        and "rank 1" in str(result)
+        and "optimizer" in str(result)
+        for result in outcomes
+    )
+    for trainer in trainers:
+        trainer.module.state_dict.assert_not_called()
+    assert not directory.exists()
+
+
+def test_optimizer_subset_and_tied_parameter_roundtrip(tmp_path, runtime):
+    trainer, _, _ = runtime
+    trainer.module = torch.nn.Sequential(torch.nn.Linear(2, 2), torch.nn.Linear(2, 2))
+    trainer.module[1].weight = trainer.module[0].weight
+    selected = [trainer.module[1].weight, trainer.module[1].bias]
+    optimizer = torch.optim.AdamW(selected, lr=0.03)
+    trainer.module(torch.ones(1, 2)).sum().backward()
+    optimizer.step()
+    checkpoint.save_checkpoint(trainer, tmp_path, optimizer, step=7)
+    replacement = torch.optim.AdamW(selected, lr=0.7)
+    assert checkpoint.load_checkpoint(trainer, tmp_path, replacement) == 7
+    assert replacement.param_groups[0]["lr"] == 0.03
+    for parameter in selected:
+        for name, value in optimizer.state[parameter].items():
+            torch.testing.assert_close(
+                replacement.state[parameter][name], value, rtol=0, atol=0
+            )
+    identity = torch.load(tmp_path / "rank-00000.pt", weights_only=False)[
+        "optimizer_identity"
+    ]
+    assert identity["parameter_groups"] == [["0.weight", "1.bias"]]
+
+
+@pytest.mark.parametrize(
+    "identity", [None, {}, {"type": "bad", "parameter_groups": []}]
+)
+def test_malformed_optimizer_identity_rejected_before_mutation(
+    tmp_path, runtime, monkeypatch, identity
+):
+    trainer, optimizer, _ = runtime
+    write_checkpoint(
+        tmp_path,
+        trainer,
+        optimizer,
+        payload_edit=lambda payload: payload.update(optimizer_identity=identity),
+    )
+    load = Mock()
+    monkeypatch.setattr(trainer.module, "load_state_dict", load)
+    with pytest.raises(RuntimeError, match="optimizer identity"):
+        checkpoint.load_checkpoint(trainer, tmp_path, optimizer)
+    load.assert_not_called()
+
+
+@pytest.mark.parametrize("damage", ["duplicate", "boolean", "orphan_state"])
+def test_optimizer_serialized_ids_rejected_before_mutation(
+    tmp_path, runtime, monkeypatch, damage
+):
+    trainer, optimizer, _ = runtime
+
+    def edit(payload):
+        state = payload["optimizer"]
+        if damage == "duplicate":
+            state["param_groups"][0]["params"] = [0, 0]
+        elif damage == "boolean":
+            state["param_groups"][0]["params"] = [False, 1]
+        else:
+            state["state"][99] = {}
+
+    write_checkpoint(tmp_path, trainer, optimizer, payload_edit=edit)
+    load = Mock()
+    monkeypatch.setattr(trainer.module, "load_state_dict", load)
+    with pytest.raises(RuntimeError, match="optimizer"):
+        checkpoint.load_checkpoint(trainer, tmp_path, optimizer)
+    load.assert_not_called()
+
+
+def test_optimizer_warm_restart_preserves_next_update(tmp_path, runtime):
+    trainer, _, _ = runtime
+    optimizer = torch.optim.AdamW(trainer.module.parameters(), lr=0.02)
+
+    def update(module, opt):
+        opt.zero_grad(set_to_none=True)
+        module(torch.tensor([[1.0, 2.0], [3.0, 4.0]])).square().sum().backward()
+        opt.step()
+
+    update(trainer.module, optimizer)
+    checkpoint.save_checkpoint(trainer, tmp_path, optimizer, step=1)
+    update(trainer.module, optimizer)
+    expected = {
+        name: value.clone() for name, value in trainer.module.state_dict().items()
+    }
+    restarted = SimpleNamespace(**vars(trainer))
+    restarted.module = torch.nn.Linear(2, 2)
+    restored = torch.optim.AdamW(restarted.module.parameters(), lr=0.9)
+    assert checkpoint.load_checkpoint(restarted, tmp_path, restored) == 1
+    update(restarted.module, restored)
+    for name, value in restarted.module.state_dict().items():
+        torch.testing.assert_close(value, expected[name], rtol=0, atol=0)
+    for before, after in zip(optimizer.state.values(), restored.state.values()):
+        for name in before:
+            torch.testing.assert_close(before[name], after[name], rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("step", [-1, True, 1.5])
@@ -221,7 +430,7 @@ def test_committed_checkpoint_is_immutable(tmp_path, runtime, monkeypatch):
     "edit",
     [
         lambda m: m.update(schema_version=True),
-        lambda m: m.update(schema_version=2),
+        lambda m: m.update(schema_version=1),
         lambda m: m.update(extra=1),
         lambda m: m.pop("step"),
         lambda m: m.update(step=True),

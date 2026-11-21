@@ -180,6 +180,18 @@ final manifest; an existing committed directory cannot be overwritten.
 All ranks must agree on the canonical checkpoint directory, topology and step
 before saving, and on the directory and complete manifest before loading any
 payload. Mixed snapshots are rejected before applying model or optimizer state.
+Schema v2 also binds each rank's optimizer class and ordered parameter groups to
+canonical stage parameter names. Type, order, group membership, duplicate slots
+and external parameters are checked before state application; save-side ownership
+checks precede model state capture. Shared parameters use their first registered
+name, and optimizing only a subset is allowed. Saved hyperparameters are restored,
+not compared with constructor defaults. Schema v1 checkpoints are rejected rather
+than inferring missing optimizer identity.
+
+This binding is not a complete training-semantic fingerprint: changed model/RoPE
+configuration, weight-tying topology, loss, tokenizer or data are not identified.
+Optimizer class names are not implementation or custom-hook fingerprints. Those
+inputs must remain unchanged; their automatic validation is not yet supported.
 
 Only trusted local checkpoint files may be loaded. Topology, microbatch count
 and rank/device mapping must remain unchanged. This format is not portable
