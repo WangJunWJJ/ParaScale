@@ -33,21 +33,27 @@ integer storage. Inspect `packed_weight` for storage representation; using
   correctness only. It is not evidence of pretrained model quality, TinyLlama
   accuracy, GPU performance, or production stability.
 
-### Validation status (2026-11-16)
+### Validation status (2026-11-22)
 
-The coordinating validation run reports 18 remote Llama/runtime tests passed,
-plus GPU 4-bit and 8-bit PTQ/QAT smoke runs with 16 QAT optimizer steps passed.
-These use a tiny randomly initialized, genuine Llama architecture, not a
-pretrained quality benchmark. Cross-family validation now additionally passes
-15 tests locally and on the A6000 host: 12 family cases use CUDA remotely and
-three input/selection boundary checks run on CPU. The unified validation report
-supplies the detailed evidence and links.
+A6000 validation now covers pretrained SmolLM2-135M and TinyLlama-1.1B at
+4/8 bits, with PTQ calibration, real QAT updates, conversion and reload. All
+eight PTQ/QAT paths reproduced the exported model's outputs exactly after
+reload in the same process. These runs use PyTorch 2.9.1, Transformers 4.51.3,
+FP32 reference compute and separate WikiText train/validation files.
+SmolLM2 uses 64 QAT updates and 32 evaluation batches; TinyLlama uses 16 updates
+and eight evaluation batches, all with batch size 1 and sequence length 128.
+The earlier randomly initialized cross-family tests remain functional coverage,
+not pretrained quality evidence.
 
-**Production pretrained-quality validation remains unverified:** earlier model
-downloads were inaccessible or stalled; this run deliberately uses offline
-random models and does not retest download availability. No stable
-pretrained quality, TinyLlama quality retention, or production readiness claim
-can be inferred from these smoke results.
+**These are bounded functional checks, not production quality acceptance.**
+The validator's `passed` status checks finite computation, QAT updates and
+reload parity; it does not impose a perplexity budget. The tested 4-bit recipes
+showed quality degradation, particularly for SmolLM2, and must not be promoted
+based on serialization success. QAT improvements can also reflect text
+fine-tuning; attribution needs a matched floating-point training control.
+Full held-out quality, fresh-process deployment and long-running service
+acceptance remain separate gates. Reference inference was slower than float
+in these runs; do not present its packed storage as runtime acceleration.
 
 ## Cross-model applicability
 
@@ -78,6 +84,34 @@ Important boundaries:
   layers, but eligible layers alone do not establish end-to-end compatibility.
   Their detection, generation and multimodal paths require separate validation.
 - Each export still needs the matching float model template to reload.
+
+### Runtime hooks and conversion safety
+
+Reference quantization rejects execution hooks and instance-level `forward`
+overrides on selected layers, including hooks registered after preparation.
+Compiled call overrides anywhere in the model, and hooks on quantizers that
+conversion replaces, are also rejected. Errors identify the affected module path
+(`<root>` for a root layer). This prevents conversion from silently dropping
+model behavior.
+
+Parameter gradient hooks, including post-accumulate hooks on excluded
+parameters, are unsupported because model copying does not preserve them.
+Active PyTorch global forward/backward hooks are rejected too: changing a
+layer's class can change the behavior of a type-sensitive global hook.
+
+Parent and excluded **module** hooks can remain during in-memory preparation
+and conversion. Export and loading, however, reject execution customizations
+anywhere in the model/template: the state-only checkpoint cannot serialize
+Python callbacks. State-dictionary save/load hooks are rejected before they can
+execute, including during model signature creation. Failed exports leave any
+existing checkpoint unchanged.
+
+Remove temporary inspection hooks using their registration handles before
+quantization. Do not simply remove a hook that implements model semantics:
+express that behavior in a tested model adapter and revalidate quantization
+coverage and output parity. Use the original uncompiled float model for
+preparation. These checks cover registered hooks and instance execution
+overrides, not arbitrary custom Python behavior or cross-process code identity.
 
 Parameter-sharing checks index storage aliases once rather than rescanning all
 parameters for every selected tensor. This improves preparation complexity,
