@@ -27,6 +27,7 @@ SUMMARY_FILES = {
     "detection_distillation": Path("detection_distillation/summary.json"),
     "compression_examples": Path("compression_examples/summary.json"),
     "clip_recovery": Path("clip_recovery/summary.json"),
+    "distributed_parallel": Path("distributed_parallel/summary.json"),
 }
 
 CONFIG_FILES = {
@@ -104,6 +105,9 @@ def build_report_markdown(
     lines.extend(_precision_section(summaries["rtx4090_precision"]))
     lines.extend(
         _a6000_native_ddp_scaling_section(summaries["a6000_native_ddp_scaling"])
+    )
+    lines.extend(
+        _distributed_parallel_section(summaries.get("distributed_parallel", {}))
     )
     lines.extend(_quantization_section(summaries.get("llama_quantization", {})))
     lines.extend(_distillation_section(summaries.get("llama_distillation", {})))
@@ -218,6 +222,7 @@ def _overview_table(summaries: Dict[str, Dict[str, Any]]) -> List[str]:
         "detection_distillation": "YOLO detection distillation",
         "compression_examples": "Runnable compression examples",
         "clip_recovery": "A6000 real CLIP recovery",
+        "distributed_parallel": "A6000 distributed parallel capability",
     }
     for name, label in labels.items():
         summary = summaries.get(name, {"missing": True})
@@ -229,6 +234,36 @@ def _overview_table(summaries: Dict[str, Dict[str, Any]]) -> List[str]:
             f"| {label} | {status} | {hardware} | `{image}` | [{summary_link}]({summary_link}) |"
         )
     lines.append("")
+    return lines
+
+
+def _distributed_parallel_section(summary: Dict[str, Any]) -> List[str]:
+    """Render model-specific parity evidence, not production performance claims."""
+    if not summary.get("runs"):
+        return []
+    lines = [
+        "## A6000 Distributed Parallel Capability",
+        "",
+        summary.get("scope", "Model-specific experimental execution parity."),
+        "",
+        "Rates are diagnostic forward/backward samples/s, not production throughput; "
+        "no full-3D (DP+TP+PP) validation is claimed.",
+        "",
+        "| Run | Model | Topology | Status | Max parameter absolute error | Diagnostic forward/backward samples/s | Evidence |",
+        "| --- | --- | --- | --- | ---: | ---: | --- |",
+    ]
+    for run in summary["runs"]:
+        error = run.get("max_absolute_errors", {}).get("parameter")
+        parameter_error = f"{float(error):.6e}" if error is not None else "n/a"
+        rate = _number(run.get("forward_backward_samples_per_second"))
+        evidence = run.get("evidence")
+        evidence_link = f"[{evidence}]({evidence})" if evidence else "n/a"
+        lines.append(
+            f"| {run.get('name', 'n/a')} | {run.get('model', 'n/a')} "
+            f"| DP={run.get('dp', 'n/a')} TP={run.get('tp', 'n/a')} PP={run.get('pp', 'n/a')} "
+            f"| {run.get('status', 'n/a')} | {parameter_error} | {rate} | {evidence_link} |"
+        )
+    lines.extend(["", *[f"- {item}" for item in summary.get("limitations", [])], ""])
     return lines
 
 
