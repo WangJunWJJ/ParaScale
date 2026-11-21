@@ -74,7 +74,10 @@ The runnable example below supplies all of them.
 - Replicated DDP without TP/PP synchronizes gradients only on the final
   microbatch. Intermediate forward/backward passes use DDP's `no_sync` context.
   FSDP2 and pipeline schedules retain their own synchronization behavior.
-- Output tensors are returned only on the last PP stage. Optimizer steps,
+- Output tensors are opt-in via `forward_backward(..., return_outputs=True)` and
+  returned only on the last PP stage. Without PP, the default avoids retaining
+  and concatenating each microbatch's logits. GPipe still merges its outputs
+  internally, so this is not a bounded-memory pipeline schedule. Optimizer steps,
   dataloaders, schedulers and process-group teardown remain caller-owned.
 
 ### Token-Weighted Loss
@@ -115,6 +118,53 @@ still require launcher timeouts and teardown.
 This contract does not automatically partition pretrained models, synchronize
 tied weights across stages, implement vocabulary-sharded cross entropy or enable
 AMP. The checkpoint does not store loss configuration; restore it explicitly.
+
+### Llama Stages
+
+`parascale.parallel.llama.LlamaStage` adapts an explicitly loaded
+`transformers==4.51.3` `LlamaForCausalLM`. It reuses the original embedding,
+decoder layers, norm and head, preserving parameter names. It does not load
+weights, download assets, create optimizers or automatically choose a topology.
+
+```python
+from parascale.parallel.llama import LlamaStage
+
+replica, pipeline_stage, tensor_rank = config.coordinates(dist.get_rank())
+stage = LlamaStage(
+    loaded_model, pipeline_stage, config.pp_size, tp_size=config.tp_size,
+).to(device)
+del loaded_model
+trainer = DistributedTrainer(
+    stage, config, example_microbatch,
+    summed_loss=CausalLMLoss(vocab_size),
+    tensor_plan=stage.tensor_parallel_plan() or None,
+)
+```
+
+The source model's parameters must be materialized FP32. The source modules are
+shared with the stage, not cloned; release the source after partitioning and use
+an independent copy for reference comparisons. Each PP rank owns a contiguous
+decoder range; only the first owns embedding and only the last owns norm/head.
+Attention and MLP projections are TP-sharded; embedding, norms and head remain
+replicated within TP. Q heads, KV heads and projection widths must divide TP.
+
+The contract is packed causal token blocks starting at position zero, zero
+attention dropout, no KV cache, no padding/custom mask and no AMP. Both eager
+attention and SDPA use Hugging Face operators; SDPA retains native mask-free
+causal dispatch. The stage's `validate_inputs` hook checks embedding indices
+inside the trainer's coordinated batch preflight, separately from loss labels.
+
+Single-stage weight ties are preserved. Cross-stage tied embedding/head is
+rejected, so SmolLM2 is suitable for DP but not this PP path; its 9 Q / 3 KV heads
+also exclude TP2. TinyLlama has untied weights and divisible heads. Do not change
+ties or head counts to force an unsupported topology. Adapter construction and
+model loading precede trainer preflight and still require launcher-level failure
+handling. Checkpoints do not verify Llama/RoPE configuration identity: reconstruct
+the exact pinned configuration and loss before loading. This is not yet complete
+pretrained checkpoint/resume qualification.
+
+See the [full-model validation example](../examples/gpu/example_010_llama_parallel/README.md)
+for real local weights/data and independent HF numerical controls.
 
 ## Checkpoints
 
