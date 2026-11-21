@@ -84,7 +84,7 @@ def _validate_constructor(module, config, example, loss_fn, summed_loss, tensor_
 
 @dataclass
 class ParallelStepResult:
-    """DP-averaged loss and local output (only on the last pipeline stage)."""
+    """DP-averaged loss and opt-in output (only on the last pipeline stage)."""
 
     loss: float
     output: Any = None
@@ -237,12 +237,16 @@ class DistributedTrainer:
             raise ValueError("loss_fn must return a scalar mean loss")
         return loss / self.config.microbatches
 
-    def forward_backward(self, inputs: Any, targets: Any) -> ParallelStepResult:
+    def forward_backward(
+        self, inputs: Any, targets: Any, *, return_outputs: bool = False
+    ) -> ParallelStepResult:
         """Accumulate gradients for one local batch; caller zeroes and steps them.
 
         All ranks must call this with identical shapes within their TP/PP group.
         Last-stage targets must match the loss output contract. No optimizer or
         data-loader work is hidden inside this operation.
+        Outputs are opt-in: ordinary training does not retain/concatenate logits
+        in the non-pipeline path. GPipe still owns its internal output merge.
         """
         import torch
         import torch.distributed as dist
@@ -272,8 +276,10 @@ class DistributedTrainer:
                     loss = self._microbatch_loss(prediction, target)
                     loss.backward()
                 losses.append(loss.detach())
-                outputs.append(prediction.detach())
-            output = torch.cat(outputs)
+                if return_outputs:
+                    outputs.append(prediction.detach())
+                del prediction, loss
+            output = torch.cat(outputs) if return_outputs else None
         elif self.pp_rank == 0:
             self.schedule.step(inputs)
         elif self.pp_rank == self.config.pp_size - 1:
@@ -295,7 +301,7 @@ class DistributedTrainer:
             raise FloatingPointError("Nonfinite distributed loss")
         return ParallelStepResult(
             value.item(),
-            output.detach() if output is not None else None,
+            output.detach() if return_outputs and output is not None else None,
             self._normalization_count,
         )
 
@@ -321,6 +327,10 @@ class DistributedTrainer:
                 raise ValueError(
                     "input shape/dtype differs from the fixed stage example"
                 )
+            if self.pp_rank == 0:
+                validate_inputs = getattr(self.module, "validate_inputs", None)
+                if validate_inputs is not None:
+                    validate_inputs(inputs)
             if self.summed_loss is not None and self.pp_rank == self.config.pp_size - 1:
                 count = self.summed_loss.normalization_count(targets)
                 if (

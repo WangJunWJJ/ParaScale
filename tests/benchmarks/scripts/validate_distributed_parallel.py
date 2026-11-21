@@ -213,7 +213,9 @@ def main():
             dist.barrier()
             torch.cuda.synchronize()
             started = time.perf_counter()
-            result = trainer.forward_backward(local_inputs, local_targets)
+            result = trainer.forward_backward(
+                local_inputs, local_targets, return_outputs=True
+            )
             torch.cuda.synchronize()
             duration = time.perf_counter() - started
             errors["loss"] = max(

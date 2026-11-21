@@ -5,6 +5,7 @@
 
 """Local contract tests; real multi-rank coverage lives in the GPU validator."""
 
+import weakref
 from contextlib import contextmanager
 
 import pytest
@@ -78,10 +79,12 @@ def test_numerical_validator_does_not_hide_nonfinite_errors(torch, value):
 
 
 @pytest.mark.parametrize("dp,tp", [(1, 1), (2, 1), (2, 2)])
+@pytest.mark.parametrize("return_outputs", [False, True])
 def test_ddp_accumulation_syncs_only_final_forward_and_backward(
-    torch, monkeypatch, dp, tp
+    torch, monkeypatch, dp, tp, return_outputs
 ):
     forward_sync, backward_sync = [], []
+    predictions = []
 
     class Wrapped(torch.nn.Linear):
         syncing = True
@@ -95,8 +98,12 @@ def test_ddp_accumulation_syncs_only_final_forward_and_backward(
                 self.syncing = True
 
         def forward(self, inputs):
+            if predictions and not return_outputs:
+                assert predictions[-1]() is None
             forward_sync.append(self.syncing)
-            return super().forward(inputs)
+            prediction = super().forward(inputs)
+            predictions.append(weakref.ref(prediction))
+            return prediction
 
     model = Wrapped(2, 2)
     model.weight.register_hook(lambda grad: backward_sync.append(model.syncing))
@@ -107,6 +114,7 @@ def test_ddp_accumulation_syncs_only_final_forward_and_backward(
     trainer.pp_rank = 0
     trainer.schedule = None
     trainer.execution_module = model
+    trainer.module = model
     trainer.loss_fn = torch.nn.MSELoss()
     trainer.summed_loss = None
     trainer.input_dtype = torch.float32
@@ -122,7 +130,11 @@ def test_ddp_accumulation_syncs_only_final_forward_and_backward(
     trainer.mesh = Mesh()
     monkeypatch.setattr(torch.distributed, "all_reduce", lambda *args, **kwargs: None)
     inputs, targets = torch.randn(6, 2), torch.randn(6, 2)
-    trainer.forward_backward(inputs, targets)
+    result = trainer.forward_backward(inputs, targets, return_outputs=return_outputs)
+    assert (result.output is not None) == return_outputs
+    if return_outputs:
+        assert result.output.shape == targets.shape
+        assert not result.output.requires_grad
     expected = [False, False, True] if dp == 2 and tp == 1 else [True] * 3
     assert forward_sync == expected
     assert backward_sync == expected
