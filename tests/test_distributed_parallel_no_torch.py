@@ -80,3 +80,25 @@ def test_api_is_lazy_and_does_not_require_torch():
         [sys.executable, "-c", code], capture_output=True, text=True
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_pipeline_schedule_is_explicit_and_frozen():
+    from dataclasses import FrozenInstanceError, asdict
+
+    assert config_type()().pipeline_schedule == "gpipe"
+    config = config_type()(pp_size=2, pipeline_schedule="1f1b")
+    assert asdict(config)["pipeline_schedule"] == "1f1b"
+    with pytest.raises(FrozenInstanceError):
+        config.pipeline_schedule = "gpipe"
+
+
+@pytest.mark.parametrize("schedule", ["auto", "1F1B", "", None, True, 1])
+def test_invalid_pipeline_schedule_rejected(schedule):
+    with pytest.raises(ValueError, match="pipeline_schedule"):
+        config_type()(pp_size=2, pipeline_schedule=schedule)
+
+
+@pytest.mark.parametrize("options", [{}, {"pp_size": 2, "microbatches": 1}])
+def test_1f1b_requires_pipeline_and_sufficient_microbatches(options):
+    with pytest.raises(ValueError, match="1f1b"):
+        config_type()(pipeline_schedule="1f1b", **options)

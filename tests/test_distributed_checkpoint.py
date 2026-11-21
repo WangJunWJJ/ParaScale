@@ -125,6 +125,45 @@ def test_load_mixed_checkpoints_rejected_before_model_mutation(tmp_path, two_ran
         trainer.module.load_state_dict.assert_not_called()
 
 
+@pytest.mark.parametrize("schedule", ["gpipe", "1f1b"])
+def test_pipeline_checkpoint_binds_schedule_before_payload_reads(
+    tmp_path, two_ranks, monkeypatch, schedule
+):
+    trainers, optimizers = _rank_trainers()
+    for trainer in trainers:
+        trainer.config = DistributedParallelConfig(
+            pp_size=2, pipeline_schedule=schedule
+        )
+    assert two_ranks(
+        lambda rank: checkpoint.save_checkpoint(
+            trainers[rank], tmp_path, optimizers[rank], step=7
+        )
+    ) == [None, None]
+    metadata = json.loads((tmp_path / "manifest.json").read_text())
+    assert metadata["schema_version"] == 4
+    assert metadata["topology"]["pipeline_schedule"] == schedule
+    assert two_ranks(
+        lambda rank: checkpoint.load_checkpoint(
+            trainers[rank], tmp_path, optimizers[rank]
+        )
+    ) == [7, 7]
+    trainers[1].config = DistributedParallelConfig(
+        pp_size=2, pipeline_schedule="1f1b" if schedule == "gpipe" else "gpipe"
+    )
+    loader = Mock(side_effect=AssertionError("payload read before schedule validation"))
+    monkeypatch.setattr(torch, "load", loader)
+    outcomes = two_ranks(
+        lambda rank: checkpoint.load_checkpoint(
+            trainers[rank], tmp_path, optimizers[rank]
+        )
+    )
+    assert all(
+        isinstance(error, RuntimeError) and "topology/schema" in str(error)
+        for error in outcomes
+    )
+    loader.assert_not_called()
+
+
 @pytest.fixture
 def runtime(monkeypatch):
     trainer = SimpleNamespace(
@@ -173,7 +212,7 @@ def write_checkpoint(
     path = directory / "rank-00000.pt"
     torch.save(payload, path)
     metadata = dict(
-        schema_version=3,
+        schema_version=4,
         context=trainer.checkpoint_context,
         topology=asdict(trainer.config),
         step=7,
@@ -556,6 +595,9 @@ def test_committed_checkpoint_is_immutable(tmp_path, runtime, monkeypatch):
         lambda m: m.update(schema_version=True),
         lambda m: m.update(schema_version=1),
         lambda m: m.update(schema_version=2),
+        lambda m: m.update(schema_version=3),
+        lambda m: m["topology"].pop("pipeline_schedule"),
+        lambda m: m["topology"].update(pipeline_schedule=True),
         lambda m: m.update(extra=1),
         lambda m: m.pop("step"),
         lambda m: m.update(step=True),

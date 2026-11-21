@@ -122,7 +122,7 @@ def test_summed_microbatch_gradients_use_global_token_denominator():
     trainer = object.__new__(DistributedTrainer)
     trainer._precision = "fp32"
     trainer.device = torch.device("cpu")
-    trainer.config = DistributedParallelConfig(dp_size=2, microbatches=2)
+    trainer._config = DistributedParallelConfig(dp_size=2, microbatches=2)
     trainer.loss_fn = None
     trainer.summed_loss = objective
     trainer._loss_scale = 2.0 / count
@@ -140,7 +140,7 @@ def test_mean_microbatch_contract_remains_explicit():
     trainer = object.__new__(DistributedTrainer)
     trainer._precision = "fp32"
     trainer.device = torch.device("cpu")
-    trainer.config = DistributedParallelConfig(microbatches=2)
+    trainer._config = DistributedParallelConfig(microbatches=2)
     trainer.loss_fn = torch.nn.MSELoss()
     trainer.summed_loss = None
     assert trainer._microbatch_loss(torch.ones(2), torch.zeros(2)).item() == 0.5

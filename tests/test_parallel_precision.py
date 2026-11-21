@@ -21,7 +21,7 @@ def trainer_fixture(precision):
     trainer = object.__new__(DistributedTrainer)
     trainer._precision = precision
     trainer.device = torch.device("cpu")
-    trainer.config = DistributedParallelConfig(microbatches=2)
+    trainer._config = DistributedParallelConfig(microbatches=2)
     trainer.module = torch.nn.Linear(4, 4)
     trainer.execution_module = trainer.module
     trainer.loss_fn = torch.nn.MSELoss()
@@ -121,7 +121,7 @@ def test_pipeline_schedule_disables_ambient_backward_autocast(monkeypatch):
     trainer = trainer_fixture("bf16")
     from parascale.parallel import DistributedParallelConfig
 
-    trainer.config = DistributedParallelConfig(pp_size=2, microbatches=2)
+    trainer._config = DistributedParallelConfig(pp_size=2, microbatches=2)
     trainer.dp_rank = trainer.tp_rank = 0
     trainer.mesh = {"pp": SimpleNamespace(get_group=lambda: None)}
     seen = []
@@ -291,3 +291,41 @@ def test_pipeline_boundaries_are_checked_on_every_rank(monkeypatch, dp, tp, mism
         else:
             with pytest.raises(ValueError, match="pipeline boundary"):
                 validate_pipeline_contract(stage, config)
+
+
+def test_pipeline_schedule_agreement_precedes_mesh_creation(monkeypatch):
+    from unittest.mock import Mock
+
+    from parascale.parallel import DistributedParallelConfig, execution
+
+    monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+    monkeypatch.setattr(torch.distributed, "get_world_size", lambda: 2)
+    monkeypatch.setattr(torch.distributed, "get_rank", lambda: 0)
+    monkeypatch.setattr(execution, "_validate_constructor", lambda *args: None)
+    mesh = Mock(side_effect=AssertionError("mesh created before schedule agreement"))
+    monkeypatch.setattr(torch.distributed.device_mesh, "init_device_mesh", mesh)
+
+    def gather(records, record):
+        other = tuple("1f1b" if value == "gpipe" else value for value in record[1])
+        records[:] = [record, (None, other)]
+
+    monkeypatch.setattr(torch.distributed, "all_gather_object", gather)
+    with pytest.raises(ValueError, match="schedule"):
+        execution.DistributedTrainer(
+            torch.nn.Linear(2, 2),
+            DistributedParallelConfig(pp_size=2),
+            torch.zeros(1, 2),
+            torch.nn.MSELoss(),
+        )
+    mesh.assert_not_called()
+
+
+def test_execution_config_cannot_be_replaced_after_schedule_selection():
+    from parascale.parallel import DistributedParallelConfig
+    from parascale.parallel.execution import DistributedTrainer
+
+    trainer = object.__new__(DistributedTrainer)
+    trainer._config = DistributedParallelConfig(pp_size=2)
+    with pytest.raises(AttributeError):
+        trainer.config = DistributedParallelConfig(pp_size=2, pipeline_schedule="1f1b")
+    assert trainer.config.pipeline_schedule == "gpipe"

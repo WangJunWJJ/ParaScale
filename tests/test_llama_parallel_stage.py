@@ -211,7 +211,7 @@ def test_invalid_embedding_input_is_rejected_by_trainer_preflight():
     from parascale.parallel.llama import LlamaStage
 
     trainer = object.__new__(DistributedTrainer)
-    trainer.config = DistributedParallelConfig(microbatches=1)
+    trainer._config = DistributedParallelConfig(microbatches=1)
     trainer.device = torch.device("cpu")
     trainer.input_shape = (1, 3)
     trainer.input_dtype = torch.int64

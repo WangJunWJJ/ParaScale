@@ -128,12 +128,15 @@ def _validate_manifest(metadata: Any, trainer: Any) -> None:
     }:
         raise ValueError("Checkpoint manifest schema mismatch")
     topology = metadata["topology"]
+    expected = asdict(trainer.config)
     if (
         type(metadata["schema_version"]) is not int
-        or metadata["schema_version"] != 3
+        or metadata["schema_version"] != 4
         or not isinstance(topology, dict)
-        or topology != asdict(trainer.config)
-        or any(type(value) is not int for value in topology.values())
+        or topology != expected
+        or any(
+            type(topology[key]) is not type(value) for key, value in expected.items()
+        )
     ):
         raise ValueError("Checkpoint topology/schema does not match execution")
     if canonical_checkpoint_context(
@@ -292,7 +295,7 @@ def save_checkpoint(trainer: Any, directory: Any, optimizer: Any, *, step: int) 
     dist.all_gather_object(entries, entry)
     with _phase("manifest publication"):
         metadata = dict(
-            schema_version=3,
+            schema_version=4,
             topology=asdict(trainer.config),
             step=step,
             files=entries,

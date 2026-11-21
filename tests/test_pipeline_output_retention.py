@@ -14,13 +14,18 @@ import pytest
 torch = pytest.importorskip("torch")
 
 
-def schedule_fixture(monkeypatch, precision):
-    from torch.distributed.pipelining import PipelineStage, ScheduleGPipe
+def schedule_fixture(monkeypatch, precision, policy):
+    from torch.distributed.pipelining import PipelineStage, Schedule1F1B, ScheduleGPipe
 
     from parascale.parallel.pipeline_stage import (
-        OutputAwareGPipe,
         PrecisionPipelineStage,
+        pipeline_schedule_type,
     )
+
+    native = ScheduleGPipe if policy == "gpipe" else Schedule1F1B
+    schedule_type = pipeline_schedule_type(policy)
+    assert issubclass(schedule_type, native)
+    assert schedule_type._step_microbatches is native._step_microbatches
 
     stage = object.__new__(PrecisionPipelineStage)
     stage.submod = torch.nn.Linear(4, 4)
@@ -64,23 +69,27 @@ def schedule_fixture(monkeypatch, precision):
             stage.fwd_cache.pop(index)
         return self._merge_outputs(stage.output_chunks)
 
-    monkeypatch.setattr(ScheduleGPipe, "step", run)
-    schedule = object.__new__(OutputAwareGPipe)
+    monkeypatch.setattr(native, "step", run)
+    schedule = object.__new__(schedule_type)
     schedule._stage = stage
     schedule._output_merge_spec = None
     return schedule, references
 
 
 @pytest.mark.parametrize("precision", ["fp32", "bf16"])
-def test_output_policy_preserves_updates_and_releases_chunks(monkeypatch, precision):
-    from torch.distributed.pipelining import ScheduleGPipe
+@pytest.mark.parametrize("policy", ["gpipe", "1f1b"])
+def test_output_policy_preserves_updates_and_releases_chunks(
+    monkeypatch, precision, policy
+):
+    from torch.distributed.pipelining import Schedule1F1B, ScheduleGPipe
 
-    schedule, references = schedule_fixture(monkeypatch, precision)
+    native = ScheduleGPipe if policy == "gpipe" else Schedule1F1B
+    schedule, references = schedule_fixture(monkeypatch, precision, policy)
     stage = schedule._stage
     reference = copy.deepcopy(stage.submod)
     optimizer = torch.optim.AdamW(stage.submod.parameters(), lr=0.01, foreach=False)
     baseline = torch.optim.AdamW(reference.parameters(), lr=0.01, foreach=False)
-    merge = ScheduleGPipe._merge_outputs
+    merge = native._merge_outputs
     calls = []
 
     def checked_merge(self, chunks):
@@ -88,7 +97,7 @@ def test_output_policy_preserves_updates_and_releases_chunks(monkeypatch, precis
         calls.append(len(chunks))
         return merge(self, chunks)
 
-    monkeypatch.setattr(ScheduleGPipe, "_merge_outputs", checked_merge)
+    monkeypatch.setattr(native, "_merge_outputs", checked_merge)
     inputs, targets = torch.randn(4, 4), torch.randn(4, 4)
     for retain in (False, True, False, True):
         optimizer.zero_grad()
@@ -133,8 +142,9 @@ def test_output_policy_preserves_updates_and_releases_chunks(monkeypatch, precis
 
 
 @pytest.mark.parametrize("retain", [False, True])
-def test_error_resets_only_auxiliary_output_policy(monkeypatch, retain):
-    schedule, _ = schedule_fixture(monkeypatch, "fp32")
+@pytest.mark.parametrize("policy", ["gpipe", "1f1b"])
+def test_error_resets_only_auxiliary_output_policy(monkeypatch, retain, policy):
+    schedule, _ = schedule_fixture(monkeypatch, "fp32", policy)
     with pytest.raises(RuntimeError, match="injected pipeline"):
         schedule.step(
             torch.randn(4, 4),
@@ -157,7 +167,7 @@ def test_trainer_passes_output_policy_to_schedule(monkeypatch, stage, retain):
     trainer = object.__new__(DistributedTrainer)
     trainer._precision = "fp32"
     trainer.device = torch.device("cpu")
-    trainer.config = DistributedParallelConfig(pp_size=2)
+    trainer._config = DistributedParallelConfig(pp_size=2)
     trainer.dp_rank = trainer.tp_rank = 0
     trainer.pp_rank = stage
     trainer._normalization_count = None

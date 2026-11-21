@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
@@ -23,11 +23,22 @@ class DistributedParallelConfig:
     tp_size: int = 1
     pp_size: int = 1
     microbatches: int = 2
+    pipeline_schedule: str = "gpipe"
 
     def __post_init__(self) -> None:
-        for name, value in asdict(self).items():
+        for name in ("dp_size", "tp_size", "pp_size", "microbatches"):
+            value = getattr(self, name)
             if type(value) is not int or value < 1:
                 raise ValueError(f"{name} must be a positive integer")
+        if type(self.pipeline_schedule) is not str or self.pipeline_schedule not in (
+            "gpipe",
+            "1f1b",
+        ):
+            raise ValueError("pipeline_schedule must be gpipe or 1f1b")
+        if self.pipeline_schedule == "1f1b" and (
+            self.pp_size == 1 or self.microbatches < self.pp_size
+        ):
+            raise ValueError("1f1b requires PP and microbatches >= pp_size")
         if self.world_size > 4:
             raise ValueError(
                 "Execution is limited to four GPUs; full 3D is unvalidated"

@@ -7,7 +7,7 @@
 
 from typing import Any
 
-from torch.distributed.pipelining import PipelineStage, ScheduleGPipe
+from torch.distributed.pipelining import PipelineStage, Schedule1F1B, ScheduleGPipe
 
 from .precision import autocast_context
 
@@ -69,8 +69,8 @@ class PrecisionPipelineStage(PipelineStage):
         return output
 
 
-class OutputAwareGPipe(ScheduleGPipe):
-    """Preserve native scheduling while making merged outputs opt-in per step."""
+class _OutputPolicy:
+    """Make output ownership independent of the native scheduling algorithm."""
 
     def step(self, *args: Any, return_outputs: bool = False, **kwargs: Any) -> Any:
         self._stage.retain_outputs = return_outputs
@@ -84,3 +84,16 @@ class OutputAwareGPipe(ScheduleGPipe):
         if not self._stage.retain_outputs:
             return None
         return super()._merge_outputs(output_chunks)
+
+
+class OutputAwareGPipe(_OutputPolicy, ScheduleGPipe):
+    """Native all-forward/all-backward scheduling with opt-in outputs."""
+
+
+class OutputAware1F1B(_OutputPolicy, Schedule1F1B):
+    """Native alternating forward/backward scheduling with opt-in outputs."""
+
+
+def pipeline_schedule_type(name: str) -> type:
+    """Resolve the validated schedule without changing native microbatch ordering."""
+    return {"gpipe": OutputAwareGPipe, "1f1b": OutputAware1F1B}[name]

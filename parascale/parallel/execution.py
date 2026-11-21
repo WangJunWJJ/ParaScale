@@ -87,10 +87,13 @@ def _validate_constructor(
         if missing:
             raise ValueError(f"Unknown tensor_plan modules: {sorted(missing)}")
     if config.pp_size > 1 and summed_loss is not None:
-        from torch.distributed.pipelining import ScheduleGPipe
+        from .pipeline_stage import pipeline_schedule_type
 
-        if "scale_grads" not in inspect.signature(ScheduleGPipe).parameters:
-            raise RuntimeError("Summed loss requires explicit GPipe scale_grads=False")
+        schedule_type = pipeline_schedule_type(config.pipeline_schedule)
+        if "scale_grads" not in inspect.signature(schedule_type).parameters:
+            raise RuntimeError(
+                "Summed loss requires explicit schedule scale_grads=False"
+            )
 
 
 @dataclass
@@ -160,6 +163,7 @@ class DistributedTrainer:
                 config.tp_size,
                 config.pp_size,
                 config.microbatches,
+                config.pipeline_schedule,
                 summed_loss is not None,
                 context,
                 precision,
@@ -179,11 +183,11 @@ class DistributedTrainer:
             )
         if any(item[1] != records[0][1] for item in records):
             raise ValueError(
-                "Parallel constructor preflight failed: topology, microbatches, loss mode, checkpoint context and precision must agree"
+                "Parallel constructor preflight failed: topology, microbatches, schedule, loss mode, checkpoint context and precision must agree"
             )
         self._checkpoint_context = context
         self._precision = precision
-        self.config = config
+        self._config = config
         self.device = example_input.device
         self.rank = dist.get_rank()
         self.dp_rank, self.pp_rank, self.tp_rank = config.coordinates(self.rank)
@@ -238,11 +242,9 @@ class DistributedTrainer:
                 )
         self.schedule = None
         if config.pp_size > 1:
-            from torch.distributed.pipelining import ScheduleGPipe
-
             from .pipeline_stage import (
-                OutputAwareGPipe,
                 PrecisionPipelineStage,
+                pipeline_schedule_type,
                 validate_pipeline_contract,
             )
 
@@ -256,12 +258,18 @@ class DistributedTrainer:
                 precision=self.precision,
             )
             validate_pipeline_contract(stage, config)
+            schedule_type = pipeline_schedule_type(config.pipeline_schedule)
             kwargs = {}
-            if "scale_grads" in inspect.signature(ScheduleGPipe).parameters:
+            if "scale_grads" in inspect.signature(schedule_type).parameters:
                 kwargs["scale_grads"] = False
-            self.schedule = OutputAwareGPipe(
+            self.schedule = schedule_type(
                 stage, config.microbatches, loss_fn=self._microbatch_loss, **kwargs
             )
+
+    @property
+    def config(self) -> DistributedParallelConfig:
+        """Return the frozen topology and schedule used to construct this executor."""
+        return self._config
 
     @property
     def precision(self) -> str:
