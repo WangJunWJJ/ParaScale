@@ -5,8 +5,10 @@
 
 """CPU contracts for the source-independent pipeline measurement script."""
 
+import importlib
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -169,3 +171,92 @@ def test_final_state_rejects_wrong_dtype_and_nonfinite(invalid):
         optimizer.state[model.weight]["exp_avg"].fill_(float("inf"))
     with pytest.raises(ValueError, match="FP32|nonfinite"):
         final_state_fingerprints(model, optimizer)
+
+
+def script_arguments(name):
+    if name == "validate_pipeline_precision":
+        return ["--output", "out.json"]
+    if name == "validate_llama_parallel":
+        return ["--pp", "2", "--output", "out.json"]
+    result = arguments()
+    if name == "validate_llama_checkpoint":
+        result[result.index("--data-file")] = "--data"
+        result += ["--pp", "2", "--checkpoint-dir", "checkpoint"]
+    return result
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "benchmark_llama_pipeline",
+        "validate_llama_parallel",
+        "validate_llama_checkpoint",
+        "validate_pipeline_precision",
+    ],
+)
+@pytest.mark.parametrize("selection", [None, "gpipe", "1f1b"])
+def test_schedule_cli_defaults_and_passes_selection_to_config(
+    monkeypatch, name, selection
+):
+    module = importlib.import_module(f"tests.benchmarks.scripts.{name}")
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    monkeypatch.setattr(
+        torch.cuda, "set_device", lambda *a: pytest.fail("CUDA touched")
+    )
+    constructor = Mock(wraps=module.DistributedParallelConfig)
+    monkeypatch.setattr(module, "DistributedParallelConfig", constructor)
+    argv = script_arguments(name)
+    if selection is not None:
+        argv += ["--pipeline-schedule", selection]
+    parsed = module.parse_args(argv)
+    args = parsed[0] if isinstance(parsed, tuple) else parsed
+    assert args.pipeline_schedule == (selection or "gpipe")
+    assert constructor.call_args.kwargs["pipeline_schedule"] == args.pipeline_schedule
+    if isinstance(parsed, tuple):
+        assert parsed[1].pipeline_schedule == args.pipeline_schedule
+        if name == "validate_pipeline_precision":
+            assert (parsed[1].pp_size, parsed[1].microbatches) == (2, 2)
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "benchmark_llama_pipeline",
+        "validate_llama_parallel",
+        "validate_llama_checkpoint",
+        "validate_pipeline_precision",
+    ],
+)
+@pytest.mark.parametrize(
+    "extra",
+    [
+        ["--pipeline-schedule", "interleaved"],
+        ["--pipeline-schedule", "1f1b", "--pp", "1"],
+        ["--pipeline-schedule", "1f1b", "--microbatches", "1"],
+    ],
+)
+def test_schedule_cli_rejects_invalid_selection_before_cuda(monkeypatch, name, extra):
+    module = importlib.import_module(f"tests.benchmarks.scripts.{name}")
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    monkeypatch.setattr(
+        torch.cuda, "set_device", lambda *a: pytest.fail("CUDA touched")
+    )
+    with pytest.raises(SystemExit) as error:
+        module.parse_args(script_arguments(name) + extra)
+    assert error.value.code == 2
+
+
+@pytest.mark.parametrize("schedule", ["gpipe", "1f1b"])
+def test_boundary_validator_supports_dp2_with_either_schedule(schedule):
+    from tests.benchmarks.scripts.validate_pipeline_precision import parse_args
+
+    args, config = parse_args(
+        ["--dp", "2", "--pipeline-schedule", schedule, "--output", "out.json"]
+    )
+    assert args.pipeline_schedule == config.pipeline_schedule == schedule
+    assert (config.dp_size, config.pp_size, config.microbatches, config.world_size) == (
+        2,
+        2,
+        2,
+        4,
+    )

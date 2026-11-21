@@ -139,7 +139,7 @@ def load_resume_checkpoint(trainer, directory, optimizer, *, expected_step, step
     return restored
 
 
-def parse_args():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--data", type=Path, required=True)
@@ -147,6 +147,9 @@ def parse_args():
     parser.add_argument("--dp", type=int, default=1)
     parser.add_argument("--tp", type=int, default=1)
     parser.add_argument("--pp", type=int, default=1)
+    parser.add_argument(
+        "--pipeline-schedule", choices=("gpipe", "1f1b"), default="gpipe"
+    )
     parser.add_argument("--global-batch", type=int, default=8)
     parser.add_argument("--sequence-length", type=int, default=32)
     parser.add_argument("--microbatches", type=int, default=2)
@@ -157,8 +160,17 @@ def parse_args():
     mode.add_argument("--checkpoint-dir", type=Path)
     mode.add_argument("--resume-from", type=Path)
     parser.add_argument("--reference-result", type=Path)
-    args = parser.parse_args()
-    config = DistributedParallelConfig(args.dp, args.tp, args.pp, args.microbatches)
+    args = parser.parse_args(argv)
+    try:
+        config = DistributedParallelConfig(
+            args.dp,
+            args.tp,
+            args.pp,
+            args.microbatches,
+            pipeline_schedule=args.pipeline_schedule,
+        )
+    except ValueError as error:
+        parser.error(str(error))
     config.validate_world_size(int(os.environ["WORLD_SIZE"]))
     if args.global_batch <= 0 or args.global_batch % (args.dp * args.microbatches):
         parser.error("global-batch must be a positive multiple of DP * microbatches")
@@ -311,6 +323,7 @@ def main():
                 "parameter_dtype": "float32",
                 "context_sha256": context_hash,
                 "topology": asdict(config),
+                "pipeline_schedule": config.pipeline_schedule,
                 "steps": args.steps,
                 "start": start,
                 "save_step": args.save_step,

@@ -9,6 +9,7 @@ import argparse
 import copy
 import json
 import os
+from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 
@@ -19,12 +20,25 @@ from parascale.parallel import DistributedParallelConfig
 from parascale.parallel.execution import DistributedTrainer
 
 
-def main():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dp", type=int, choices=(1, 2), default=1)
+    parser.add_argument(
+        "--pipeline-schedule", choices=("gpipe", "1f1b"), default="gpipe"
+    )
     parser.add_argument("--output", type=Path, required=True)
-    args = parser.parse_args()
-    config = DistributedParallelConfig(dp_size=args.dp, pp_size=2, microbatches=2)
+    args = parser.parse_args(argv)
+    config = DistributedParallelConfig(
+        dp_size=args.dp,
+        pp_size=2,
+        microbatches=2,
+        pipeline_schedule=args.pipeline_schedule,
+    )
+    return args, config
+
+
+def main():
+    args, config = parse_args()
     rank = int(os.environ["LOCAL_RANK"])
     torch.cuda.set_device(rank)
     device = torch.device("cuda", rank)
@@ -38,6 +52,39 @@ def main():
         ).to(device)
         microbatch = 8 // args.dp // config.microbatches
         rejected = []
+        opposite = "1f1b" if config.pipeline_schedule == "gpipe" else "gpipe"
+        mixed_config = replace(
+            config,
+            pipeline_schedule=opposite
+            if dist.get_rank() == 0
+            else config.pipeline_schedule,
+        )
+        schedule_error = None
+        try:
+            DistributedTrainer(
+                copy.deepcopy(reference[pp]),
+                mixed_config,
+                torch.zeros(
+                    microbatch,
+                    8,
+                    device=device,
+                    dtype=torch.float32 if pp == 0 else torch.bfloat16,
+                ),
+                torch.nn.MSELoss(),
+                precision="bf16",
+            )
+        except ValueError as error:
+            schedule_error = str(error)
+        schedule_errors = [None] * config.world_size
+        dist.all_gather_object(schedule_errors, schedule_error)
+        assert all(
+            message is not None
+            and "constructor preflight" in message
+            and "schedule" in message
+            and "must agree" in message
+            for message in schedule_errors
+        ), f"Expected all-rank schedule preflight rejection: {schedule_errors}"
+        rejected.append("schedule")
         for invalid in ("dtype", "shape"):
             # Linear accepts either batch size, so both local inferences succeed.
             example = torch.zeros(
@@ -133,6 +180,7 @@ def main():
                 "status": "passed",
                 "dp": args.dp,
                 "pp": 2,
+                "pipeline_schedule": config.pipeline_schedule,
                 "precision": "bf16",
                 "records": records,
             }

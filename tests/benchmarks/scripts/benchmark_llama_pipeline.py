@@ -45,6 +45,9 @@ def parse_args(argv=None):
     parser.add_argument("--dp", type=int, choices=(1, 2), default=1)
     parser.add_argument("--tp", type=int, choices=(1, 2), default=1)
     parser.add_argument("--pp", type=int, choices=(2,), default=2)
+    parser.add_argument(
+        "--pipeline-schedule", choices=("gpipe", "1f1b"), default="gpipe"
+    )
     for name, default in (
         ("microbatches", 2),
         ("global-batch", 16),
@@ -60,7 +63,13 @@ def parse_args(argv=None):
     parser.add_argument("--cpu-affinity", type=int, nargs="+")
     args = parser.parse_args(argv)
     try:
-        DistributedParallelConfig(args.dp, args.tp, args.pp, args.microbatches)
+        DistributedParallelConfig(
+            args.dp,
+            args.tp,
+            args.pp,
+            args.microbatches,
+            pipeline_schedule=args.pipeline_schedule,
+        )
     except ValueError as error:
         parser.error(str(error))
     if (
@@ -131,7 +140,13 @@ def main():
         or transformers.__version__ != "4.51.3"
     ):
         raise RuntimeError("Benchmark requires torch==2.9.1 and transformers==4.51.3")
-    config = DistributedParallelConfig(args.dp, args.tp, args.pp, args.microbatches)
+    config = DistributedParallelConfig(
+        args.dp,
+        args.tp,
+        args.pp,
+        args.microbatches,
+        pipeline_schedule=args.pipeline_schedule,
+    )
     config.validate_world_size(int(os.environ["WORLD_SIZE"]))
     if int(os.environ["LOCAL_WORLD_SIZE"]) != config.world_size:
         raise ValueError("Benchmark requires a single CUDA node")
@@ -289,6 +304,7 @@ def main():
                 parameter_dtype="float32",
                 optimizer_state_dtype="float32",
                 schedule=type(trainer.schedule).__name__,
+                pipeline_schedule=config.pipeline_schedule,
                 expected_normalization_count=expected_count,
                 seconds=seconds,
                 measured_seconds=seconds[args.warmup :],

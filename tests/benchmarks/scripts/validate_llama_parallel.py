@@ -40,11 +40,14 @@ def full_tensor(value):
     return value.full_tensor() if hasattr(value, "full_tensor") else value
 
 
-def main():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dp", type=int, default=1)
     parser.add_argument("--tp", type=int, default=1)
     parser.add_argument("--pp", type=int, default=1)
+    parser.add_argument(
+        "--pipeline-schedule", choices=("gpipe", "1f1b"), default="gpipe"
+    )
     parser.add_argument("--microbatches", type=int, default=2)
     parser.add_argument("--model-path", type=Path)
     parser.add_argument("--data-file", type=Path)
@@ -78,8 +81,17 @@ def main():
         help="Record strict-gate failures without declaring validation passed",
     )
     parser.add_argument("--output", type=Path, required=True)
-    args = parser.parse_args()
-    config = DistributedParallelConfig(args.dp, args.tp, args.pp, args.microbatches)
+    args = parser.parse_args(argv)
+    try:
+        config = DistributedParallelConfig(
+            args.dp,
+            args.tp,
+            args.pp,
+            args.microbatches,
+            pipeline_schedule=args.pipeline_schedule,
+        )
+    except ValueError as error:
+        parser.error(str(error))
     if args.global_batch % (args.dp * args.microbatches):
         parser.error("global batch must be divisible by DP * microbatches")
     if args.steps < 2 or args.sequence_length < 2:
@@ -92,6 +104,11 @@ def main():
         parser.error("logits-atol must be finite and nonnegative")
     if not math.isfinite(args.adam_eps) or args.adam_eps <= 0:
         parser.error("adam-eps must be finite and positive")
+    return args, config
+
+
+def main():
+    args, config = parse_args()
     local_rank = int(os.environ["LOCAL_RANK"])
     torch.cuda.set_device(local_rank)
     device = torch.device("cuda", local_rank)
@@ -323,6 +340,7 @@ def main():
                 if args.observe_errors or args.native_forward_control
                 else "passed",
                 "numerical_gates": GATES,
+                "pipeline_schedule": config.pipeline_schedule,
                 "arguments": {
                     key: str(value) if isinstance(value, Path) else value
                     for key, value in vars(args).items()
