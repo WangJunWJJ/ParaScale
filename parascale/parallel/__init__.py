@@ -19,6 +19,7 @@ from .communication import (
     build_gradient_compressor,
 )
 from .distributed import DistributedParallelConfig
+from .loss import CausalLMLoss, SummedLoss
 from .pipeline import LocalPipelineExecutor, PipelineStage, build_pipeline_stages
 from .plan import ParallelDimension, ParallelPlan, build_parallel_plan
 from .sequence import SequenceParallelAdapter, SequenceParallelConfig, SequenceShardSpec
@@ -31,6 +32,8 @@ from .tensor import (
 
 __all__ = [
     "DistributedParallelConfig",
+    "CausalLMLoss",
+    "SummedLoss",
     "ParallelDimension",
     "ParallelPlan",
     "build_parallel_plan",
