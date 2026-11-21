@@ -23,10 +23,8 @@ def canonical_checkpoint_context(context: Any) -> str:
         raise ValueError(
             "Checkpoint context requires model, loss, data, tokenizer and precision"
         )
-    if context["precision"] != "fp32":
-        raise ValueError(
-            "Checkpoint context precision must match the FP32 stage contract"
-        )
+    if context["precision"] not in ("fp32", "bf16"):
+        raise ValueError("Checkpoint context precision must be fp32 or bf16")
     if any(
         not isinstance(context[key], (str, dict))
         or not context[key]

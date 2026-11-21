@@ -212,7 +212,10 @@ def test_training_context_mismatch_rejected_before_payload_read(
 ):
     trainer, optimizer, _ = runtime
     checkpoint.save_checkpoint(trainer, tmp_path, optimizer, step=7)
-    trainer.checkpoint_context[field] = "changed"
+    trainer.checkpoint_context[field] = "bf16" if field == "precision" else "changed"
+    from parascale.parallel.checkpoint_context import canonical_checkpoint_context
+
+    canonical_checkpoint_context(trainer.checkpoint_context)
     read = Mock(side_effect=AssertionError("payload read"))
     monkeypatch.setattr(torch, "load", read)
     with pytest.raises(RuntimeError, match="context"):

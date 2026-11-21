@@ -45,6 +45,8 @@ def test_untested_torch_version_rejected_before_mutation(torch, monkeypatch):
 
 def test_microbatch_mean_loss_normalization(torch):
     trainer = DistributedTrainer.__new__(DistributedTrainer)
+    trainer._precision = "fp32"
+    trainer.device = torch.device("cpu")
     trainer.config = DistributedParallelConfig(microbatches=4)
     trainer.loss_fn = torch.nn.MSELoss()
     trainer.summed_loss = None
@@ -53,6 +55,8 @@ def test_microbatch_mean_loss_normalization(torch):
 
 def test_non_scalar_loss_rejected(torch):
     trainer = DistributedTrainer.__new__(DistributedTrainer)
+    trainer._precision = "fp32"
+    trainer.device = torch.device("cpu")
     trainer.config = DistributedParallelConfig()
     trainer.loss_fn = torch.nn.MSELoss(reduction="none")
     trainer.summed_loss = None
@@ -63,6 +67,7 @@ def test_non_scalar_loss_rejected(torch):
 @pytest.mark.parametrize("batch", [0, 1, 3, 5])
 def test_uneven_batches_fail_before_collectives(torch, batch):
     trainer = DistributedTrainer.__new__(DistributedTrainer)
+    trainer._precision = "fp32"
     trainer.config = DistributedParallelConfig(microbatches=2)
     trainer.input_shape = (2, 3)
     trainer.device = torch.device("cpu")
@@ -81,6 +86,7 @@ def test_numerical_validator_does_not_hide_nonfinite_errors(torch, value):
 
 def _reporting_trainer(torch, *, dp_size=1):
     trainer = DistributedTrainer.__new__(DistributedTrainer)
+    trainer._precision = "fp32"
     trainer.config = DistributedParallelConfig(dp_size=dp_size, microbatches=1)
     trainer.device = torch.device("cpu")
     trainer.pp_rank = 0
@@ -169,6 +175,7 @@ def test_ddp_accumulation_syncs_only_final_forward_and_backward(
     model = Wrapped(2, 2)
     model.weight.register_hook(lambda grad: backward_sync.append(model.syncing))
     trainer = DistributedTrainer.__new__(DistributedTrainer)
+    trainer._precision = "fp32"
     trainer.config = DistributedParallelConfig(dp_size=dp, tp_size=tp, microbatches=3)
     trainer.input_shape = (2, 2)
     trainer.device = torch.device("cpu")
