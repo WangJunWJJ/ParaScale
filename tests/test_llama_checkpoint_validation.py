@@ -81,3 +81,20 @@ def test_complete_real_model_context_accepts_pinned_library_metadata():
     canonical_checkpoint_context(value)
     assert type(value["model"]["torch"]) is str
     assert value["model"]["config"]["id2label"] == {"0": "LABEL_0", "1": "LABEL_1"}
+
+
+def test_checkpoint_validator_declares_actual_execution_precision():
+    from transformers import LlamaConfig
+
+    from tests.benchmarks.scripts.validate_llama_checkpoint import build_context
+
+    value = build_context(
+        LlamaConfig(),
+        {"tokenizer.json": "test"},
+        b"text",
+        [1, 2],
+        global_batch=1,
+        sequence_length=2,
+        precision="bf16",
+    )
+    assert value["precision"] == "bf16"

@@ -3,7 +3,7 @@
 # @Author : Wang Jun
 # @Email: wj_xd@foxmail.com
 
-"""Matched FP32 Llama TP throughput and validation NLL; not production acceptance."""
+"""Matched Llama TP throughput and validation NLL; not production acceptance."""
 
 import argparse
 import hashlib
@@ -46,6 +46,28 @@ def summed_loss(prediction, labels):
     )
 
 
+def native_tensor_plan(layers, *, shared=True):
+    """Build the native HF reference plan independently of ParaScale adapters."""
+    plan = {}
+    for index in range(layers):
+        prefix = f"model.layers.{index}"
+        if shared:
+            plan[f"{prefix}.self_attn"] = PrepareModuleInput(
+                input_kwarg_layouts={"hidden_states": Replicate()},
+                desired_input_kwarg_layouts={"hidden_states": Replicate()},
+            )
+            plan[f"{prefix}.mlp"] = PrepareModuleInput(
+                input_layouts=Replicate(), desired_input_layouts=Replicate()
+            )
+        for projection in ("q_proj", "k_proj", "v_proj"):
+            plan[f"{prefix}.self_attn.{projection}"] = ColwiseParallel()
+        plan[f"{prefix}.self_attn.o_proj"] = RowwiseParallel()
+        for projection in ("gate_proj", "up_proj"):
+            plan[f"{prefix}.mlp.{projection}"] = ColwiseParallel()
+        plan[f"{prefix}.mlp.down_proj"] = RowwiseParallel()
+    return plan
+
+
 def parse_args(argv=None):
     """Reject invalid workload budgets before initializing CUDA or distributed state."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -61,6 +83,7 @@ def parse_args(argv=None):
     parser.add_argument("--sequence-length", type=int, default=256)
     parser.add_argument("--validation-tokens", type=int, default=8192)
     parser.add_argument("--tp", type=int, choices=(1, 2), default=1)
+    parser.add_argument("--precision", choices=("fp32", "bf16"), default="fp32")
     parser.add_argument(
         "--native-plan", choices=("shared", "layerwise"), default="shared"
     )
@@ -123,6 +146,10 @@ def main():
             raise ValueError("Requested CPU affinity is outside the allowed set")
         os.sched_setaffinity(0, requested)
     device = torch.device("cuda", local_rank)
+    if args.precision == "bf16" and not torch.cuda.is_bf16_supported(
+        including_emulation=False
+    ):
+        raise ValueError("BF16 benchmark requires native CUDA BF16 support")
     dist.init_process_group("nccl", device_id=device, timeout=timedelta(seconds=180))
     try:
         rank, world = dist.get_rank(), dist.get_world_size()
@@ -194,25 +221,13 @@ def main():
                 ),
                 summed_loss=CausalLMLoss(model.vocab_size),
                 tensor_plan=plan or None,
+                precision=args.precision,
             )
         elif world > 1:
             mesh = init_device_mesh("cuda", (world,), mesh_dim_names=("tp",))
-            for index in range(model.config.num_hidden_layers):
-                prefix = f"model.layers.{index}"
-                if args.native_plan == "shared":
-                    plan[f"{prefix}.self_attn"] = PrepareModuleInput(
-                        input_kwarg_layouts={"hidden_states": Replicate()},
-                        desired_input_kwarg_layouts={"hidden_states": Replicate()},
-                    )
-                    plan[f"{prefix}.mlp"] = PrepareModuleInput(
-                        input_layouts=Replicate(), desired_input_layouts=Replicate()
-                    )
-                for projection in ("q_proj", "k_proj", "v_proj"):
-                    plan[f"{prefix}.self_attn.{projection}"] = ColwiseParallel()
-                plan[f"{prefix}.self_attn.o_proj"] = RowwiseParallel()
-                for projection in ("gate_proj", "up_proj"):
-                    plan[f"{prefix}.mlp.{projection}"] = ColwiseParallel()
-                plan[f"{prefix}.mlp.down_proj"] = RowwiseParallel()
+            plan = native_tensor_plan(
+                model.config.num_hidden_layers, shared=args.native_plan == "shared"
+            )
             parallelize_module(model, mesh, plan)
         optimizer = torch.optim.AdamW(
             model.parameters(), lr=1e-5, eps=args.adam_eps, foreach=False
@@ -230,7 +245,13 @@ def main():
             losses = []
             with torch.no_grad():
                 for batch in validation.split(4):
-                    value = summed_loss(forward(batch), batch).item()
+                    with torch.autocast(
+                        "cuda",
+                        dtype=torch.bfloat16,
+                        enabled=args.precision == "bf16",
+                        cache_enabled=False,
+                    ):
+                        value = summed_loss(forward(batch), batch).item()
                     assert math.isfinite(value)
                     losses.append(value)
             model.train()
@@ -252,10 +273,16 @@ def main():
             else:
                 loss_sum = torch.zeros((), device=device)
                 for microbatch in batch.split(args.microbatch):
-                    prediction = forward(microbatch)
-                    loss = summed_loss(prediction, microbatch) * (
-                        1 / (args.global_batch * (args.sequence_length - 1))
-                    )
+                    with torch.autocast(
+                        "cuda",
+                        dtype=torch.bfloat16,
+                        enabled=args.precision == "bf16",
+                        cache_enabled=False,
+                    ):
+                        prediction = forward(microbatch)
+                        loss = summed_loss(prediction, microbatch) * (
+                            1 / (args.global_batch * (args.sequence_length - 1))
+                        )
                     loss.backward()
                     loss_sum += loss.detach()
                     del prediction, loss
@@ -274,6 +301,7 @@ def main():
         finite = torch.ones((), dtype=torch.int32, device=device)
         with torch.no_grad():
             for parameter in model.parameters():
+                assert parameter.dtype == torch.float32
                 local = (
                     parameter.to_local()
                     if hasattr(parameter, "to_local")
@@ -281,6 +309,7 @@ def main():
                 )
                 finite *= torch.isfinite(local).all().to(torch.int32)
                 for value in optimizer.state[parameter].values():
+                    assert value.dtype == torch.float32
                     local = value.to_local() if hasattr(value, "to_local") else value
                     finite *= torch.isfinite(local).all().to(device, torch.int32)
         dist.all_reduce(finite, op=dist.ReduceOp.MIN)
@@ -336,7 +365,9 @@ def main():
                 "torch_num_threads": torch.get_num_threads(),
                 "torch_num_interop_threads": torch.get_num_interop_threads(),
                 "world": world,
-                "precision": "fp32",
+                "precision": args.precision,
+                "parameter_dtype": "float32",
+                "optimizer_state_dtype": "float32",
                 "global_batch": args.global_batch,
                 "microbatch": args.microbatch,
                 "sequence_length": args.sequence_length,
@@ -351,7 +382,7 @@ def main():
                 ),
                 "peak_allocated_bytes": peak.item(),
                 "records": records,
-                "scope": "Short fixed-shape FP32 training with held-out WikiText validation; timings exclude preprocessing, H2D and evaluation; not convergence or production qualification",
+                "scope": "Short fixed-shape training with FP32 master parameters and held-out WikiText validation; timings exclude preprocessing, H2D and evaluation; not convergence or production qualification",
             }
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_text(

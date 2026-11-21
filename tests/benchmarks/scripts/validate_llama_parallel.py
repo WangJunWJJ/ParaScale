@@ -24,6 +24,7 @@ from transformers import AutoTokenizer, LlamaConfig, LlamaForCausalLM
 from parascale.parallel import CausalLMLoss, DistributedParallelConfig
 from parascale.parallel.execution import DistributedTrainer
 from parascale.parallel.llama import LlamaStage
+from tests.benchmarks.scripts.benchmark_llama_parallel import native_tensor_plan
 from tests.benchmarks.tools.parallel_numerics import GATES, compare_training_tensor
 
 
@@ -57,6 +58,10 @@ def main():
         help="Matched AdamW epsilon for both paths; changing it requires quality validation",
     )
     parser.add_argument("--attention", choices=["eager", "sdpa"], default="eager")
+    parser.add_argument("--precision", choices=("fp32", "bf16"), default="fp32")
+    parser.add_argument(
+        "--reference-layout", choices=("unsharded", "matched-tp"), default="unsharded"
+    )
     parser.add_argument("--native-forward-control", action="store_true")
     parser.add_argument(
         "--logits-atol",
@@ -152,7 +157,16 @@ def main():
             example,
             summed_loss=objective,
             tensor_plan=stage.tensor_parallel_plan() or None,
+            precision=args.precision,
         )
+        if args.reference_layout == "matched-tp" and args.tp > 1:
+            from torch.distributed.tensor.parallel import parallelize_module
+
+            parallelize_module(
+                reference,
+                trainer.mesh["tp"],
+                native_tensor_plan(model_config.num_hidden_layers),
+            )
         optimizer = torch.optim.AdamW(
             trainer.parameters(), lr=1e-5, eps=args.adam_eps, foreach=False
         )
@@ -168,7 +182,7 @@ def main():
 
         def compare(actual, expected, key, name=""):
             actual = full_tensor(actual).detach()
-            expected = expected.detach()
+            expected = full_tensor(expected).detach()
             statistics = compare_training_tensor(
                 actual, expected, key, logits_atol=args.logits_atol
             )
@@ -205,8 +219,14 @@ def main():
             for token_batch, target_batch in zip(
                 inputs.split(microbatch_size), targets.split(microbatch_size)
             ):
-                prediction = reference(token_batch, use_cache=False).logits
-                reference_loss = objective(prediction, target_batch) / count
+                with torch.autocast(
+                    "cuda",
+                    dtype=torch.bfloat16,
+                    enabled=args.precision == "bf16",
+                    cache_enabled=False,
+                ):
+                    prediction = reference(token_batch, use_cache=False).logits
+                    reference_loss = objective(prediction, target_batch) / count
                 reference_loss.backward()
                 expected_outputs.append(prediction.detach())
                 reference_losses.append(reference_loss.detach())
@@ -220,10 +240,14 @@ def main():
             assert result.normalization_count == count.item()
             compare(torch.tensor(result.loss, device=device), expected_loss, "loss")
             if result.output is not None:
+                assert result.output.dtype == (
+                    torch.bfloat16 if args.precision == "bf16" else torch.float32
+                )
                 compare(
                     result.output, expected_output.chunk(args.dp)[replica], "output"
                 )
             for name, parameter in trainer.named_parameters():
+                assert parameter.dtype == parameter.grad.dtype == torch.float32
                 compare(
                     parameter.grad, expected_parameters[name].grad, "gradient", name
                 )
@@ -232,7 +256,8 @@ def main():
                 for name, parameter in trainer.named_parameters()
             }
             reference_before = {
-                name: expected_parameters[name].detach().clone() for name in before
+                name: full_tensor(expected_parameters[name]).detach().clone()
+                for name in before
             }
             optimizer.step()
             reference_optimizer.step()
@@ -242,7 +267,7 @@ def main():
                 compare(canonical_parameter, expected, "parameter", name)
                 compare(
                     canonical_parameter - before[name],
-                    expected - reference_before[name],
+                    full_tensor(expected).detach() - reference_before[name],
                     "update",
                     name,
                 )
@@ -251,6 +276,7 @@ def main():
                     == reference_optimizer.state[expected].keys()
                 )
                 for key, value in optimizer.state[parameter].items():
+                    assert value.dtype == torch.float32
                     compare(value, reference_optimizer.state[expected][key], key, name)
             del before, reference_before
             losses.append(result.loss)
@@ -312,6 +338,9 @@ def main():
                     Path(__file__).parents[1] / "tools" / "parallel_numerics.py"
                 ),
                 "reference_microbatch_size": microbatch_size,
+                "reference_plan_sha256": file_digest(
+                    Path(__file__).with_name("benchmark_llama_parallel.py")
+                ),
                 "model_config": model_config.to_dict(),
                 "versions": {
                     "torch": torch.__version__,

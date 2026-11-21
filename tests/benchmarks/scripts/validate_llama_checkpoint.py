@@ -80,7 +80,9 @@ def model_configuration(config):
     return json.loads(config.to_json_string(use_diff=False))
 
 
-def build_context(config, assets, text, encoded, *, global_batch, sequence_length):
+def build_context(
+    config, assets, text, encoded, *, global_batch, sequence_length, precision="fp32"
+):
     """Declare effective third-party configuration, code and packed input identity."""
     return {
         "model": {
@@ -118,7 +120,7 @@ def build_context(config, assets, text, encoded, *, global_batch, sequence_lengt
         "tokenizer": {
             name: digest for name, digest in assets.items() if "token" in name
         },
-        "precision": "fp32",
+        "precision": precision,
     }
 
 
@@ -148,6 +150,7 @@ def parse_args():
     parser.add_argument("--global-batch", type=int, default=8)
     parser.add_argument("--sequence-length", type=int, default=32)
     parser.add_argument("--microbatches", type=int, default=2)
+    parser.add_argument("--precision", choices=("fp32", "bf16"), default="fp32")
     parser.add_argument("--steps", type=int, default=4)
     parser.add_argument("--save-step", type=int, default=2)
     mode = parser.add_mutually_exclusive_group(required=True)
@@ -215,6 +218,7 @@ def main():
             encoded,
             global_batch=args.global_batch,
             sequence_length=args.sequence_length,
+            precision=args.precision,
         )
         context_hash = hashlib.sha256(
             canonical_checkpoint_context(context).encode()
@@ -237,6 +241,7 @@ def main():
             summed_loss=CausalLMLoss(stage.vocab_size),
             tensor_plan=stage.tensor_parallel_plan() or None,
             checkpoint_context=context,
+            precision=args.precision,
         )
         optimizer = torch.optim.AdamW(trainer.parameters(), lr=1e-5, foreach=False)
         torch.manual_seed((1900 if args.resume_from else 9000) + rank)
@@ -250,6 +255,7 @@ def main():
                 or reference["start"] != 0
                 or reference["save_step"] != args.save_step
                 or reference["status"] != "reference"
+                or reference["precision"] != args.precision
                 or len(reference["records"]) != dist.get_world_size()
             ):
                 raise AssertionError("Reference run identity mismatch")
@@ -300,7 +306,9 @@ def main():
         if rank == 0:
             report = {
                 "status": "passed" if args.resume_from else "reference",
-                "scope": "Exact same-topology FP32 packed-token continuation, not convergence or fault recovery",
+                "scope": "Exact same-topology packed-token continuation with FP32 master parameters, not convergence or fault recovery",
+                "precision": trainer.precision,
+                "parameter_dtype": "float32",
                 "context_sha256": context_hash,
                 "topology": asdict(config),
                 "steps": args.steps,

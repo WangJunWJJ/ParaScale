@@ -67,6 +67,41 @@ def test_defaults_do_not_pin_machine_specific_devices_or_cpus():
     assert args.native_plan == "shared"
     assert args.adam_eps == 1e-8
     assert args.tp == 1
+    assert args.precision == "fp32"
+
+
+def test_bf16_benchmark_is_an_explicit_matched_policy():
+    from tests.benchmarks.scripts.benchmark_llama_parallel import parse_args
+
+    args = parse_args(
+        [
+            "--model",
+            "model",
+            "--data",
+            "data",
+            "--output",
+            "out.json",
+            "--driver",
+            "native",
+            "--precision",
+            "bf16",
+        ]
+    )
+    assert args.precision == "bf16"
+
+
+def test_native_reference_plan_contains_shared_input_and_projection_styles():
+    from tests.benchmarks.scripts.benchmark_llama_parallel import native_tensor_plan
+
+    plan = native_tensor_plan(2)
+    assert len(plan) == 18
+    for layer in range(2):
+        prefix = f"model.layers.{layer}"
+        assert type(plan[f"{prefix}.self_attn"]).__name__ == "PrepareModuleInput"
+        assert type(plan[f"{prefix}.mlp"]).__name__ == "PrepareModuleInput"
+        assert type(plan[f"{prefix}.self_attn.q_proj"]).__name__ == "ColwiseParallel"
+        assert type(plan[f"{prefix}.self_attn.o_proj"]).__name__ == "RowwiseParallel"
+    assert len(native_tensor_plan(2, shared=False)) == 14
 
 
 def test_summed_loss_counts_shifted_tokens_without_tp_multiplier():
