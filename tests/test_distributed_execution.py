@@ -30,8 +30,9 @@ def test_requires_caller_initialized_process_group(torch):
 
 def test_untested_torch_version_rejected_before_mutation(torch, monkeypatch):
     monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+    monkeypatch.setattr(torch.distributed, "get_world_size", lambda: 1)
     monkeypatch.setattr(torch, "__version__", "2.5.0a0+nv24.08")
-    with pytest.raises(RuntimeError, match="torch==2.9.1"):
+    with pytest.raises(ValueError, match="torch==2.9.1"):
         DistributedTrainer(
             torch.nn.Linear(2, 2),
             DistributedParallelConfig(),
@@ -44,6 +45,7 @@ def test_microbatch_mean_loss_normalization(torch):
     trainer = DistributedTrainer.__new__(DistributedTrainer)
     trainer.config = DistributedParallelConfig(microbatches=4)
     trainer.loss_fn = torch.nn.MSELoss()
+    trainer.summed_loss = None
     assert trainer._microbatch_loss(torch.ones(2, 3), torch.zeros(2, 3)).item() == 0.25
 
 
@@ -51,6 +53,7 @@ def test_non_scalar_loss_rejected(torch):
     trainer = DistributedTrainer.__new__(DistributedTrainer)
     trainer.config = DistributedParallelConfig()
     trainer.loss_fn = torch.nn.MSELoss(reduction="none")
+    trainer.summed_loss = None
     with pytest.raises(ValueError, match="scalar"):
         trainer._microbatch_loss(torch.ones(2, 3), torch.zeros(2, 3))
 
@@ -60,6 +63,7 @@ def test_uneven_batches_fail_before_collectives(torch, batch):
     trainer = DistributedTrainer.__new__(DistributedTrainer)
     trainer.config = DistributedParallelConfig(microbatches=2)
     trainer.input_shape = (2, 3)
+    trainer.device = torch.device("cpu")
     with pytest.raises(ValueError, match="batch size"):
         trainer.forward_backward(torch.zeros(batch, 3), torch.zeros(batch, 3))
 
@@ -104,6 +108,9 @@ def test_ddp_accumulation_syncs_only_final_forward_and_backward(
     trainer.schedule = None
     trainer.execution_module = model
     trainer.loss_fn = torch.nn.MSELoss()
+    trainer.summed_loss = None
+    trainer.input_dtype = torch.float32
+    trainer._normalization_count = None
 
     class Mesh:
         def __getitem__(self, key):
