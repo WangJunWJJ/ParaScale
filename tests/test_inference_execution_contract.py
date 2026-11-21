@@ -30,6 +30,19 @@ class IdentityTask:
         return {}
 
 
+@pytest.mark.parametrize("operation", ["prefill", "decode"])
+def test_split_inference_requires_loaded_supported_model(operation):
+    with pytest.raises(RuntimeError, match="load_model"):
+        getattr(InferenceEngine(), operation)([1])
+    engine = InferenceEngine().load_model(lambda batch: batch)
+    with pytest.raises(NotImplementedError, match=operation):
+        getattr(engine, operation)([1])
+    assert (
+        getattr(InferenceEngine().load_model(mock=True), operation)([1])["mode"]
+        == "mock"
+    )
+
+
 @pytest.mark.parametrize(
     "operation",
     ["generate", "embed", "infer", "prefill", "decode", "callable", "runner"],

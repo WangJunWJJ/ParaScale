@@ -8,6 +8,8 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+from copy import deepcopy
+from inspect import Parameter, signature
 from typing import Any
 
 from .base import TrainingBackend, _require_torch
@@ -19,6 +21,11 @@ from .devices import (
 
 class NativeTrainingBackend(TrainingBackend):
     name = "native"
+
+    def prepare_checkpoint(self) -> None:
+        consolidate = getattr(self.optimizer, "consolidate_state_dict", None)
+        if callable(consolidate):
+            consolidate(to=0)
 
     def setup_model(self, model: Any) -> Any:
         if model is None:
@@ -52,18 +59,37 @@ class NativeTrainingBackend(TrainingBackend):
             return optimizer
         from parascale.optimizers import create_native_zero_redundancy_optimizer
 
+        if callable(getattr(optimizer, "consolidate_state_dict", None)):
+            return optimizer
         params = [
-            param
+            {
+                key: list(value) if key == "params" else deepcopy(value)
+                for key, value in group.items()
+            }
             for group in optimizer.param_groups
-            for param in group.get("params", [])
         ]
         kwargs = dict(getattr(optimizer, "defaults", {}))
-        return create_native_zero_redundancy_optimizer(
+        constructor_params = signature(optimizer.__class__).parameters
+        if not any(
+            p.kind == Parameter.VAR_KEYWORD for p in constructor_params.values()
+        ):
+            # Internal defaults remain in parameter groups, not constructor kwargs.
+            kwargs = {
+                key: value for key, value in kwargs.items() if key in constructor_params
+            }
+        converted = create_native_zero_redundancy_optimizer(
             params,
             optimizer.__class__,
             stage=1,
             **kwargs,
         )
+        if optimizer.state:
+            converted.load_state_dict(deepcopy(optimizer.state_dict()))
+        if hasattr(optimizer, "_parascale_optimizer_metadata"):
+            converted._parascale_optimizer_metadata = deepcopy(
+                optimizer._parascale_optimizer_metadata
+            )
+        return converted
 
 
 class NativeDdpTrainingBackend(NativeTrainingBackend):
