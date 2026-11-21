@@ -156,7 +156,9 @@ def main():
             optimizer.zero_grad(set_to_none=True)
             local_inputs = inputs.chunk(args.dp)[replica]
             local_targets = targets.chunk(args.dp)[replica]
-            result = trainer.forward_backward(local_inputs, local_targets)
+            result = trainer.forward_backward(
+                local_inputs, local_targets, return_outputs=True
+            )
             assert result.normalization_count == count.item()
             compare(torch.tensor(result.loss, device=device), expected_loss, "loss")
             if result.output is not None:
