@@ -11,6 +11,7 @@ from .inference_config import InferenceQuantizationConfig
 
 _EXPORTS = {
     "inference": ["quantize_inference_model"],
+    "inference_artifact": ["prepare_quantized_inference_model"],
     "observers": ["MinMaxObserver", "MovingAverageObserver"],
     "fake_quantize": ["FakeQuantize", "FakeQuantizedLinear", "FakeQuantizedConv2d"],
     "quantized_layers": [

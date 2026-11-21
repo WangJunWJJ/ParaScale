@@ -65,6 +65,11 @@ def parser():
         "--mode", choices=("compare", "bf16", "int4", "int8"), default="compare"
     )
     result.add_argument("--model", type=Path, required=True)
+    result.add_argument(
+        "--reference-artifact",
+        type=Path,
+        help="Canonical INT8 PTQ/QAT checkpoint; compare dense BF16 vs fused same weights",
+    )
     result.add_argument("--data", type=Path, required=True)
     result.add_argument(
         "--data-description", required=True, help="Corpus origin and evaluation split"
@@ -112,7 +117,7 @@ def run_comparison(args):
         target = args.output.with_name(args.output.stem + f".{mode}.json")
         command = [sys.executable, str(Path(__file__).resolve()), "--mode", mode]
         for name, value in vars(args).items():
-            if name in ("mode", "output"):
+            if name in ("mode", "output") or value is None:
                 continue
             flag = "--" + name.replace("_", "-")
             if isinstance(value, bool):
@@ -126,7 +131,11 @@ def run_comparison(args):
         # A failed worker cannot be mistaken for success or an old result.
         subprocess.run(command, cwd=ROOT, check=True)
         results[mode] = json.loads(target.read_text(encoding="utf-8"))
-    summary = compare_results(results["bf16"], results[candidate_mode])
+    summary = compare_results(
+        results["bf16"],
+        results[candidate_mode],
+        max_ppl_increase=0.01 if args.reference_artifact else 0.05,
+    )
     write_json(args.output, {"summary": summary, "runs": results})
     print(json.dumps(summary, indent=2))
 
@@ -145,8 +154,9 @@ def measure(torch, function, args):
     for repeat in range(args.repeats):
         trial = []
         for _ in range(args.iterations):
-            begin, end = torch.cuda.Event(enable_timing=True), torch.cuda.Event(
-                enable_timing=True
+            begin, end = (
+                torch.cuda.Event(enable_timing=True),
+                torch.cuda.Event(enable_timing=True),
             )
             torch.cuda.synchronize()
             started = time.perf_counter()
@@ -236,6 +246,7 @@ def run_worker(args):
 
     from parascale.quantization import (
         InferenceQuantizationConfig,
+        prepare_quantized_inference_model,
         quantize_inference_model,
     )
 
@@ -270,32 +281,61 @@ def run_worker(args):
     )
     attention = torch.ones_like(prompt)
     started = time.perf_counter()
-    model = (
-        AutoModelForCausalLM.from_pretrained(
-            args.model,
-            local_files_only=True,
-            trust_remote_code=False,
-            torch_dtype=torch.bfloat16,
-            attn_implementation="sdpa",
+    artifact_contract = None
+    if args.reference_artifact:
+        from quantized_artifact_fixture import (
+            load_reference_artifact,
+            materialize_reference_weights,
         )
-        .eval()
-        .cuda()
-    )
+
+        artifact_hash = sha256(args.reference_artifact)
+        model, artifact_config = load_reference_artifact(
+            args.reference_artifact, args.model
+        )
+        if sha256(args.reference_artifact) != artifact_hash:
+            raise RuntimeError("Reference artifact changed during loading")
+        artifact_contract = {
+            "path": str(args.reference_artifact),
+            "sha256": artifact_hash,
+            "config": artifact_config,
+            "float_control": "dequantized_once_bf16",
+        }
+        model = model.eval().cuda().bfloat16()
+    else:
+        model = (
+            AutoModelForCausalLM.from_pretrained(
+                args.model,
+                local_files_only=True,
+                trust_remote_code=False,
+                torch_dtype=torch.bfloat16,
+                attn_implementation="sdpa",
+            )
+            .eval()
+            .cuda()
+        )
     model.requires_grad_(False)
     torch.cuda.synchronize()
     load_seconds = time.perf_counter() - started
     conversion, conversion_seconds = None, 0.0
     if args.mode in ("int4", "int8"):
         started = time.perf_counter()
-        model, conversion = quantize_inference_model(
-            model,
-            InferenceQuantizationConfig(
-                group_size=args.group_size,
-                exclude_modules=args.exclude_modules,
-                backend=args.backend,
-            ),
-            inplace=True,
-        )
+        if args.reference_artifact:
+            model, conversion = prepare_quantized_inference_model(model, inplace=True)
+        else:
+            model, conversion = quantize_inference_model(
+                model,
+                InferenceQuantizationConfig(
+                    group_size=args.group_size,
+                    exclude_modules=args.exclude_modules,
+                    backend=args.backend,
+                ),
+                inplace=True,
+            )
+        torch.cuda.synchronize()
+        conversion_seconds = time.perf_counter() - started
+    elif args.reference_artifact:
+        started = time.perf_counter()
+        model = materialize_reference_weights(model)
         torch.cuda.synchronize()
         conversion_seconds = time.perf_counter() - started
     # Profile the eager path outside timing to confirm packed-kernel dispatch.
@@ -411,12 +451,15 @@ def run_worker(args):
         ROOT / "parascale/quantization/inference_config.py",
         ROOT / "parascale/quantization/inference_gemlite.py",
     ]
+    source_files.extend(sorted((ROOT / "parascale/quantization").glob("*.py")))
+    source_files.append(Path(__file__).with_name("quantized_artifact_fixture.py"))
     result = {
         "mode": args.mode,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "contract": {
             "model_path": str(args.model),
             "model_sha256": model_hash,
+            "reference_artifact": artifact_contract,
             "data_path": str(args.data),
             "data_sha256": data_hash,
             "data_description": args.data_description,
@@ -505,6 +548,14 @@ def main():
     args.model = args.model.resolve()
     args.data = args.data.resolve()
     args.output = args.output.resolve()
+    if args.reference_artifact:
+        args.reference_artifact = args.reference_artifact.resolve()
+        if args.backend != "gemlite_int8":
+            raise ValueError("--reference-artifact requires --backend gemlite_int8")
+        if args.exclude_modules != ["lm_head"] or args.group_size != 128:
+            raise ValueError(
+                "Reference artifacts define their own layer coverage and scales"
+            )
     for key in ("batch_size", "new_tokens", "warmup", "iterations", "repeats"):
         if getattr(args, key) <= 0:
             raise ValueError(f"--{key.replace('_', '-')} must be positive")

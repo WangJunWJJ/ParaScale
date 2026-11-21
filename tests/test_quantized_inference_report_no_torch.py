@@ -152,3 +152,27 @@ def test_benchmark_exposes_selective_layer_quantization():
         ]
     )
     assert args.exclude_modules == ["lm_head", "self_attn"]
+
+
+@pytest.mark.parametrize("missing", ["hash", "codes", "requantized"])
+def test_artifact_comparison_requires_preserved_stored_quantization(missing):
+    baseline, candidate = result("bf16", 100, 10), result("int4", 75, 10)
+    candidate["mode"] = "int8"
+    candidate["conversion"].update(
+        execution="int8_weight_only_fused_bf16",
+        source_format="parascale.reference_quantization",
+        stored_codes_and_scales_preserved=True,
+        requantized=False,
+    )
+    for item in (baseline, candidate):
+        item["contract"]["reference_artifact"] = {"sha256": "artifact-hash"}
+    assert report.compare_results(baseline, candidate)["engineering_gate_passed"]
+    if missing == "hash":
+        for item in (baseline, candidate):
+            item["contract"]["reference_artifact"]["sha256"] = ""
+    elif missing == "codes":
+        candidate["conversion"]["stored_codes_and_scales_preserved"] = False
+    else:
+        candidate["conversion"]["requantized"] = True
+    with pytest.raises(ValueError, match="artifact"):
+        report.compare_results(baseline, candidate)

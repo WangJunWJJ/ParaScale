@@ -42,18 +42,21 @@ class GemliteInt8Linear(nn.Module):
         return self.kernel(inputs)
 
 
-def convert_int8(model, config, selected, skipped, *, inplace):
+def _load_gemlite():
     gem_version = version("gemlite")
     if (
         torch.__version__.split("+")[0] != "2.9.1"
-        or gem_version != "0.6.0.post2"
+        or gem_version != "0.5.1"
         or version("triton") != "3.5.1"
     ):
-        raise RuntimeError(
-            "INT8 requires torch 2.9.1, triton 3.5.1 and gemlite 0.6.0.post2"
-        )
+        raise RuntimeError("INT8 requires torch 2.9.1, triton 3.5.1 and gemlite 0.5.1")
     from gemlite.helper import A16W8_INT8
 
+    return A16W8_INT8, gem_version
+
+
+def convert_int8(model, config, selected, skipped, *, inplace):
+    processor, gem_version = _load_gemlite()
     source_bytes = sum(
         layer.weight.numel() * layer.weight.element_size()
         for layer in selected.values()
@@ -64,8 +67,8 @@ def convert_int8(model, config, selected, skipped, *, inplace):
     with torch.no_grad():
         for name in selected:
             source = modules[name]
-            kernel = A16W8_INT8(
-                device=str(source.weight.device), dtype=torch.bfloat16
+            kernel = processor(
+                device=str(source.weight.device), dtype=torch.bfloat16, fp32_scale=True
             ).from_linear(source)
             if kernel.W_q.dtype != torch.int8 or kernel.scales.dtype != torch.float32:
                 raise RuntimeError(
