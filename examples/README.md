@@ -35,6 +35,7 @@ ParaScale training runtime. They are real execution paths, not dry runs.
 | [006 Llama QAT](gpu/example_006_llama_qat/README.md) | `--tiny` or local pretrained Llama and separate text corpora | Genuine updates, observer freeze, conversion and reload |
 | [007 Llama distillation](gpu/example_007_llama_distillation/README.md) | `--tiny` or aligned pretrained teacher/student and separate text corpora | Frozen teacher, student updates, CE baseline and export |
 | [008 YOLO distillation](gpu/example_008_yolo_distillation/README.md) | Trusted local teacher/student, images/labels, optional evaluation YAML | Official detection loss, feature KD, checkpoint validation and real-data comparison |
+| [011 Saved PTQ/QAT inference](gpu/example_011_quantized_artifact_inference/README.md) | Matching local model, canonical INT8 artifact and independent text | Preserved codes/scales, matched BF16 control, actual kernels and throughput/quality gates |
 
 Set `PYTHON` to select the interpreter, `DEVICE` to choose CPU/CUDA, and
 `OUTPUT_DIR` to a fresh directory outside `examples/`. Relative paths resolve from
@@ -44,7 +45,9 @@ compression examples. No models or datasets are downloaded implicitly by the
 documented local-asset commands.
 
 `--tiny` is always opt-in: random-model smoke is not pretrained-quality evidence.
-PTQ/QAT use floating-point reference kernels, not optimized integer inference.
+Examples 005/006 use floating-point reference kernels. Experimental example 011
+separately evaluates fused CUDA inference of their saved INT8 artifacts; it uses
+`OUTPUT_FILE` and `CUDA_VISIBLE_DEVICES`, not `OUTPUT_DIR`/`DEVICE`.
 YOLO COCO128 verifies real-data execution but not unseen-data generalization.
 Use the [unified report](../tests/benchmarks/reports/BENCHMARK_REPORT.md) for the
 exact executed configurations and limitations.
