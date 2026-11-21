@@ -48,3 +48,12 @@ PTQ/QAT use floating-point reference kernels, not optimized integer inference.
 YOLO COCO128 verifies real-data execution but not unseen-data generalization.
 Use the [unified report](../tests/benchmarks/reports/BENCHMARK_REPORT.md) for the
 exact executed configurations and limitations.
+
+## Explicit Distributed Parallelism
+
+[009 Distributed parallel training](gpu/example_009_distributed_parallel/README.md)
+exercises the experimental Python stage API for DP, TP, PP and four-GPU
+two-dimensional combinations. Residual-MLP and Llama decoder fixtures test
+numerical parity and checkpoints using synthetic inputs. This does not enable
+TP/PP in the ordinary workload CLI or certify full eight-GPU 3D parallelism.
+See [the API boundary](../docs/distributed_parallel.md).

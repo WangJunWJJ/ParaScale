@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict
 
+from parascale.parallel.capabilities import validate_legacy_parallelism
+
 from .ascend_native import AscendNativeTrainingBackend
 from .base import TrainingBackend
 from .deepspeed import DeepSpeedTrainingBackend
@@ -27,6 +29,7 @@ class TrainingBackendRegistry:
     def create(self, name: str, **kwargs: Any) -> TrainingBackend:
         if name not in self.factories:
             raise ValueError(f"unknown training backend: {name}")
+        validate_legacy_parallelism(kwargs.get("config"))
         return self.factories[name](**kwargs)
 
 
@@ -48,6 +51,7 @@ def create_runtime_training_backend(
     config: Any = None,
     local_rank: int = 0,
 ) -> TrainingBackend:
+    validate_legacy_parallelism(config)
     backend_name = (
         getattr(config, "training_backend", "native")
         if config is not None

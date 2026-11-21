@@ -82,6 +82,9 @@ class TrainingBackend:
     def no_sync(self):
         return nullcontext()
 
+    def prepare_checkpoint(self) -> None:
+        """Prepare backend state collectively before rank-local serialization."""
+
     def state_dict(self) -> Dict[str, Any]:
         model = self._unwrap_model(self.model)
         adapter_only = bool(getattr(self.config, "adapter_only_checkpoint", False))

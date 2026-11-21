@@ -54,6 +54,13 @@ class CheckpointController:
             backend_name == "fsdp" and state_dict_type == "full"
         )
 
+        def prepare_backend():
+            prepare = getattr(self.engine.training_backend, "prepare_checkpoint", None)
+            if callable(prepare) and hasattr(checkpoint_manager, "payload_path"):
+                prepare()
+
+        self._collective_call(prepare_backend)
+
         def save_backend():
             if rank != 0 and not shard_mode and not all_rank_backend_save:
                 return [], {}, False

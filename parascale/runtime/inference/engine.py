@@ -119,22 +119,24 @@ class InferenceEngine:
         raise RuntimeError("Loaded model does not provide embed(requests).")
 
     def prefill(self, batch: Any) -> Dict[str, Any]:
-        if self.mock_mode or self.model is None:
+        if self.mock_mode:
             return {"batch": batch, "state": "prefilled", "mode": "mock"}
+        self._require_model("prefill")
         prefill = getattr(self.model, "prefill", None)
         if callable(prefill):
             with inference_execution(self.model):
                 return {"batch": batch, "state": prefill(batch), "mode": "model"}
-        return {"batch": batch, "state": "prefilled", "mode": "fallback"}
+        raise NotImplementedError("Loaded model does not implement prefill(batch)")
 
     def decode(self, batch: Any) -> Dict[str, Any]:
-        if self.mock_mode or self.model is None:
+        if self.mock_mode:
             return {"batch": batch, "state": "decoded", "mode": "mock"}
+        self._require_model("decode")
         decode = getattr(self.model, "decode", None)
         if callable(decode):
             with inference_execution(self.model):
                 return {"batch": batch, "state": decode(batch), "mode": "model"}
-        return {"batch": batch, "state": "decoded", "mode": "fallback"}
+        raise NotImplementedError("Loaded model does not implement decode(batch)")
 
     def record_request(self, latency_ms: float = 0.0) -> InferenceState:
         self.state.requests += 1

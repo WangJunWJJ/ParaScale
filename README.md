@@ -435,6 +435,7 @@ CI 覆盖 Python 3.10、3.11、3.12 的源码测试，并在独立 Python 3.11 �
 | [docs/user_manual.md](docs/user_manual.md) | 用户手册：安装、配置、训练、benchmark、checkpoint 和 FAQ |
 | [docs/quantization.md](docs/quantization.md) | PTQ/QAT、整数权重导出加载与 Llama 验证 |
 | [docs/distillation.md](docs/distillation.md) | 在线模型蒸馏、教师加载、学生检查点与 Llama 验证 |
+| [docs/distributed_parallel.md](docs/distributed_parallel.md) | 显式 DP/TP/PP Python API、四卡二维组合及验收边界；普通 workload CLI 不支持 TP/PP |
 | [docs/software_design_documentation.md](docs/software_design_documentation.md) | 产品目标、总体架构、模块边界、路线图 |
 | [docs/software_requirements_specification.md](docs/software_requirements_specification.md) | 功能需求、能力等级、验收标准 |
 | [docs/remote_server_test_guide.md](docs/remote_server_test_guide.md) | 远程 GPU/NPU 容器测试指南 |
