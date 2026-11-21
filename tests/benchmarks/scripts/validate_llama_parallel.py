@@ -64,6 +64,9 @@ def main():
     )
     parser.add_argument("--native-forward-control", action="store_true")
     parser.add_argument(
+        "--output-policy", choices=("retain", "discard", "alternate"), default="retain"
+    )
+    parser.add_argument(
         "--logits-atol",
         type=float,
         default=3e-6,
@@ -232,10 +235,16 @@ def main():
                 reference_losses.append(reference_loss.detach())
             expected_output = torch.cat(expected_outputs)
             expected_loss = torch.stack(reference_losses).sum()
+            retain_outputs = args.output_policy == "retain" or (
+                args.output_policy == "alternate" and step % 2 == 1
+            )
             result = trainer.forward_backward(
                 inputs.chunk(args.dp)[replica],
                 targets.chunk(args.dp)[replica],
-                return_outputs=True,
+                return_outputs=retain_outputs,
+            )
+            assert (result.output is not None) == (
+                retain_outputs and stage_index == args.pp - 1
             )
             assert result.normalization_count == count.item()
             compare(torch.tensor(result.loss, device=device), expected_loss, "loss")
