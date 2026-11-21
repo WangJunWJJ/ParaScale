@@ -2,15 +2,20 @@
 
 ## Experimental INT8 path
 
-**Not production-qualified; do not merge or deploy the current artifact-fusion
-increment until its GPU numerical failures are resolved.** On A6000 with
-Torch 2.9.1 / Triton 3.5.1 / GemLite 0.5.1, the stored PTQ/QAT INT8 matrix
-tests fail for `K=576, N=1536, M=32`, with and without bias. Relative L2 error
-is approximately 0.329-0.331 against the reference result (limit: 0.01).
-The current dimension admission check does not protect against this kernel
-tail-handling issue. Other passing shapes and successful dependency resolution
-do not establish general correctness. No end-to-end artifact performance
-qualification is available for this tuple.
+**Experimental: layer correctness is not production or model-quality
+qualification.** GemLite 0.5.1's autotuner can choose tiles that do not divide K/N,
+although its weight loads are unmasked. ParaScale routes vulnerable shapes and
+shapes with no legal GEMV tuning candidates through a controlled launch of the
+same upstream GEMM kernel. This uses divisible K/N tiles, FP32 accumulation and
+no split-K atomics, without padding or reconstructing weights. Proven aligned
+shapes retain the original fast path.
+
+The A6000 CUDA matrix covers PTQ/QAT with and without bias, the previous
+`K=576, N=1536, M=32` regression, small output dimensions, compiled M transitions,
+CUDA graph capture and cold/warm compilation caches. The relative L2 limit
+remains 0.01. Bundled/external INT8 kernel-cache entries are checked before
+preparation; do not mutate backend configuration afterward. These checks do not
+establish end-to-end model quality, throughput or long-running service stability.
 
 The experimental `prepare_quantized_inference_model` API consumes converted or
 reloaded canonical PTQ/QAT INT8 layers, preserving their stored integer codes
@@ -20,6 +25,12 @@ dequantizes those same weights once before timing. Keep this path experimental
 until the numerical regression matrix and matched model quality/performance
 gates pass. The fresh-floating-point INT8 path uses the same kernel backend
 and must also be requalified.
+
+[Example 011](../examples/gpu/example_011_quantized_artifact_inference/README.md)
+provides the saved-artifact comparison. The bounded SmolLM2-135M PTQ/QAT
+validation passes the matched BF16 quality gate but fails the 1.2x generation
+speedup gate. Do not enable INT8 on a workload solely because its stored weights
+are smaller. This result is not a validation of larger models or a serving SLA.
 
 The opt-in `InferenceQuantizationConfig(backend="gemlite_int8")` uses channelwise
 INT8 weights and BF16 activations, with GemLite 0.5.1 / Triton 3.5.1 /
