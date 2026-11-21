@@ -18,6 +18,7 @@ from .communication import (
     TopKCompressor,
     build_gradient_compressor,
 )
+from .distributed import DistributedParallelConfig
 from .pipeline import LocalPipelineExecutor, PipelineStage, build_pipeline_stages
 from .plan import ParallelDimension, ParallelPlan, build_parallel_plan
 from .sequence import SequenceParallelAdapter, SequenceParallelConfig, SequenceShardSpec
@@ -29,6 +30,7 @@ from .tensor import (
 )
 
 __all__ = [
+    "DistributedParallelConfig",
     "ParallelDimension",
     "ParallelPlan",
     "build_parallel_plan",

@@ -18,6 +18,7 @@ from parascale.core import (
     DeviceBackend,
     MockCollectiveBackend,
 )
+from parascale.parallel.capabilities import validate_legacy_parallelism
 from parascale.runtime.backends import TrainingBackend, create_runtime_training_backend
 from parascale.strategy import StrategyPlan, build_strategy_plan
 
@@ -81,6 +82,7 @@ class TrainEngine:
             self.data_resume = DataResumeController(self)
 
     def plan(self) -> StrategyPlan:
+        validate_legacy_parallelism(self.config, self.strategy_plan)
         if self.strategy_plan is None:
             self.strategy_plan = build_strategy_plan(
                 self.model_profile, self.hardware_profile, self.config
@@ -118,6 +120,7 @@ class TrainEngine:
         checkpoint_manager: Any = None,
         checkpoint_interval: Optional[int] = None,
     ) -> TrainState:
+        validate_legacy_parallelism(self.config, self.strategy_plan)
         if dataloader is None:
             raise ValueError("TrainEngine.fit requires a dataloader.")
         if step_fn is None and (model is None or optimizer is None or loss_fn is None):
