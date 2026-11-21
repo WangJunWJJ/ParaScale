@@ -8,6 +8,8 @@
 import re
 from pathlib import Path
 
+import yaml
+
 try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - exercised by Python 3.10 CI
@@ -51,22 +53,23 @@ def test_pyproject_defines_build_and_console_entrypoint():
     assert data["project"]["requires-python"] == ">=3.10"
     assert data["project"]["license"] == "MIT"
     assert data["project"]["license-files"] == ["LICENSE"]
-    assert 'tomli>=2.0; python_version < "3.11"' in data["project"][
-        "optional-dependencies"
-    ]["dev"]
+    assert (
+        'tomli>=2.0; python_version < "3.11"'
+        in data["project"]["optional-dependencies"]["dev"]
+    )
     assert "pillow>=10.0.0" in data["project"]["optional-dependencies"]["dev"]
 
 
 def test_ascend_extra_is_vendor_managed_outside_public_pypi_matrix():
     data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
-        encoding="utf-8"
-    )
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 
-    assert data["project"]["optional-dependencies"]["ascend"] == [
-        "torch-npu>=2.4.0"
-    ]
-    assert "extra: [gpu, deepspeed, vlm]" in workflow
+    assert data["project"]["optional-dependencies"]["ascend"] == ["torch-npu>=2.4.0"]
+    extras = yaml.safe_load(workflow)["jobs"]["extras-resolution"]["strategy"][
+        "matrix"
+    ]["extra"]
+    assert {"gpu", "deepspeed", "vlm", "parallel"} <= set(extras)
+    assert "ascend" not in extras
     assert "torch-npu wheels are vendor-managed" in workflow
 
 
@@ -92,10 +95,7 @@ def test_benchmark_report_has_one_review_entrypoint():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
     assert not (ROOT / "tests" / "UNIFIED_TEST_BENCHMARK_REPORT.md").exists()
-    assert (
-        "tests/benchmarks/reports/BENCHMARK_REPORT.md"
-        in readme
-    )
+    assert "tests/benchmarks/reports/BENCHMARK_REPORT.md" in readme
     assert "tests/UNIFIED_TEST_BENCHMARK_REPORT.md" not in readme
 
 
@@ -109,9 +109,9 @@ def test_trial_release_changelog_declares_version_and_limitations():
 
 
 def test_clean_install_verifier_uses_only_public_entrypoints():
-    source = (
-        ROOT / "tests" / "packaging" / "verify_clean_install.py"
-    ).read_text(encoding="utf-8")
+    source = (ROOT / "tests" / "packaging" / "verify_clean_install.py").read_text(
+        encoding="utf-8"
+    )
 
     assert "from parascale" not in source
     assert "python -m parascale.cli" not in source
@@ -131,9 +131,7 @@ def test_clean_install_verifier_uses_only_public_entrypoints():
 
 
 def test_ci_covers_supported_python_and_clean_install():
-    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(
-        encoding="utf-8"
-    )
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 
     for version in ("3.10", "3.11", "3.12"):
         assert version in workflow
