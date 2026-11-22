@@ -216,24 +216,36 @@ def test_packing_transfers_exact_codes_and_scales_without_source_aliases(mode, b
             kernel.register_buffer("zeros", torch.empty(0, dtype=torch.int32))
             kernel.register_buffer("bias", bias)
             kernel.W_group_mode, kernel.channel_scale_mode = 2, 0
+            kernel.get_meta_args = lambda: [
+                0,
+                8,
+                kernel.in_features,
+                255,
+                1,
+                2,
+                2,
+                0,
+                0,
+                0,
+                2,
+                1,
+            ]
             return kernel
 
     packed = _api()._pack_reference_layer(layer, Processor)
     assert (
-        packed.kernel.W_q.untyped_storage().data_ptr()
+        packed.W_q.untyped_storage().data_ptr()
         != layer.packed_weight.untyped_storage().data_ptr()
     )
     assert (
-        packed.kernel.scales.untyped_storage().data_ptr()
+        packed.scales.untyped_storage().data_ptr()
         != layer.weight_scale.untyped_storage().data_ptr()
     )
     if bias:
-        torch.testing.assert_close(
-            packed.kernel.bias, layer.bias.bfloat16(), rtol=0, atol=0
-        )
-        assert packed.kernel.bias.data_ptr() != layer.bias.data_ptr()
-    packed.kernel.W_q.zero_()
-    packed.kernel.scales.zero_()
+        torch.testing.assert_close(packed.bias, layer.bias.bfloat16(), rtol=0, atol=0)
+        assert packed.bias.data_ptr() != layer.bias.data_ptr()
+    packed.W_q.zero_()
+    packed.scales.zero_()
     torch.testing.assert_close(layer.packed_weight, expected_codes, rtol=0, atol=0)
     torch.testing.assert_close(layer.weight_scale, expected_scales, rtol=0, atol=0)
 

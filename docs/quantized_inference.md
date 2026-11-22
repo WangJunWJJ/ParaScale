@@ -61,6 +61,15 @@ registered, but standalone GemLite checkpoint loading is not a supported
 deployment artifact contract. Keep canonical source artifacts and reconstruct
 the runtime representation instead.
 
+The INT8 adapter owns its packed tensors as registered buffers and calls the
+pinned functional operator directly. Each invocation reads the current buffers;
+shape, layout, dtype and device checks reject unsupported replacements before
+dispatch. Compilation guards remain enabled. Runtime `state_dict` copies are
+supported only between adapters with the same layout: the former `kernel.*`
+keys are not compatible with the flat buffer layout. Canonical PTQ/QAT artifact
+formats are unchanged. This dispatch refactor does not by itself establish an
+end-to-end throughput improvement.
+
 CI resolves both inference extras with `--dry-run --ignore-installed`.
 Resolver success and `pip check` do not establish CUDA numerical correctness
 or speed. Measurements from a different GemLite release do not qualify this
