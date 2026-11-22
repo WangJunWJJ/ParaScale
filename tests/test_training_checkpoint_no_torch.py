@@ -5,6 +5,8 @@
 
 import pytest
 
+from parascale.strategy import StrategyPlan
+
 
 def test_replay_resume_expands_only_component_training_window():
     from parascale.checkpoint import CheckpointManifest
@@ -85,7 +87,8 @@ def test_train_engine_initialize_preserves_injected_collective_rank(monkeypatch)
 
     monkeypatch.delenv("RANK", raising=False)
     collective = MockCollectiveBackend(world_size=2, rank=1)
-    plan = type("Plan", (), {"dp_size": 2, "tp_size": 1, "pp_size": 1})()
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    plan = StrategyPlan(dp_size=2)
     engine = TrainEngine(
         config=object(),
         collective=collective,
@@ -103,8 +106,9 @@ def test_train_engine_initialize_uses_launcher_rank(monkeypatch):
     from parascale.runtime.training import TrainEngine
 
     monkeypatch.setenv("RANK", "3")
+    monkeypatch.setenv("WORLD_SIZE", "4")
     collective = MockCollectiveBackend(world_size=4, rank=1)
-    plan = type("Plan", (), {"dp_size": 4, "tp_size": 1, "pp_size": 1})()
+    plan = StrategyPlan(dp_size=4)
     engine = TrainEngine(
         config=object(),
         collective=collective,
@@ -122,7 +126,8 @@ def test_train_engine_initialize_rejects_invalid_launcher_rank(monkeypatch):
     from parascale.runtime.training import TrainEngine
 
     monkeypatch.setenv("RANK", "not-an-integer")
-    plan = type("Plan", (), {"dp_size": 2, "tp_size": 1, "pp_size": 1})()
+    monkeypatch.setenv("WORLD_SIZE", "2")
+    plan = StrategyPlan(dp_size=2)
     engine = TrainEngine(
         config=object(),
         collective=MockCollectiveBackend(world_size=2, rank=1),

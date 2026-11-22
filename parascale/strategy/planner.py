@@ -29,13 +29,26 @@ def build_strategy_plan(
     model_profile: Any,
     hardware_profile: Any,
     config: Any,
+    *,
+    world_size: int | None = None,
 ) -> StrategyPlan:
     validate_legacy_parallelism(config)
     topology = _extract_topology(hardware_profile)
-    world_size = max(1, int(get_value(hardware_profile, "num_gpus", 1)))
+    declared_world = get_value(hardware_profile, "world_size", None)
+    for value in (world_size, declared_world):
+        if value is not None and (type(value) is not int or value < 1):
+            raise ValueError("world_size must be a positive integer")
+    if world_size is not None and declared_world not in (None, world_size):
+        raise ValueError("Execution world_size conflicts with hardware_profile.world_size")
+    world_size = world_size if world_size is not None else declared_world
+    if topology is not None and topology.world_size > 0:
+        if world_size is not None and world_size != topology.world_size:
+            raise ValueError("Execution world_size conflicts with the declared topology")
+        world_size = topology.world_size
+    if world_size is None:
+        world_size = max(1, int(get_value(hardware_profile, "num_gpus", 1)))
     topology_metadata = {}
     if topology is not None and topology.world_size > 0:
-        world_size = topology.world_size
         topology_plan = topology.build_parallel_plan()
         topology_metadata = {
             "world_size": topology.world_size,
@@ -147,9 +160,9 @@ def build_strategy_plan(
             backend = "fsdp"
             reasons.append("Selected FSDP for large model or multi-GPU sharding.")
         else:
-            backend = "native"
+            backend = "native_ddp" if world_size > 1 else "native"
             reasons.append(
-                "Selected native backend for small model and low memory pressure."
+                f"Selected {backend} for small model and low memory pressure."
             )
     else:
         backend = requested_backend
@@ -172,11 +185,7 @@ def build_strategy_plan(
             config, "fsdp_state_dict_type", "sharded" if world_size >= 8 else "full"
         )
     else:
-        zero_stage = (
-            explicit_zero_stage
-            if bool(get_value(config, "zero_optimization", False))
-            else 0
-        )
+        zero_stage = explicit_zero_stage
         zero_offload = False
         checkpoint_policy = "rank0_file"
         fsdp_state_dict_type = get_value(config, "fsdp_state_dict_type", "full")

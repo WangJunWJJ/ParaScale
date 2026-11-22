@@ -35,6 +35,11 @@ CUDA_VISIBLE_DEVICES=0 NPROC=1 bash examples/gpu/example_012_causal_lm_training/
 For DDP, use `NPROC=2` or `NPROC=4`, matching visible GPU count, and a fresh
 `PARASCALE_RUN_DIR` for each experiment. The script selects `native_ddp` for these
 sizes. Resume with the same topology, corpus, data seed, batch and model config.
+Distributed product entrypoints require the launcher's `RANK`, `WORLD_SIZE` and
+`LOCAL_RANK`, consistent with any initialized process group. Do not launch the
+single-process `native` backend on multiple ranks. The execution world size,
+not the machine's GPU inventory, determines the DP size; an explicitly declared
+`hardware_profile.world_size` or topology must agree with the launch.
 `max_steps=100` means 100 additional optimizer updates per invocation; batch size
 4 is per rank and gradient accumulation is 4. These defaults are a starting
 configuration, not an A6000 throughput recommendation established by measurement.
@@ -52,6 +57,14 @@ native ZeRO-1; other backends reject it explicitly. It binds after backend
 optimizer wrapping. Checkpoint resume rejects changes to scheduler presence,
 type, warmup, horizon, floor or base LR. Per-step `next_learning_rates` reports
 the LR for the **next** optimizer update, not the update just completed.
+
+Training output includes `execution`, one record per rank, inspected after
+training from the final backend optimizer. Check `world_size`,
+`distributed_backend`, `optimizer_class`, `zero_redundancy_optimizer` and
+`scheduler_bound_to_optimizer` alongside `strategy_plan`. A null scheduler
+binding means no scheduler; a null ZeRO flag means the optional PyTorch class
+could not be imported, not that sharding was verified. Native ZeRO-1 is selected
+by `parascale.zero_stage: 1`; it does not require `zero_optimization: true`.
 
 Throughput counts valid next-token prediction targets: per rank and microbatch,
 `batch_size * (sequence_length - 1)`. The reported token and sample counts include

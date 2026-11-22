@@ -263,10 +263,26 @@ def _distributed_resume_worker(rank, root, model_path, data_path, schedule, zero
             if label == "split":
                 result = run_train_from_config(config, resume_step=2)
             assert result["global_step"] == 4
+            assert result["strategy_plan"]["dp_size"] == 2
+            assert result["strategy_plan"]["zero_stage"] == zero_stage
+            execution = result["execution"]
+            assert len(execution) == 2
+            assert {record["rank"] for record in execution} == {0, 1}
+            for record in execution:
+                assert record["world_size"] == 2
+                assert record["distributed_backend"] == "gloo"
+                assert record["zero_redundancy_optimizer"] is (zero_stage == 1)
+                assert record["scheduler_bound_to_optimizer"] is (True if schedule else None)
+                assert "ZeroRedundancyOptimizer" in record["optimizer_class"] if zero_stage else "AdamW" in record["optimizer_class"]
             if schedule:
                 assert result["scheduler"]["last_epoch"] == 4
                 assert result["scheduler"]["next_learning_rates"] == pytest.approx([0.0001])
         if rank == 0:
+            from parascale.checkpoint import CheckpointManager
+
+            manifest = CheckpointManager(str(root / "split")).read_manifest(4)
+            assert manifest.parallel_plan["dp_size"] == 2
+            assert manifest.parallel_plan["zero_stage"] == zero_stage
             states = [
                 torch.load(
                     root / label / "step-00000004" / "backend_state.pt",

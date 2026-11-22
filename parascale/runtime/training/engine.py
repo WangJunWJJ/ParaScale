@@ -20,6 +20,7 @@ from parascale.core import (
 )
 from parascale.parallel.capabilities import validate_legacy_parallelism
 from parascale.runtime.backends import TrainingBackend, create_runtime_training_backend
+from parascale.runtime.lifecycle import execution_world_size
 from parascale.strategy import StrategyPlan, build_strategy_plan
 
 from .accumulation import AccumulationController
@@ -86,14 +87,24 @@ class TrainEngine:
 
     def plan(self) -> StrategyPlan:
         validate_legacy_parallelism(self.config, self.strategy_plan)
+        world_size = execution_world_size() or 1
         if self.strategy_plan is None:
             self.strategy_plan = build_strategy_plan(
-                self.model_profile, self.hardware_profile, self.config
+                self.model_profile, self.hardware_profile, self.config,
+                world_size=world_size,
             )
+        if self.strategy_plan.dp_size != world_size:
+            raise ValueError("Cached strategy plan conflicts with execution world_size")
         return self.strategy_plan
 
+    def _validated_plan(self) -> StrategyPlan:
+        return coordinated_call(
+            self.plan, phase="runtime plan",
+            identity=lambda value: value.to_dict(),
+        )
+
     def initialize(self) -> "TrainEngine":
-        plan = self.plan()
+        plan = self._validated_plan()
         world_size = max(1, plan.dp_size * plan.tp_size * plan.pp_size)
         self.collective.init_process_group(
             world_size=world_size,
@@ -423,6 +434,7 @@ class TrainEngine:
         optimizer_builder: Any = None,
         scheduler_builder: Any = None,
     ) -> Any:
+        self._validated_plan()
         return CheckpointController(self).load(
             checkpoint_manager,
             step,
@@ -455,7 +467,7 @@ class TrainEngine:
 
     @staticmethod
     def _world_size() -> int:
-        return max(1, int(os.environ.get("WORLD_SIZE", "1") or 1))
+        return execution_world_size() or 1
 
     def _reset_peak_memory_stats(self) -> None:
         self.memory.reset_peak_memory_stats()

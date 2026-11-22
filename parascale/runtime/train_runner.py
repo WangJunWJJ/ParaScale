@@ -25,9 +25,9 @@ from parascale.runtime.evidence import attach_runtime_evidence
 from parascale.runtime.lifecycle import (
     distributed_rank,
     initialize_distributed_for_backend,
-    is_distributed_launch,
     model_device,
     validate_distributed_topology,
+    validate_launcher_context,
 )
 from parascale.runtime.runner_common import (
     _apply_strategy_plan_to_config,
@@ -36,6 +36,7 @@ from parascale.runtime.runner_common import (
 )
 from parascale.runtime.training import TrainEngine
 from parascale.runtime.training.coordination import coordinated_call
+from parascale.runtime.training.identity import collect_execution_identity
 from parascale.strategy import build_strategy_plan
 from parascale.workloads import build_optimizer_for_model, build_training_components
 from parascale.workloads.capability import capability_level_for_scope, describe_workload
@@ -82,6 +83,10 @@ def run_train_from_config(
     resume_latest: bool = False,
 ) -> Dict[str, Any]:
     config_data, parascale_config = normalize_execution_config(config_data)
+    launch_world_size = coordinated_call(
+        validate_launcher_context, phase="execution topology", identity=lambda size: size
+    )
+    distributed_launch = (launch_world_size or 1) > 1
     training = _section(config_data, "training")
     if resume_step is None and training.get("resume_step") is not None:
         resume_step = int(training["resume_step"])
@@ -99,7 +104,7 @@ def run_train_from_config(
             raise ValueError(
                 "Use the quantize command for PTQ; train requires mode=qat."
             )
-        if requested_backend != "native" or is_distributed_launch():
+        if requested_backend != "native" or distributed_launch:
             raise ValueError("QAT currently requires a single-process native backend.")
         if parascale_config.precision != "fp32":
             raise ValueError("QAT currently requires precision=fp32.")
@@ -116,12 +121,24 @@ def run_train_from_config(
         "ascend_native",
     }:
         raise ValueError(f"unsupported CLI training backend: {requested_backend}")
+    if distributed_launch:
+        if requested_backend in {"native", "ascend_native"}:
+            raise ValueError("Multi-rank training requires native_ddp, fsdp or deepspeed")
+        initialize_distributed_for_backend(requested_backend)
+        coordinated_call(
+            lambda: validate_distributed_topology(config_data), phase="launcher topology"
+        )
     if requested_backend == "auto":
-        if is_distributed_launch():
-            strategy_plan = build_strategy_plan(
-                _section(config_data, "model_profile"),
-                _section(config_data, "hardware_profile"),
-                parascale_config,
+        if distributed_launch:
+            strategy_plan = coordinated_call(
+                lambda: build_strategy_plan(
+                    _section(config_data, "model_profile"),
+                    _section(config_data, "hardware_profile"),
+                    parascale_config,
+                    world_size=launch_world_size,
+                ),
+                phase="auto strategy",
+                identity=lambda plan: plan.to_dict(),
             )
             _apply_strategy_plan_to_config(parascale_config, strategy_plan)
         else:
@@ -136,16 +153,12 @@ def run_train_from_config(
         "native_ddp",
     }:
         raise ValueError("resume_latest requires the native or native_ddp backend")
-    if distributed_requested and not is_distributed_launch():
+    if distributed_requested and not distributed_launch:
         raise ValueError(
             f"CLI backend '{parascale_config.training_backend}' requires a "
             "distributed launcher. Use torchrun/deepspeed launcher, or set "
             "parascale.training_backend=native for local smoke."
         )
-    if distributed_requested:
-        validate_distributed_topology(config_data)
-        initialize_distributed_for_backend(parascale_config.training_backend)
-
     if requested_backend == "auto":
         from parascale.config import flat_config_fields_by_section
 
@@ -308,6 +321,7 @@ def run_train_from_config(
         checkpoint_interval=checkpoint_interval,
     )
     elapsed = max(time.perf_counter() - start, 1e-9)
+    execution_identity = collect_execution_identity(engine)
     if bool(training.get("skip_final_checkpoint", False)):
         final_manifest_path = None
         checkpoint_validation = {
@@ -359,8 +373,9 @@ def run_train_from_config(
             "data_type": data_type,
             "backend": parascale_config.training_backend,
             "optimizer": dict(
-                getattr(optimizer, "_parascale_optimizer_metadata", {}) or {}
+                getattr(engine.training_backend.optimizer, "_parascale_optimizer_metadata", {}) or {}
             ),
+            "execution": execution_identity,
             "global_step": state.global_step,
             "scheduler": (
                 {

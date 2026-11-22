@@ -34,7 +34,7 @@ def test_recovery_cli_flags_are_mutually_exclusive():
 def test_recovery_rejects_configured_explicit_step():
     with pytest.raises(ValueError, match="resume.*exclusive"):
         train_runner.run_train_from_config(
-            {"backend": {"training_backend": "native"}, "training": {"resume_step": 1}},
+            {"parascale": {"training_backend": "native"}, "training": {"resume_step": 1}},
             resume_latest=True,
         )
 
@@ -80,7 +80,7 @@ def test_recovery_selection_is_broadcast_from_rank_zero(monkeypatch, rank, faile
 def test_real_native_training_recovers_previous_complete_step(tmp_path):
     pytest.importorskip("torch")
     config = {
-        "backend": {"training_backend": "native", "precision": "fp32"},
+        "parascale": {"training_backend": "native", "precision": "fp32"},
         "training": {
             "workload": "synthetic_regression",
             "max_steps": 2,
@@ -119,7 +119,7 @@ def _distributed_recovery_worker(rank, root, fail_load):
     )
     try:
         config = {
-            "backend": {"training_backend": "native_ddp", "precision": "fp32"},
+            "parascale": {"training_backend": "native_ddp", "precision": "fp32"},
             "training": {
                 "workload": "synthetic_regression",
                 "max_steps": 2,
@@ -130,6 +130,9 @@ def _distributed_recovery_worker(rank, root, fail_load):
         }
         result = train_runner.run_train_from_config(config)
         assert result["global_step"] == 2
+        assert result["backend"] == "native_ddp"
+        assert result["strategy_plan"]["dp_size"] == 2
+        assert len(result["execution"]) == 2
         if rank == 0:
             manager = CheckpointManager(config["training"]["checkpoint_dir"])
             manager.payload_path(2, "backend_state.pt").write_bytes(b"corrupt")

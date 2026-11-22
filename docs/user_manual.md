@@ -355,6 +355,10 @@ CLI 在完整学生配置中设置顶层 `distillation`，选择 `task: classifi
 
 `training.workload: causal_lm` 将本地 Hugging Face 因果语言模型接入统一 `train`、检查点和 PTQ/QAT 流程。模型目录必须包含匹配的 fast tokenizer；不会隐式下载模型或执行远程模型代码。
 
+分布式产品入口要求启动器提供完整的 `RANK`、`WORLD_SIZE`、`LOCAL_RANK`，并与已初始化的进程组一致。多 rank 不允许使用单进程 `native`/`ascend_native` 后端。DP 规模以实际进程组或启动器分配为准，而不是机器 GPU 总数；显式设置的 `hardware_profile.world_size` 或拓扑必须与执行规模一致，恢复前会跨 rank 校验计划。
+
+训练输出的 `execution` 按 rank 记录实际 `world_size`、通信后端、最终 optimizer 类、是否为 PyTorch `ZeroRedundancyOptimizer` 及 scheduler 是否绑定该 optimizer。它用于交叉核验 `strategy_plan`，不代表性能或质量验收。scheduler 绑定为 `null` 表示未配置；ZeRO 标记为 `null` 表示可选类无法导入、未完成类型验证。Native ZeRO-1 由 `zero_stage: 1` 控制，不依赖旧的 `zero_optimization` 开关。
+
 先用 `python -m parascale.cli prepare-text --input train.txt --tokenizer /data/model --output /data/tokens/train` 生成不可变 token 语料，再设置 `data.type: token_corpus` 和 `data.path`。每个非空、去除首尾空白的 UTF-8 行作为一篇文档，末尾追加 EOS；默认拒绝超过 1 MiB 的行，不截断。对照实验必须使用同一份预处理 token，不能与整文件一次性分词混用。
 
 数据通过只读内存映射读取，`data.num_workers` 必须为 0。各 DP rank 分配互不重叠的完整块，共同舍弃不足一个全局 microbatch 的尾部。`data.shuffle_window_blocks` 默认 65536，仅在固定顺序的窗口内打乱，不等同于全语料随机排列。恢复时校验模型配置、训练目标、数据身份和并行拓扑；任一 rank 校验失败，各 rank 在应用模型、优化器和 RNG 状态之前共同拒绝恢复。

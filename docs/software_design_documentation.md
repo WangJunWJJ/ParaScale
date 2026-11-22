@@ -100,6 +100,8 @@ native 路径先完成反向传播和必要的 AMP unscale，再执行梯度裁�
 
 恢复状态包括模型、optimizer、可选 scheduler、精度 scaler、随机数和数据消费位置。随机数处理集中在 `random_state.py`，rank-local 状态不得用 rank 0 的状态代替所有 rank。分布式写入/读取错误需要协调传播，校验和、world size、后端布局、optimizer 和训练目标契约必须在恢复时验证。
 
+规划器通过显式 `world_size` 接收执行规模，不读取进程环境；运行时从已初始化进程组或启动器解析规模，拒绝与声明拓扑不一致的配置。产品入口要求完整启动器元数据以保证现有数据分片一致，auto 规划在进程组建立后协调错误；TrainEngine 在初始化和恢复状态应用前跨 rank 比较完整计划。`training/identity.py` 在训练计时结束后一次性收集实际 optimizer 类型和 scheduler 绑定信息，不在每步热路径增加 collective。规划结果与实际执行证据分开报告。
+
 `optimizers/schedule.py` 解析 `training.scheduler` 的不可变计划，使用 PyTorch LambdaLR 实现按成功 optimizer update 计时的 warmup + linear/cosine 调度。总计划步数独立于每次调用的 `max_steps`。CLI 当前只开放 native/native DDP（含 native ZeRO-1），未验证的后端组合显式拒绝。
 
 TrainEngine 在后端完成模型/optimizer 包装后才创建 scheduler，恢复时先创建 scheduler 再加载 optimizer 与 scheduler 状态，后续 fit 复用该实例，最终检查点自动包含调度状态。恢复前比较调度器存在性及类型、总步数、warmup、下限、基础学习率；不允许静默改变训练曲线。`coordination.py` 统一传播本地阶段错误，并在训练/保存前比较各 rank 调度身份和状态，所有 rank 无条件参加相同阶段，避免局部异常使 collective 次序错位。Tensor 状态比较保留 dtype、shape、数值，排除设备编号；函数型调度器必须显式声明 `scheduler_metadata`，不能用相同初始状态替代函数语义身份。
