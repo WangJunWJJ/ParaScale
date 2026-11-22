@@ -156,3 +156,28 @@ remains a failure even when retrieval passes. Preserve its checkpoints and logs
 to localize the first divergent update instead of relaxing the tolerance.
 `--check-only` revalidates the existing artifacts without training again, binding
 retrieval reports to current checkpoint hashes and verifying the restore origin.
+
+For a failed recovery gate, a bounded reducer diagnostic reuses the update-25
+checkpoint. Run cold then warm in separate four-rank launches with a fresh
+diagnostic directory and at least 10 GiB additional free space:
+
+```bash
+set -euo pipefail
+for mode in cold warm; do
+  CUDA_VISIBLE_DEVICES=0,1,3,4 timeout 600 python -m torch.distributed.run \
+    --nnodes=1 --nproc_per_node=4 --master_addr=127.0.0.1 --master_port=29500 \
+    -m tests.benchmarks.scripts.probe_clip_reducer_recovery \
+    --config "$PARASCALE_RUN_DIR/recovery/continuous.config.json" \
+    --checkpoints "$PARASCALE_RUN_DIR/recovery/continuous/checkpoints" \
+    --output "$PARASCALE_RUN_DIR/reducer-probe" --mode "$mode"
+done
+```
+
+This fixed FP32/native-DDP diagnostic performs only two updates per launch.
+The warm arm first runs one backward without an optimizer update, then restores
+model, optimizer, cursor and RNG without replacing DDP. It compares first-step
+local gradients before reduction, reduced gradients, and resulting parameters
+and Adam moments. Per-rank JSON files report differences, not a pass certificate.
+Snapshots remain outside Git. The probe uses private PyTorch DDP diagnostic
+state; use the validated PyTorch 2.9.1 environment. Its instrumentation overhead
+must not be used as throughput evidence, and its warmup is not a product fix.
