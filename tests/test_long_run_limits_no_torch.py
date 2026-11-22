@@ -134,6 +134,25 @@ def test_retention_preserves_unmanaged_and_valid_fallbacks(tmp_path):
     assert not manager.manifest_path(2).exists()
 
 
+@pytest.mark.parametrize("count", [1, 2, 3])
+def test_retention_does_not_hash_payloads_when_nothing_can_be_removed(
+    tmp_path, monkeypatch, count
+):
+    manager = CheckpointManager(str(tmp_path))
+    for step in range(count):
+        _checkpoint(manager, step)
+    manager.payload_path(count - 1, "state.bin").write_bytes(b"corrupt")
+
+    def forbidden(_manifest):
+        raise AssertionError("No deletion is possible; payload validation is unnecessary")
+
+    monkeypatch.setattr(manager, "validate_manifest", forbidden)
+    assert manager.prune(keep_last=3) == []
+    assert all(manager.manifest_path(step).exists() for step in range(count))
+    monkeypatch.undo()
+    assert not manager.validate(count - 1).ok
+
+
 def _checkpoint(manager, step, *, managed=True):
     for name in ("state.bin", "runtime.bin"):
         path = manager.payload_path(step, name)
