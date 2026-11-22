@@ -96,3 +96,39 @@ generates real-data evidence.
 
 Passing this short check does not certify 24h stability, exact interrupted resume,
 HTTP serving, distributed inference or deployment-specific quality requirements.
+
+## Optional CPU Lookahead
+
+`data.cpu_prefetch: true` prepares at most one following batch in a CPU thread,
+overlapping original-image decoding and checkpoint preprocessing with training.
+It defaults to false. This option requires pretrained CLIP/SigLIP, streaming WDS,
+`num_workers: 0`, and no CUDA prefetch. It does not change the physical batch,
+sample order or preprocessing algorithm. The checkpoint cursor advances only
+for consumed batches, not speculative work.
+
+The transform must be deterministic CPU-only code that does not use global RNG.
+Do not add random augmentation or concurrent processor mutation to this path.
+Ending a fit cancels queued work and joins running preprocessing; it cannot
+interrupt a stalled decoder or storage read, so shutdown time is not bounded.
+
+The following Linux/CUDA protocol reuses the environment variables above. Run
+the input-equivalence gate before the timing comparison, with no competing jobs:
+
+```bash
+set -euo pipefail
+python -m torch.distributed.run --nnodes=1 --nproc_per_node=4 \
+  --master_addr=127.0.0.1 --master_port=29500 \
+  -m tests.benchmarks.scripts.profile_clip_input \
+  --model "$PARASCALE_MODEL" --data "$PARASCALE_DATA/train" \
+  --output "$PARASCALE_RUN_DIR/input-parity" --verify-prefetch
+
+CUDA_VISIBLE_DEVICES=0,1,3,4 python -m tests.benchmarks.scripts.validate_clip_input_prefetch \
+  --config examples/gpu/example_015_clip_retrieval_quality/train.json \
+  --output "$PARASCALE_RUN_DIR/input-timing"
+```
+
+The input gate compares all tensor bytes for 25 batches/rank. Timing uses three
+alternating-order pairs of fresh product CLI launches, 50 updates each, with the
+first 10 excluded from steady-state metrics. It also reports whole-fit throughput.
+Checkpoints are disabled only in this timing protocol. A speed gate passing does
+not replace trained-checkpoint quality, distributed recovery or long-run gates.
