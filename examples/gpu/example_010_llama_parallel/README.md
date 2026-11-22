@@ -29,6 +29,10 @@ identities are recorded independently of the generated test logs:
 The validator loads assets offline, packs token blocks without padding and uses
 alternating ignored-label regions to exercise nonuniform token normalization.
 The retained reference model and optimizer increase memory beyond normal training.
+The stage validation path constructs AdamW through ParaScale's optimizer factory;
+the independent reference uses explicit non-fused `foreach=False` AdamW. The
+factory disables fused/foreach only for mixed trainable Tensor/DTensor parameters
+and records the selected settings in the result. Create it after TP/DP wrapping.
 Do not interpret its peak memory or execution duration as deployment performance.
 
 ## SmolLM2 Data Parallelism

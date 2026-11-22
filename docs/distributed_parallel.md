@@ -239,8 +239,13 @@ The explicit launcher size must match the topology. The returned stage is on
 CPU; unowned source layers are released before the caller moves it to CUDA.
 Construct `DistributedTrainer` with `summed_loss=objective` and the stage's TP
 plan, then construct the optimizer against its final local parameters. Do not
-construct an optimizer before TP/DP wrapping. Use non-fused `foreach=False`
-optimizers for the mixed Tensor/DTensor parameters. Llama stage examples use
+construct an optimizer before TP/DP wrapping. `parascale.optimizers.build_optimizer`
+automatically uses non-fused `foreach=False` AdamW for mixed Tensor/DTensor
+trainable parameters; ordinary and all-DTensor parameters keep PyTorch's native
+selection. No parameters are converted or regrouped. Configured four-bit
+optimizers reject trainable DTensor parameters before creating state. Manual
+optimizers must also avoid fused/foreach updates over mixed parameters.
+Llama stage examples use
 int64 token IDs on the first stage and FP32 residual hidden states on later
 stages, including when the executor uses BF16 autocast.
 The executor calls an optional `validate_example_inputs` stage hook during its
