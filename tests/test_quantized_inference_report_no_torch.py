@@ -7,6 +7,8 @@
 
 import copy
 import importlib.util
+import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -133,6 +135,80 @@ def test_benchmark_profile_trace_is_opt_in():
     assert (
         parser().parse_args([*required, "--export-profile-trace"]).export_profile_trace
     )
+
+
+@pytest.mark.parametrize("mode", ["fast", "max"])
+def test_gemlite_tuning_is_explicit_and_resets_cache_before_search(monkeypatch, mode):
+    from tests.benchmarks.scripts import benchmark_quantized_inference as benchmark
+
+    calls = []
+    monkeypatch.setitem(
+        sys.modules,
+        "parascale.quantization.inference_gemlite",
+        SimpleNamespace(_load_gemlite=lambda: calls.append("validate")),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "gemlite",
+        SimpleNamespace(
+            reset_config=lambda: calls.append("reset"),
+            set_autotune=lambda config: calls.append(config),
+        ),
+    )
+    assert benchmark.configure_gemlite_tuning(None) is None
+    assert calls == []
+    policy = benchmark.configure_gemlite_tuning(mode)
+    assert calls == ["validate", "reset", {"GEMV_SPLITK": mode}]
+    assert policy == {"gemv_splitk": mode, "initial_cache": "empty_all_modes"}
+
+
+def test_gemlite_tuning_rejects_unrelated_backend(monkeypatch):
+    from tests.benchmarks.scripts import benchmark_quantized_inference as benchmark
+
+    args = [
+        "benchmark",
+        "--model",
+        "m",
+        "--data",
+        "d",
+        "--data-description",
+        "test",
+        "--output",
+        "o",
+        "--gemlite-gemv-autotune",
+        "max",
+    ]
+    monkeypatch.setattr(sys, "argv", args)
+    with pytest.raises(ValueError, match="requires --backend gemlite_int8"):
+        benchmark.main()
+
+
+def test_gemlite_tuning_evidence_validates_and_hashes_winners(monkeypatch):
+    from tests.benchmarks.scripts import benchmark_quantized_inference as benchmark
+
+    configs = {"GEMV_SPLITK": {"(1, 256, 512, 512, 1, 108)": {"BLOCK_SIZE_K": 64}}}
+    validated = []
+    monkeypatch.setitem(
+        sys.modules,
+        "gemlite",
+        SimpleNamespace(
+            cache_config=lambda path: Path(path).write_text(json.dumps(configs))
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "parascale.quantization.inference_gemlite",
+        SimpleNamespace(_validate_kernel_cache=validated.append),
+    )
+    evidence = benchmark.gemlite_tuning_evidence({(512, 256)})
+    assert evidence["winning_configs"] == configs
+    assert validated == [configs]
+    assert len(evidence["config_sha256"]) == 64
+    with pytest.raises(RuntimeError, match="Missing GEMV tuning evidence"):
+        benchmark.gemlite_tuning_evidence({(1024, 256)})
+    configs["GEMV_SPLITK"] = {"(1, 256, 512, 128, 1, 108)": {"BLOCK_SIZE_K": 64}}
+    with pytest.raises(RuntimeError, match="Missing GEMV tuning evidence"):
+        benchmark.gemlite_tuning_evidence({(512, 256)})
 
 
 def test_profile_summary_observes_real_cuda_graph_activities():

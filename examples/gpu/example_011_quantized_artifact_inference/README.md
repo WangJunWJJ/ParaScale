@@ -50,9 +50,36 @@ evaluation text and the canonical quantized artifact. Keep outputs outside Git.
 - This comparison isolates execution changes, not quality loss from PTQ/QAT.
   Also inspect the PTQ/QAT validator's comparison against the original float
   model and, for QAT attribution, a matched unquantized fine-tuning control.
+- Perplexity is scored with full-context forward calls. With static-cache
+  generation it does not qualify the compiled, one-token decode path; inspect
+  generated outputs and validate that path separately before deployment.
 - Use validation for configuration selection. Freeze the settings before a
   separate test-split evaluation. Small-model, short-sequence or high-batch
   results do not imply acceleration on different workloads.
+
+## Diagnose Kernel Costs
+
+Every result includes `generation_profile`: CPU and CUDA self-times and call
+counts from one separate diagnostic generation. These measurements are not used
+for throughput acceptance. CPU synchronization time is not CPU compute time,
+and summed CUDA activity duration is not GPU utilization. Add
+`--export-profile-trace` to export Chrome traces alongside the worker reports;
+existing trace files are not overwritten.
+
+For batch-size 1 only, repeat the comparison with
+`--gemlite-gemv-autotune fast` and `--gemlite-gemv-autotune max`, using different
+output filenames. This opt-in experiment resets the backend configuration cache
+inside each worker before preparation, then changes only the GEMV search space.
+Other search modes retain their upstream defaults. Omitting this option retains
+the normal bundled-cache behavior. Never change tuning after preparing a model.
+
+The requested policy is recorded in `contract.gemlite_tuning`. INT8 results also
+include `gemlite_tuning_evidence`, with a hash and the winning configurations
+observed across warmup, measurement, profiling and quality calls. Required
+single-row INT8 projection shapes must be present; missing evidence fails the
+run. These keys identify shapes and quantization settings, not stride/layout
+qualification. A larger search space is not a speed or accuracy guarantee;
+repeat the runs and validate decode-path numerics before selecting a setting.
 
 ## Application API
 

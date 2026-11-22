@@ -13,6 +13,7 @@ all timing samples, hashes, environment, quality and an engineering gate result.
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import importlib.metadata
 import json
@@ -22,6 +23,7 @@ import platform
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
 import traceback
 from datetime import datetime, timezone
@@ -89,6 +91,11 @@ def parser():
     )
     result.add_argument("--static-cache", action="store_true")
     result.add_argument(
+        "--gemlite-gemv-autotune",
+        choices=("fast", "max"),
+        help="Experiment only: reset backend tuning cache and search GEMV candidates",
+    )
+    result.add_argument(
         "--export-profile-trace",
         action="store_true",
         help="Export one diagnostic generation trace outside throughput timing",
@@ -111,6 +118,59 @@ def write_json(path, content):
         json.dumps(content, indent=2, ensure_ascii=False, allow_nan=False) + "\n",
         encoding="utf-8",
     )
+
+
+def configure_gemlite_tuning(mode: str | None) -> dict | None:
+    """Configure an isolated worker's GEMV experiment before model preparation.
+
+    None preserves backend defaults. Explicit fast/max uses the same empty
+    initial cache for all modes; only the GEMV search space changes. Raises
+    ValueError for an unsupported mode or RuntimeError for an unqualified backend.
+    """
+    if mode is None:
+        return None
+    if mode not in ("fast", "max"):
+        raise ValueError("Unsupported GemLite GEMV tuning mode")
+    from parascale.quantization.inference_gemlite import _load_gemlite
+
+    _load_gemlite()
+    import gemlite
+
+    gemlite.reset_config()
+    gemlite.set_autotune({"GEMV_SPLITK": mode})
+    return {"gemv_splitk": mode, "initial_cache": "empty_all_modes"}
+
+
+def gemlite_tuning_evidence(required_shapes: set[tuple[int, int]]) -> dict:
+    """Validate observed M1 INT8 K/N winners; reject missing tuning evidence.
+
+    Exported configurations cover warmup, timing, profiling and quality calls,
+    not only the throughput measurement window. Collection is outside timing.
+    """
+    import gemlite
+
+    from parascale.quantization.inference_gemlite import _validate_kernel_cache
+
+    with tempfile.TemporaryDirectory(prefix="parascale-gemlite-tuning-") as folder:
+        path = Path(folder) / "config.json"
+        gemlite.cache_config(str(path))
+        configs = json.loads(path.read_text(encoding="utf-8"))
+        _validate_kernel_cache(configs)
+        observed = set()
+        for signature in configs.get("GEMV_SPLITK", {}):
+            rows, outputs, features, group, elements, dtype_id = ast.literal_eval(
+                signature
+            )
+            if (rows, elements, dtype_id) == (1, 1, 108) and group == features:
+                observed.add((features, outputs))
+        if not required_shapes or not required_shapes.issubset(observed):
+            raise RuntimeError("Missing GEMV tuning evidence for converted shapes")
+        return {
+            "config_sha256": sha256(path),
+            "winning_configs": configs,
+            "scope": "warmup, timing, profiling and quality calls",
+            "required_gemv_shapes_kn": sorted(required_shapes),
+        }
 
 
 def run_comparison(args):
@@ -263,6 +323,7 @@ def run_worker(args):
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cudnn.allow_tf32 = False
     torch.set_num_threads(1)
+    tuning_policy = configure_gemlite_tuning(args.gemlite_gemv_autotune)
     args.model, args.data = args.model.resolve(), args.data.resolve()
     manifest, model_hash = model_manifest(args.model)
     data_hash = sha256(args.data)
@@ -323,6 +384,7 @@ def run_worker(args):
     torch.cuda.synchronize()
     load_seconds = time.perf_counter() - started
     conversion, conversion_seconds = None, 0.0
+    tuning_shapes = set()
     if args.mode in ("int4", "int8"):
         started = time.perf_counter()
         if args.reference_artifact:
@@ -339,6 +401,13 @@ def run_worker(args):
             )
         torch.cuda.synchronize()
         conversion_seconds = time.perf_counter() - started
+        if tuning_policy is not None:
+            from parascale.quantization.inference_gemlite import _requires_safe_gemm
+
+            for name in conversion["converted_layers"]:
+                layer = model.get_submodule(name)
+                if not _requires_safe_gemm(layer.in_features, layer.out_features, 1):
+                    tuning_shapes.add((layer.in_features, layer.out_features))
     elif args.reference_artifact:
         started = time.perf_counter()
         model = materialize_reference_weights(model)
@@ -496,6 +565,7 @@ def run_worker(args):
             "seed": args.seed,
             "compile": args.compile,
             "static_cache": args.static_cache,
+            "gemlite_tuning": tuning_policy,
             "quality_execution": (
                 "eager" if args.static_cache or not args.compile else "compiled_forward"
             ),
@@ -550,6 +620,11 @@ def run_worker(args):
         "profiled_int4_ops": generation_int4_ops,
         "profiled_compiled_regions": compiled_regions,
         "generation_profile": profile_summary,
+        "gemlite_tuning_evidence": (
+            gemlite_tuning_evidence(tuning_shapes)
+            if tuning_policy is not None and args.mode == "int8"
+            else None
+        ),
         "load_seconds": load_seconds,
         "conversion_seconds": conversion_seconds,
         "generation_tokens_per_second": args.batch_size
@@ -563,6 +638,10 @@ def run_worker(args):
 
 def main():
     args = parser().parse_args()
+    if args.gemlite_gemv_autotune is not None and args.backend != "gemlite_int8":
+        raise ValueError("--gemlite-gemv-autotune requires --backend gemlite_int8")
+    if args.gemlite_gemv_autotune is not None and args.batch_size != 1:
+        raise ValueError("--gemlite-gemv-autotune requires --batch-size 1")
     expected_mode = "int8" if args.backend == "gemlite_int8" else "int4"
     if args.mode in ("int4", "int8") and args.mode != expected_mode:
         raise ValueError(
