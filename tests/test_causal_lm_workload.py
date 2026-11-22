@@ -103,6 +103,7 @@ def configuration(model_path, data_path, checkpoint):
             "repeat": True,
         },
         "optimizer": {"type": "adamw", "lr": 0.001},
+        "runtime": {"run_dir": str(checkpoint / "run")},
     }
 
 

@@ -193,7 +193,7 @@ def test_wrong_optimizer_scheduler_rejected_before_training():
             loss_fn=lambda output, batch: output.square().mean(),
         )
     for name, value in before.items():
-        torch.testing.assert_close(model.state_dict()[name], value, rtol=0, atol=0)
+        torch.testing.assert_close(model.state_dict()[name].cpu(), value, rtol=0, atol=0)
 
 
 def test_checkpoint_rejects_a_different_scheduler_before_writing(tmp_path):
@@ -259,6 +259,8 @@ def test_skipped_optimizer_updates_do_not_advance_schedule(accumulation):
             return super().step(optimizer)
 
     model = torch.nn.Linear(2, 1)
+    if torch.cuda.is_available():
+        model = model.cuda()
     optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
     config = ParaScaleConfig(gradient_accumulation_steps=accumulation)
     engine = TrainEngine(config, training_backend=SkipFirst(model, optimizer, config))
