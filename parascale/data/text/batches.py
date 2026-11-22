@@ -142,6 +142,6 @@ class TokenBatchCursor:
                 "input_ids": input_ids,
                 "labels": input_ids,
                 "batch_size": self.batch_size,
-                "num_tokens": self.batch_size * (self.sequence_length - 1),
+                "tokens": self.batch_size * (self.sequence_length - 1),
                 "block_ids": blocks,
             }

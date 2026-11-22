@@ -53,6 +53,11 @@ optimizer wrapping. Checkpoint resume rejects changes to scheduler presence,
 type, warmup, horizon, floor or base LR. Per-step `next_learning_rates` reports
 the LR for the **next** optimizer update, not the update just completed.
 
+Throughput counts valid next-token prediction targets: per rank and microbatch,
+`batch_size * (sequence_length - 1)`. The reported token and sample counts include
+gradient accumulation and DP replicas. Do not compare this directly with a
+baseline counting all input tokens without converting to the same unit.
+
 Data reads use a read-only memory map, without DataLoader workers. Blocks are
 disjoint across DP ranks; incomplete global batches are dropped equally. Fixed
 windows of at most 65,536 blocks are shuffled internally with PyTorch's sampler.

@@ -158,6 +158,24 @@ def test_rank_seed_does_not_change_global_data_permutation(
     assert not blocks[0].intersection(blocks[1])
 
 
+def test_causal_lm_reports_prediction_tokens_and_consumed_samples(
+    tmp_path, model_path, capsys
+):
+    from parascale.checkpoint import CheckpointManager
+
+    data_path = prepare(tmp_path, model_path, capsys)
+    config = configuration(model_path, data_path, tmp_path / "checkpoints")
+    config["parascale"]["gradient_accumulation_steps"] = 2
+    result = run_train_from_config(config)
+    metrics = result["last_metrics"]
+    assert metrics["tokens"] == 2 * 2 * (8 - 1)
+    assert metrics["batch_size"] == 4
+    assert metrics["tokens_per_second"] > 0
+    assert metrics["end_to_end_tokens_per_second"] > 0
+    manifest = CheckpointManager(str(tmp_path / "checkpoints")).read_manifest(2)
+    assert manifest.consumed_samples == 8
+
+
 @pytest.mark.parametrize("mode", ["ptq", "qat"])
 def test_causal_lm_compression_uses_product_commands(
     tmp_path, model_path, capsys, mode

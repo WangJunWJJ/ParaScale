@@ -45,7 +45,7 @@ def test_dp_batches_have_disjoint_block_ownership_and_equal_counts(tmp_path, wor
         counts.append(len(batches))
         rank_blocks.append({index for batch in batches for index in batch["block_ids"]})
         assert all(batch["input_ids"].shape == (2, 4) for batch in batches)
-        assert all(batch["num_tokens"] == 6 for batch in batches)
+        assert all(batch["tokens"] == 6 for batch in batches)
     assert len(set(counts)) == 1
     assert sum(map(len, rank_blocks)) == len(set.union(*rank_blocks))
 

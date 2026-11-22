@@ -86,7 +86,7 @@ def build_causal_lm_components(config: dict[str, Any]):
     def loss_fn(output, batch):
         return output.loss
 
-    loss_fn.normalization_weight = lambda batch: batch["num_tokens"]
+    loss_fn.normalization_weight = lambda batch: batch["tokens"]
     effective_config = hf_model.config.to_dict()
     effective_config.pop("_name_or_path", None)
     loss_fn.objective_metadata = {
