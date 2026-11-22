@@ -199,6 +199,34 @@ This tests process failure and an explicit incomplete-publication injection,
 not host power loss, disk durability, retrieval quality or sustained throughput.
 It uses the example's fixed-bucket FP32 policy and does not certify other backends.
 
+### Training and Offline Inference Soak
+
+The Linux supervisor below requires all five A6000 GPUs visible: training owns
+GPUs `0,1,3,4` and resident inference owns GPU `2`. Use an otherwise idle machine,
+a new output directory and at least 30 GiB free disk space. It stops if free space
+falls below 20 GiB. Run `--hours 0.0333333334` first for a two-minute preflight;
+this does not replace the 24-hour run.
+
+```bash
+python -m tests.benchmarks.scripts.production_soak \
+  --config examples/gpu/example_015_clip_retrieval_quality/train.json \
+  --model "$PARASCALE_MODEL" --data "$PARASCALE_DATA/train" \
+  --output "$PARASCALE_RUN_DIR/soak" --revision "$(git rev-parse HEAD)" \
+  --hours 24
+```
+
+The timer starts after all workers report progress. The supervisor checks finite
+loss, bounded metric history, checkpoint retention, disk space, progress and
+worker RSS. After stopping training, it resumes 100 updates and tests inference
+from the trained checkpoint. A known incomplete checkpoint left by interruption
+is recorded separately and must not grow or be joined by new incomplete states.
+Inference compares complete image/text embeddings and logits mean with direct
+HF on the same inputs; the inputs are training pairs, not a held-out quality set.
+Latency windows are instrumented co-run observations, not isolated acceleration
+benchmarks or HTTP service SLAs. `stability_checks_passed_quality_pending` means
+only these gates passed for the requested duration; retrieval and service gates
+remain separate.
+
 For a historical failed recovery run with `ddp_find_unused_parameters: false`
 and `ddp_static_graph: false`, the bounded reducer diagnostic below reuses its
 update-25 checkpoint. It does **not** apply to this example's current fixed-bucket
