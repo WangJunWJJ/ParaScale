@@ -133,6 +133,15 @@ first 10 excluded from steady-state metrics. It also reports whole-fit throughpu
 Checkpoints are disabled only in this timing protocol. A speed gate passing does
 not replace trained-checkpoint quality, distributed recovery or long-run gates.
 
+To compare the fixed-bucket recovery policy against default DDP bucketing, pass
+`--comparison ddp-buckets` to the same timing command and use a new output
+directory. Both arms enable CPU lookahead and disable `ddp_static_graph`; only
+`ddp_find_unused_parameters` changes. The predefined gate permits at most a 5%
+median steady-throughput regression across three pairs. This measures the whole
+policy, including its extra unused-parameter graph traversal, not buckets alone.
+Whole-fit throughput and every individual pair remain in the report. Passing
+the median gate does not mean every pair regressed by less than 5%.
+
 ## Fresh-Process Recovery Gate
 
 The following Linux/CUDA gate requires at least 20 GiB free space. It trains

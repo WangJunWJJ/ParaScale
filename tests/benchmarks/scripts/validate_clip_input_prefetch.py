@@ -7,6 +7,7 @@
 
 import argparse
 import json
+import math
 import os
 import signal
 import statistics
@@ -17,10 +18,41 @@ from pathlib import Path
 from parascale.commands.common import load_config_file
 
 
+def comparison_config(base: dict, comparison: str, enabled: bool) -> dict:
+    """Build one paired arm without mutating the shared budget/configuration."""
+    config = json.loads(json.dumps(base))
+    if comparison == "cpu-prefetch":
+        config["data"]["cpu_prefetch"] = enabled
+    elif comparison == "ddp-buckets":
+        config["data"]["cpu_prefetch"] = True
+        config["parascale"].update(
+            ddp_find_unused_parameters=enabled, ddp_static_graph=False
+        )
+    else:
+        raise ValueError(f"unknown comparison: {comparison}")
+    return config
+
+
+def comparison_passes(comparison: str, ratios: list[float]) -> bool:
+    """Apply the predeclared gate to exactly three finite positive ratios."""
+    if len(ratios) != 3 or any(not math.isfinite(r) or r <= 0 for r in ratios):
+        raise ValueError("requires three finite positive paired ratios")
+    if comparison == "cpu-prefetch":
+        return statistics.median(ratios) >= 1.1 and min(ratios) > 1.0
+    if comparison == "ddp-buckets":
+        return statistics.median(ratios) >= 0.95
+    raise ValueError(f"unknown comparison: {comparison}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--comparison",
+        choices=("cpu-prefetch", "ddp-buckets"),
+        default="cpu-prefetch",
+    )
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
     base = load_config_file(args.config)
@@ -40,9 +72,9 @@ def main():
     for pair, order in enumerate(((False, True), (True, False), (False, True))):
         runs = {}
         for enabled in order:
-            name = f"pair-{pair}-prefetch-{int(enabled)}"
-            config = json.loads(json.dumps(base))
-            config["data"]["cpu_prefetch"] = enabled
+            label = "prefetch" if args.comparison == "cpu-prefetch" else "fixed-buckets"
+            name = f"pair-{pair}-{label}-{int(enabled)}"
+            config = comparison_config(base, args.comparison, enabled)
             config["runtime"]["run_dir"] = str(args.output / name)
             config["parascale"]["metrics_history_limit"] = 50
             config["training"].update(
@@ -114,11 +146,17 @@ def main():
             json.dumps(results, indent=2), encoding="utf-8"
         )
     speedups = [row["speedup"] for row in results]
-    passed = statistics.median(speedups) >= 1.1 and min(speedups) > 1.0
+    passed = comparison_passes(args.comparison, speedups)
     summary = {
         "status": "passed" if passed else "failed",
         "pairs": results,
         "median_speedup": statistics.median(speedups),
+        "comparison": args.comparison,
+        "gate": (
+            "median>=1.10 and every pair>1.0"
+            if args.comparison == "cpu-prefetch"
+            else "median>=0.95"
+        ),
         "scope": "real-data native-DDP4 FP32 global128; 10 warmup +40 measured; correctness/recovery are separate gates",
     }
     (args.output / "summary.json").write_text(
