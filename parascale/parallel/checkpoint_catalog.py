@@ -16,6 +16,7 @@ import json
 import os
 import re
 import stat
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -64,12 +65,21 @@ def _read_metadata(directory: Path) -> dict[str, Any]:
 
 
 def _check_payloads(directory: Path, metadata: dict[str, Any]) -> None:
-    for entry in metadata["files"]:
+    def verify(entry: dict[str, Any]) -> None:
         path = _safe_path(directory / entry["path"])
         if not path.is_file():
             raise ValueError(f"Checkpoint payload must be a regular file: {path}")
         if _digest(path) != entry["sha256"]:
             raise ValueError(f"Checkpoint checksum mismatch: {path.name}")
+
+    entries = metadata["files"]
+    if len(entries) == 1:
+        verify(entries[0])
+        return
+    # Independent shards share no mutable state. Drain workers even on error;
+    # map preserves manifest error order and each digest reads 1 MiB chunks.
+    with ThreadPoolExecutor(max_workers=min(4, len(entries))) as executor:
+        list(executor.map(verify, entries))
 
 
 def inspect_stage_checkpoint(directory: str | Path) -> dict[str, Any]:

@@ -9,6 +9,8 @@ import hashlib
 import json
 import subprocess
 import sys
+import threading
+import time
 from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,21 +20,24 @@ import pytest
 from parascale.parallel.distributed import DistributedParallelConfig
 
 
-def checkpoint(root, step, *, family="a", runtime=True):
+def checkpoint(root, step, *, family="a", runtime=True, ranks=1):
     directory = root / f"step-{step:08d}"
     directory.mkdir(parents=True)
-    payload = directory / "rank-00000.pt"
-    payload.write_bytes(f"opaque-test-state:{family}:{step}".encode())
-    metadata = {
-        "schema_version": 5 if runtime else 4,
-        "topology": asdict(DistributedParallelConfig()),
-        "step": step,
-        "files": [
+    files = []
+    for rank in range(ranks):
+        payload = directory / f"rank-{rank:05d}.pt"
+        payload.write_bytes(f"opaque-test-state:{family}:{step}:{rank}".encode())
+        files.append(
             {
                 "path": payload.name,
                 "sha256": hashlib.sha256(payload.read_bytes()).hexdigest(),
             }
-        ],
+        )
+    metadata = {
+        "schema_version": 5 if runtime else 4,
+        "topology": asdict(DistributedParallelConfig(dp_size=ranks)),
+        "step": step,
+        "files": files,
         "context": {
             "model": family,
             "loss": "test",
@@ -320,6 +325,75 @@ def test_anchor_payload_is_hashed_once(tmp_path, monkeypatch):
     monkeypatch.setattr(module, "_digest", digest)
     module.prune_stage_checkpoints(anchor, keep_last=2)
     assert paths.count(anchor / "rank-00000.pt") == 1
+
+
+@pytest.mark.parametrize("ranks", [2, 4])
+def test_rank_payloads_are_verified_concurrently(tmp_path, monkeypatch, ranks):
+    anchor = checkpoint(tmp_path, 1, ranks=ranks)
+    module = catalog()
+    original = module._digest
+    barrier = threading.Barrier(ranks, timeout=10)
+    lock = threading.Lock()
+    visited = []
+
+    def digest(path):
+        with lock:
+            visited.append(path.name)
+        barrier.wait()
+        return original(path)
+
+    monkeypatch.setattr(module, "_digest", digest)
+    assert module.inspect_stage_checkpoint(anchor)["step"] == 1
+    assert sorted(visited) == [f"rank-{rank:05d}.pt" for rank in range(ranks)]
+
+
+def test_verification_drains_workers_and_preserves_error_order(tmp_path, monkeypatch):
+    anchor = checkpoint(tmp_path, 1, ranks=4)
+    module = catalog()
+    original = module._digest
+    barrier = threading.Barrier(4, timeout=10)
+    lock = threading.Lock()
+    finished = []
+
+    def digest(path):
+        barrier.wait()
+        try:
+            if path.name == "rank-00001.pt":
+                time.sleep(0.04)
+                return "incorrect"
+            if path.name == "rank-00003.pt":
+                return "incorrect"
+            time.sleep(0.08)
+            return original(path)
+        finally:
+            with lock:
+                finished.append(path.name)
+
+    monkeypatch.setattr(module, "_digest", digest)
+    with pytest.raises(ValueError, match="rank-00001.pt"):
+        module.inspect_stage_checkpoint(anchor)
+    assert len(finished) == 4
+
+
+def test_single_payload_verification_does_not_create_workers(tmp_path, monkeypatch):
+    anchor = checkpoint(tmp_path, 1)
+    module = catalog()
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Single-file verification should stay inline")
+
+    monkeypatch.setattr(module, "ThreadPoolExecutor", forbidden, raising=False)
+    assert module.inspect_stage_checkpoint(anchor)["step"] == 1
+
+
+def test_corrupt_multirank_anchor_never_prunes_older_snapshots(tmp_path):
+    old = checkpoint(tmp_path, 1, ranks=4)
+    checkpoint(tmp_path, 2, ranks=4)
+    anchor = checkpoint(tmp_path, 3, ranks=4)
+    (anchor / "rank-00002.pt").write_bytes(b"corrupt")
+    with pytest.raises(ValueError, match="rank-00002.pt"):
+        catalog().prune_stage_checkpoints(anchor, keep_last=2)
+    assert old.is_dir()
 
 
 def test_parent_traversal_is_rejected_before_hash_or_unlink(tmp_path, monkeypatch):

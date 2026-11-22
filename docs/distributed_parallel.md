@@ -461,6 +461,11 @@ never recursively deleted. The report lists `removed`, `protected` and `skipped`
 
 Paths and ancestors must not be links/reparse points. Use one writer with no
 concurrent filesystem mutations; this is not an adversarial filesystem sandbox.
+Integrity inspection checks independent rank files with at most four concurrent
+readers; a single payload stays inline. Every SHA256 check is retained, errors
+are reported in manifest order, and all readers finish before inspection returns
+or pruning can proceed. A failed read is not a timeout guarantee: the launcher
+must still bound the worker job if the underlying storage stalls.
 Pruning unlinks and synchronizes the manifest before removing declared rank
 files. An interruption may leave an uncommitted directory, which is preserved
 and reported on subsequent scans. Such orphans require deliberate cleanup.
@@ -472,6 +477,24 @@ Add `--validate-catalog` to both fresh-process validator commands above, using
 a new checkpoint root. The baseline saves real updates0/1/2, prunes update0,
 and checks that updates1/2 remain; the resume process discovers update2 and
 must reproduce update3 exactly. Generated files remain local test artifacts.
+
+To compare integrity inspection implementations on the same real checkpoint:
+
+```bash
+python tests/benchmarks/scripts/benchmark_checkpoint_verification.py \
+  --checkpoint /checkpoints/run/step-00000100 \
+  --baseline-catalog /trusted/baseline/parascale/parallel/checkpoint_catalog.py \
+  --repeats 3 --output /results/checkpoint-verification.json
+```
+
+The baseline is executable Python: use only a trusted source file whose shared
+helpers match the candidate. Both implementations inspect the same immutable
+files, with one warmup each and alternating AB/BA pairs. Run without competing
+work under the same CPU affinity and quota. The JSON records source hashes,
+individual times, variance and median verification speedup. This measures
+warm-cache integrity inspection only, not training, save, retention, cold-cache
+I/O or recovery. The output must be a new file outside the repository and
+checkpoint directory; do not commit generated results.
 
 ## Reproducible Validation
 
