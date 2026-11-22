@@ -7,7 +7,9 @@
 
 import json
 import os
+import random
 import time
+import weakref
 from datetime import timedelta
 from pathlib import Path
 
@@ -61,9 +63,11 @@ def model_path(tmp_path):
     return path
 
 
-def prepare(tmp_path, model_path, capsys):
+def prepare(tmp_path, model_path, capsys, text=None):
     source = tmp_path / "text.txt"
-    source.write_text("a b c d a b c\n" * 12, encoding="utf-8")
+    source.write_text(
+        "a b c d a b c\n" * 12 if text is None else text, encoding="utf-8"
+    )
     output = tmp_path / "tokens"
     assert (
         main(
@@ -105,6 +109,174 @@ def configuration(model_path, data_path, checkpoint):
         "optimizer": {"type": "adamw", "lr": 0.001},
         "runtime": {"run_dir": str(checkpoint / "run")},
     }
+
+
+@pytest.mark.parametrize("rank,world", [(-1, 4), (4, 4), (0, 2), (True, 4), (0, True)])
+def test_stage_workload_rejects_launcher_before_asset_io(monkeypatch, rank, world):
+    from parascale.parallel import DistributedParallelConfig
+    from parascale.workloads import build_causal_lm_stage_components
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("invalid topology reached tokenizer/model loading")
+
+    monkeypatch.setattr(transformers.AutoTokenizer, "from_pretrained", unexpected)
+    monkeypatch.setattr(
+        transformers.AutoModelForCausalLM, "from_pretrained", unexpected
+    )
+    with pytest.raises(ValueError, match="rank|world"):
+        build_causal_lm_stage_components(
+            {},
+            DistributedParallelConfig(dp_size=2, tp_size=2),
+            rank=rank,
+            world_size=world,
+        )
+
+
+@pytest.mark.parametrize(
+    "section,key",
+    [
+        ("model", "activation_checkpointing"),
+        ("parascale", "enable_activation_checkpointing"),
+    ],
+)
+def test_stage_workload_rejects_activation_checkpointing_before_asset_io(
+    monkeypatch, section, key
+):
+    from parascale.parallel import DistributedParallelConfig
+    from parascale.workloads import build_causal_lm_stage_components
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("unsupported activation checkpointing reached asset I/O")
+
+    monkeypatch.setattr(transformers.AutoTokenizer, "from_pretrained", unexpected)
+    config = configuration(Path("unused-model"), Path("unused-data"), Path("unused"))
+    config[section][key] = True
+    with pytest.raises(ValueError, match="activation_checkpointing"):
+        build_causal_lm_stage_components(
+            config, DistributedParallelConfig(), rank=0, world_size=1
+        )
+
+
+@pytest.mark.skipif(transformers.__version__ != "4.51.3", reason="stage dependency pin")
+@pytest.mark.parametrize(
+    "dp,tp,pp",
+    [
+        (1, 1, 1),
+        (2, 1, 1),
+        (4, 1, 1),
+        (1, 2, 1),
+        (1, 1, 2),
+        (2, 2, 1),
+        (2, 1, 2),
+        (1, 2, 2),
+    ],
+)
+def test_stage_workload_data_uses_dp_coordinates(
+    tmp_path, model_path, capsys, monkeypatch, dp, tp, pp
+):
+    from parascale.parallel import DistributedParallelConfig
+    from parascale.workloads import build_causal_lm_stage_components
+
+    model_config = transformers.LlamaConfig.from_pretrained(model_path)
+    model_config.num_hidden_layers = 2
+    model_config.attention_dropout = 0
+    transformers.LlamaForCausalLM(model_config).save_pretrained(model_path)
+    rng = random.Random(19)
+    text = "".join(
+        " ".join(rng.choices(["a", "b", "c", "d"], k=7)) + "\n" for _ in range(12)
+    )
+    data_path = prepare(tmp_path, model_path, capsys, text=text)
+    config = configuration(model_path, data_path, tmp_path / "unused")
+    layout = DistributedParallelConfig(dp_size=dp, tp_size=tp, pp_size=pp)
+    monkeypatch.setenv("RANK", "999")
+    monkeypatch.setenv("WORLD_SIZE", "999")
+
+    def premature_optimizer(*args, **kwargs):
+        pytest.fail("stage optimizer must be created after distributed wrapping")
+
+    monkeypatch.setattr("parascale.optimizers.build_optimizer", premature_optimizer)
+    samples, states, inputs, labels = [], [], [], []
+    for rank in range(layout.world_size):
+        stage, cursor, loss = build_causal_lm_stage_components(
+            config, layout, rank=rank, world_size=layout.world_size
+        )
+        replica, pipeline, _ = layout.coordinates(rank)
+        assert (cursor.rank, cursor.world_size) == (replica, dp)
+        assert stage.stage_index == pipeline
+        assert stage.tp_size == tp
+        assert all(parameter.device.type == "cpu" for parameter in stage.parameters())
+        iterator = iter(cursor)
+        batch = next(iterator)
+        samples.append(list(batch["block_ids"]))
+        inputs.append(batch["input_ids"])
+        labels.append(batch["labels"])
+        states.append(cursor.state_dict())
+        assert loss.normalization_count(batch["labels"]).item() == 14
+        expected = next(iterator)
+        cursor.load_state_dict(states[-1])
+        actual = next(iter(cursor))
+        torch.testing.assert_close(
+            actual["input_ids"], expected["input_ids"], rtol=0, atol=0
+        )
+    for left in range(layout.world_size):
+        for right in range(left + 1, layout.world_size):
+            if layout.coordinates(left)[0] == layout.coordinates(right)[0]:
+                assert samples[left] == samples[right]
+                assert states[left] == states[right]
+                torch.testing.assert_close(inputs[left], inputs[right], rtol=0, atol=0)
+                torch.testing.assert_close(labels[left], labels[right], rtol=0, atol=0)
+            else:
+                assert set(samples[left]).isdisjoint(samples[right])
+                assert states[left]["identity"] != states[right]["identity"]
+    assert os.environ["RANK"] == os.environ["WORLD_SIZE"] == "999"
+
+
+@pytest.mark.skipif(transformers.__version__ != "4.51.3", reason="stage dependency pin")
+def test_stage_workload_releases_full_model_and_preserves_partition_weights(
+    tmp_path, model_path, capsys, monkeypatch
+):
+    from parascale.parallel import DistributedParallelConfig
+    from parascale.workloads import build_causal_lm_stage_components
+
+    model_config = transformers.LlamaConfig.from_pretrained(model_path)
+    model_config.num_hidden_layers = 2
+    model_config.attention_dropout = 0
+    transformers.LlamaForCausalLM(model_config).save_pretrained(model_path)
+    data_path = prepare(tmp_path, model_path, capsys)
+    config = configuration(model_path, data_path, tmp_path / "unused")
+    original_load = transformers.AutoModelForCausalLM.from_pretrained
+    sources, unused_layers, expected_states = [], [], []
+
+    def observe_load(*args, **kwargs):
+        source = original_load(*args, **kwargs)
+        pipeline = len(sources)
+        sources.append(weakref.ref(source))
+        unused_layers.append(weakref.ref(source.model.layers[1 - pipeline]))
+        expected_states.append(
+            {k: v.detach().clone() for k, v in source.named_parameters()}
+        )
+        return source
+
+    monkeypatch.setattr(
+        transformers.AutoModelForCausalLM, "from_pretrained", observe_load
+    )
+    layout = DistributedParallelConfig(pp_size=2)
+    partitions = []
+    for rank in range(2):
+        stage, _, _ = build_causal_lm_stage_components(
+            config, layout, rank=rank, world_size=2
+        )
+        assert sources[-1]() is None
+        assert unused_layers[-1]() is None
+        owned = dict(stage.named_parameters())
+        for name, parameter in owned.items():
+            assert parameter.device.type == "cpu"
+            torch.testing.assert_close(
+                parameter, expected_states[-1][name], rtol=0, atol=0
+            )
+        partitions.append(set(owned))
+    assert partitions[0].isdisjoint(partitions[1])
+    assert partitions[0] | partitions[1] == set(expected_states[0])
 
 
 def test_cli_causal_lm_training_and_resume_matches_continuous(
@@ -254,7 +426,9 @@ def _distributed_resume_worker(rank, root, model_path, data_path, schedule, zero
             config["parascale"]["zero_stage"] = zero_stage
             if schedule:
                 config["training"]["scheduler"] = {
-                    "type": "cosine", "total_steps": 4, "warmup_steps": 1,
+                    "type": "cosine",
+                    "total_steps": 4,
+                    "warmup_steps": 1,
                     "min_lr_ratio": 0.1,
                 }
             config["hardware_profile"] = {"world_size": 2, "gpus_per_node": 2}
@@ -272,11 +446,19 @@ def _distributed_resume_worker(rank, root, model_path, data_path, schedule, zero
                 assert record["world_size"] == 2
                 assert record["distributed_backend"] == "gloo"
                 assert record["zero_redundancy_optimizer"] is (zero_stage == 1)
-                assert record["scheduler_bound_to_optimizer"] is (True if schedule else None)
-                assert "ZeroRedundancyOptimizer" in record["optimizer_class"] if zero_stage else "AdamW" in record["optimizer_class"]
+                assert record["scheduler_bound_to_optimizer"] is (
+                    True if schedule else None
+                )
+                assert (
+                    "ZeroRedundancyOptimizer" in record["optimizer_class"]
+                    if zero_stage
+                    else "AdamW" in record["optimizer_class"]
+                )
             if schedule:
                 assert result["scheduler"]["last_epoch"] == 4
-                assert result["scheduler"]["next_learning_rates"] == pytest.approx([0.0001])
+                assert result["scheduler"]["next_learning_rates"] == pytest.approx(
+                    [0.0001]
+                )
         if rank == 0:
             from parascale.checkpoint import CheckpointManager
 
@@ -291,15 +473,21 @@ def _distributed_resume_worker(rank, root, model_path, data_path, schedule, zero
                 )
                 for label in ("continuous", "split")
             ]
-            assert states[0]["scheduler_state_dict"] == states[1]["scheduler_state_dict"]
+            assert (
+                states[0]["scheduler_state_dict"] == states[1]["scheduler_state_dict"]
+            )
             torch.testing.assert_close(
                 states[0]["backend_state"]["optimizer_state_dict"],
                 states[1]["backend_state"]["optimizer_state_dict"],
-                rtol=0, atol=0,
+                rtol=0,
+                atol=0,
             )
             for name, value in states[0]["backend_state"]["model_state_dict"].items():
                 torch.testing.assert_close(
-                    states[1]["backend_state"]["model_state_dict"][name], value, rtol=0, atol=0
+                    states[1]["backend_state"]["model_state_dict"][name],
+                    value,
+                    rtol=0,
+                    atol=0,
                 )
         from parascale.checkpoint import CheckpointManager
         from parascale.config import ParaScaleConfig
@@ -326,7 +514,9 @@ def _distributed_resume_worker(rank, root, model_path, data_path, schedule, zero
         )
         before = {key: value.clone() for key, value in model.state_dict().items()}
         rng = torch.get_rng_state().clone()
-        with pytest.raises((ValueError, RuntimeError), match="identity|scheduler|another rank"):
+        with pytest.raises(
+            (ValueError, RuntimeError), match="identity|scheduler|another rank"
+        ):
             engine.load_checkpoint(
                 CheckpointManager(str(root / "split")),
                 2,
@@ -356,7 +546,14 @@ def test_real_two_rank_causal_lm_checkpoint_resume(
     processes = [
         context.Process(
             target=_distributed_resume_worker,
-            args=(rank, str(tmp_path), str(model_path), str(data_path), schedule, zero_stage),
+            args=(
+                rank,
+                str(tmp_path),
+                str(model_path),
+                str(data_path),
+                schedule,
+                zero_stage,
+            ),
         )
         for rank in range(2)
     ]

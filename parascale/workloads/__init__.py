@@ -7,7 +7,11 @@
 
 from __future__ import annotations
 
-from .causal_lm import CausalLmSpec, build_causal_lm_components
+from .causal_lm import (
+    CausalLmSpec,
+    build_causal_lm_components,
+    build_causal_lm_stage_components,
+)
 from .clip import ClipContrastiveSpec, build_clip_contrastive_components
 from .datacomp import _iter_datacomp_tar_entries, _looks_like_supported_image
 from .ground_dino import GroundDinoSpec, build_ground_dino_components
@@ -40,6 +44,7 @@ __all__ = [
     "_looks_like_supported_image",
     "build_clip_contrastive_components",
     "build_causal_lm_components",
+    "build_causal_lm_stage_components",
     "build_ground_dino_components",
     "build_optimizer_for_model",
     "build_serving_model_from_checkpoint",

@@ -11,19 +11,22 @@ import hashlib
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from parascale.data.text import TokenBatchCursor, TokenCorpus, tokenizer_fingerprint
 from parascale.workloads.specs.causal_lm import CausalLmSpec
 
+if TYPE_CHECKING:
+    from parascale.parallel import CausalLMLoss, DistributedParallelConfig
+    from parascale.parallel.llama import LlamaStage
 
-def build_causal_lm_components(config: dict[str, Any]):
+
+def _load_source(
+    spec: CausalLmSpec, *, data_rank: int, data_world_size: int
+) -> tuple[Any, TokenBatchCursor]:
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    from parascale.optimizers import build_optimizer
-
-    spec = CausalLmSpec.from_config(config)
     if not Path(spec.model_path).is_dir():
         raise ValueError("causal_lm requires a local model directory")
     tokenizer = AutoTokenizer.from_pretrained(
@@ -32,14 +35,27 @@ def build_causal_lm_components(config: dict[str, Any]):
     corpus = TokenCorpus(
         spec.data_path, expected_tokenizer=tokenizer_fingerprint(tokenizer)
     )
-    torch.manual_seed(spec.seed)
-    hf_model = AutoModelForCausalLM.from_pretrained(
-        spec.model_path,
-        local_files_only=True,
-        trust_remote_code=False,
-        torch_dtype=torch.float32,
-        attn_implementation=spec.attention_backend,
+    batches = TokenBatchCursor(
+        corpus,
+        batch_size=spec.batch_size,
+        sequence_length=spec.sequence_length,
+        rank=data_rank,
+        world_size=data_world_size,
+        seed=spec.data_seed,
+        shuffle=spec.shuffle,
+        repeat=spec.repeat,
+        pin_memory=torch.cuda.is_available(),
+        shuffle_window_blocks=spec.shuffle_window_blocks,
     )
+    torch.manual_seed(spec.seed)
+    with torch.device("cpu"):
+        hf_model = AutoModelForCausalLM.from_pretrained(
+            spec.model_path,
+            local_files_only=True,
+            trust_remote_code=False,
+            torch_dtype=torch.float32,
+            attn_implementation=spec.attention_backend,
+        )
     if (
         corpus.manifest["max_token_id"]
         >= hf_model.get_input_embeddings().num_embeddings
@@ -53,6 +69,70 @@ def build_causal_lm_components(config: dict[str, Any]):
         hf_model.gradient_checkpointing_enable(
             gradient_checkpointing_kwargs={"use_reentrant": False}
         )
+    return hf_model, batches
+
+
+def build_causal_lm_stage_components(
+    config: dict[str, Any],
+    parallel: DistributedParallelConfig,
+    *,
+    rank: int,
+    world_size: int,
+) -> tuple[LlamaStage, TokenBatchCursor, CausalLMLoss]:
+    """Build a local CPU Llama stage and data shared only within its DP replica.
+
+    Args:
+        config: Causal-LM model/data configuration, as used by ordinary training.
+        parallel: Validated DistributedParallelConfig defining the global grid.
+        rank: Explicit global rank; launcher environment is not read or changed.
+        world_size: Actual launcher size, which must equal the configured grid.
+
+    Returns:
+        Local LlamaStage, DP-coordinate TokenBatchCursor and summed CausalLMLoss.
+        No optimizer is constructed: initialize the distributed executor first,
+        then bind the optimizer to its final local parameters. This builder does
+        not implement device execution, checkpointing or the train CLI backend.
+
+    Raises:
+        ValueError: Invalid launcher, unsupported stage/model or inconsistent data.
+        TypeError: The topology is not a DistributedParallelConfig.
+        RuntimeError: The installed Transformers version is not stage-qualified.
+    """
+    from parascale.parallel import CausalLMLoss, DistributedParallelConfig
+
+    if not isinstance(parallel, DistributedParallelConfig):
+        raise TypeError("parallel must be a DistributedParallelConfig")
+    if type(world_size) is not int or world_size < 1:
+        raise ValueError("world_size must be a positive integer")
+    parallel.validate_world_size(world_size)
+    replica, pipeline, _ = parallel.coordinates(rank)
+    spec = CausalLmSpec.from_config(config)
+    if spec.activation_checkpointing:
+        raise ValueError("Llama stages do not support activation_checkpointing")
+
+    from parascale.parallel.llama import LlamaStage
+
+    source, batches = _load_source(
+        spec, data_rank=replica, data_world_size=parallel.dp_size
+    )
+    stage = LlamaStage(
+        source.train(), pipeline, parallel.pp_size, tp_size=parallel.tp_size
+    )
+    del source
+    return stage, batches, CausalLMLoss(stage.vocab_size)
+
+
+def build_causal_lm_components(config: dict[str, Any]):
+    import torch
+
+    from parascale.optimizers import build_optimizer
+
+    spec = CausalLmSpec.from_config(config)
+    hf_model, batches = _load_source(
+        spec,
+        data_rank=int(os.environ.get("RANK", "0")),
+        data_world_size=int(os.environ.get("WORLD_SIZE", "1")),
+    )
 
     class CausalModel(torch.nn.Module):
         def __init__(self):
@@ -70,18 +150,6 @@ def build_causal_lm_components(config: dict[str, Any]):
 
     model = CausalModel()
     model.train()
-    batches = TokenBatchCursor(
-        corpus,
-        batch_size=spec.batch_size,
-        sequence_length=spec.sequence_length,
-        rank=int(os.environ.get("RANK", "0")),
-        world_size=int(os.environ.get("WORLD_SIZE", "1")),
-        seed=spec.data_seed,
-        shuffle=spec.shuffle,
-        repeat=spec.repeat,
-        pin_memory=torch.cuda.is_available(),
-        shuffle_window_blocks=spec.shuffle_window_blocks,
-    )
 
     def loss_fn(output, batch):
         return output.loss
@@ -95,6 +163,6 @@ def build_causal_lm_components(config: dict[str, Any]):
             json.dumps(effective_config, sort_keys=True).encode("utf-8")
         ).hexdigest(),
         "attention_backend": spec.attention_backend,
-        "packing": corpus.manifest["document_policy"],
+        "packing": batches.corpus.manifest["document_policy"],
     }
     return model, build_optimizer(model, config), batches, loss_fn
