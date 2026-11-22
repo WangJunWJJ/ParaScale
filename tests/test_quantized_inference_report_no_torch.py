@@ -21,6 +21,30 @@ report = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(report)
 
 
+def test_benchmark_attention_policy_is_explicit_and_defaults_to_auto():
+    from tests.benchmarks.scripts.benchmark_quantized_inference import parser
+
+    required = [
+        "--model",
+        "model",
+        "--data",
+        "eval.txt",
+        "--data-description",
+        "held-out",
+        "--output",
+        "result.json",
+    ]
+    assert parser().parse_args(required).attention_backend == "auto"
+    assert (
+        parser()
+        .parse_args([*required, "--attention-backend", "math"])
+        .attention_backend
+        == "math"
+    )
+    with pytest.raises(SystemExit):
+        parser().parse_args([*required, "--attention-backend", "unsupported"])
+
+
 def profile_event(key, device, count, cpu_us=0, device_us=0, annotation=False):
     return SimpleNamespace(
         key=key,

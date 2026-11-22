@@ -91,6 +91,12 @@ def parser():
     )
     result.add_argument("--static-cache", action="store_true")
     result.add_argument(
+        "--attention-backend",
+        choices=("auto", "math"),
+        default="auto",
+        help="Matched attention policy for all warmup, timing and quality calls",
+    )
+    result.add_argument(
         "--gemlite-gemv-autotune",
         choices=("fast", "max"),
         help="Experiment only: reset backend tuning cache and search GEMV candidates",
@@ -345,7 +351,7 @@ def fixed_length_generation(
     )
 
 
-def run_worker(args):
+def run_worker(args, attention_state):
     import torch
     import torch.nn.functional as functional
     from quantized_generation_quality import evaluate_generation
@@ -619,6 +625,7 @@ def run_worker(args):
         Path(__file__),
         Path(__file__).with_name("quantized_inference_report.py"),
         Path(__file__).with_name("quantized_generation_quality.py"),
+        Path(__file__).with_name("quantized_attention_policy.py"),
         ROOT / "parascale/quantization/inference.py",
         ROOT / "parascale/quantization/inference_config.py",
         ROOT / "parascale/quantization/inference_gemlite.py",
@@ -664,6 +671,7 @@ def run_worker(args):
             "generation_policy": "greedy_fixed_length_neutral_logits_v2",
             "generation_quality_policy": "teacher_forced_nonoverlapping_unpadded_blocks_v1",
             "attention": "sdpa",
+            "attention_policy": attention_state,
             "tf32": False,
             "source_sha256": {
                 str(p.relative_to(ROOT)): sha256(p) for p in source_files
@@ -758,7 +766,12 @@ def main():
         if args.mode == "compare":
             run_comparison(args)
         else:
-            run_worker(args)
+            from tests.benchmarks.scripts.quantized_attention_policy import (
+                attention_policy,
+            )
+
+            with attention_policy(args.attention_backend) as attention_state:
+                run_worker(args, attention_state)
     except Exception as exc:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         failure_path = args.output.with_name(f"{args.output.stem}.failure-{stamp}.json")

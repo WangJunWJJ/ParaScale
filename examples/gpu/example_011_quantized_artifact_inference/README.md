@@ -66,6 +66,16 @@ evaluation text and the canonical quantized artifact. Keep outputs outside Git.
 
 ## Diagnose Kernel Costs
 
+Use `--attention-backend math` for a matched attention-numerics experiment.
+The default `auto` preserves PyTorch's enabled SDPA backends. `math` allows only
+math SDPA and disables its optional FP16/BF16 reduction for both workers during
+warmup, timing, profiling and scoring. `contract.attention_policy` records the
+requested policy and enabled backend flags; these are dispatch constraints,
+not observed-kernel evidence. Compare each policy using a fresh output path.
+Do not combine an auto baseline with a math candidate or infer that a first-token
+quality improvement implies faster complete generation. Production defaults are
+not changed by this experiment.
+
 Every result includes `generation_profile`: CPU and CUDA self-times and call
 counts from one separate diagnostic generation. These measurements are not used
 for throughput acceptance. CPU synchronization time is not CPU compute time,
