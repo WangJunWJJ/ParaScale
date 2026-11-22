@@ -17,3 +17,7 @@ JSONL input/output and explicit eager or static-cache compilation policies.
 [Example 014](example_014_clip_strong_scaling/README.md) qualifies real CLIP
 single-/four-GPU strong scaling at a fixed global batch, with a native-HF numerical
 gate, direct PyTorch controls and optional bounded profiling.
+
+[Example 015](example_015_clip_retrieval_quality/README.md) prepares pinned,
+deduplicated image/text splits and validates real training, checkpoint reload and
+held-out multi-positive retrieval through the product inference adapter.

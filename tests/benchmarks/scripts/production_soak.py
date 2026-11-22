@@ -44,10 +44,20 @@ def rss_bytes():
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
 
 
-def hf_state_from_training(state):
+def hf_state_from_training(state, target_state=None):
     for prefix in ("module.wrapped_model.", "wrapped_model."):
         if state and all(key.startswith(prefix) for key in state):
-            return {key[len(prefix) :]: value for key, value in state.items()}
+            converted = {key[len(prefix) :]: value for key, value in state.items()}
+            if target_state is not None:
+                for name in ("logit_scale", "logit_bias"):
+                    if name in converted and name in target_state:
+                        if (
+                            converted[name].numel() != 1
+                            or target_state[name].numel() != 1
+                        ):
+                            raise ValueError("Invalid CLIP scalar storage")
+                        converted[name] = converted[name].reshape_as(target_state[name])
+            return converted
     raise ValueError("Unexpected trained CLIP state schema")
 
 
@@ -107,7 +117,9 @@ def inference_worker(args):
             weights_only=True,
         )
         state = payload["backend_state"]["model_state_dict"]
-        model._model.load_state_dict(hf_state_from_training(state), strict=True)
+        model._model.load_state_dict(
+            hf_state_from_training(state, model._model.state_dict()), strict=True
+        )
         del payload, state
     samples = []
     for shard in sorted(Path(args.data).glob("*.tar")):

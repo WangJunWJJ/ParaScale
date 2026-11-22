@@ -15,6 +15,31 @@ from parascale.config import ParaScaleConfig
 EXAMPLE_ROOT = Path(__file__).resolve().parents[1] / "examples"
 
 
+def test_clip_quality_example_freezes_real_training_budget(monkeypatch):
+    from parascale.commands.common import load_config_file
+    from parascale.workloads.specs.clip import ClipContrastiveSpec
+
+    for key, value in {
+        "PARASCALE_MODEL": "/models/clip",
+        "PARASCALE_DATA": "/data/qualified",
+        "PARASCALE_RUN_DIR": "/runs/quality",
+    }.items():
+        monkeypatch.setenv(key, value)
+    path = EXAMPLE_ROOT / "gpu/example_015_clip_retrieval_quality/train.json"
+    config = load_config_file(path)
+    runtime = ParaScaleConfig.from_dict(config["parascale"])
+    spec = ClipContrastiveSpec.from_config(config)
+    assert runtime.training_backend == "native_ddp"
+    assert runtime.data_parallel_size == 4
+    assert runtime.precision == "fp32"
+    assert spec.batch_size * runtime.data_parallel_size == 128
+    assert spec.num_batches == 50
+    assert spec.lr == 1e-6
+    assert spec.data_dir == "/data/qualified/train"
+    assert config["training"]["workload"] == "clip_contrastive"
+    assert config["training"]["checkpoint_interval"] == 50
+
+
 def _load_example_config(path: str) -> dict:
     config_path = EXAMPLE_ROOT / path / "config.json"
     return json.loads(config_path.read_text(encoding="utf-8"))
