@@ -88,6 +88,11 @@ def parser():
         "--backend", choices=("torchao_int4", "gemlite_int8"), default="torchao_int4"
     )
     result.add_argument("--static-cache", action="store_true")
+    result.add_argument(
+        "--export-profile-trace",
+        action="store_true",
+        help="Export one diagnostic generation trace outside throughput timing",
+    )
     result.add_argument("--warmup", type=int, default=10)
     result.add_argument("--iterations", type=int, default=20)
     result.add_argument("--repeats", type=int, default=5)
@@ -242,6 +247,7 @@ def fixed_length_generation(
 def run_worker(args):
     import torch
     import torch.nn.functional as functional
+    from quantized_inference_report import quantized_cuda_kernels, summarize_profile
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     from parascale.quantization import (
@@ -377,15 +383,34 @@ def run_worker(args):
             "generation": measure(torch, generate, args),
         }
         generated = generate().cpu().tolist()
+        torch.cuda.synchronize()
         with torch.profiler.profile(
             activities=[
                 torch.profiler.ProfilerActivity.CPU,
                 torch.profiler.ProfilerActivity.CUDA,
             ]
         ) as generation_trace:
+            profile_started = time.perf_counter()
             profiled_generation = generate()
             torch.cuda.synchronize()
+            profile_wall_ms = (time.perf_counter() - profile_started) * 1000
             del profiled_generation
+        profile_summary = summarize_profile(
+            generation_trace.key_averages(), wall_ms=profile_wall_ms
+        )
+        packed_cuda_kernels = quantized_cuda_kernels(
+            generation_trace.key_averages(), backend=args.backend
+        )
+        if args.export_profile_trace:
+            trace_path = args.output.with_suffix(".trace.json")
+            if trace_path.exists():
+                raise FileExistsError(
+                    f"Refusing to replace profile trace: {trace_path}"
+                )
+            trace_path.parent.mkdir(parents=True, exist_ok=True)
+            generation_trace.export_chrome_trace(str(trace_path))
+            profile_summary["trace_path"] = str(trace_path)
+            profile_summary["trace_sha256"] = sha256(trace_path)
         generation_events = sorted(
             {event.key for event in generation_trace.key_averages()}
         )
@@ -520,12 +545,11 @@ def run_worker(args):
             "_weight_int4pack_mm" in name for name in kernel_names
         ),
         "eager_profiled_int4_ops": kernel_names,
-        "kernel_verified": any(
-            "_weight_int4pack_mm" in name or "gemv_INT" in name or "gemm_INT" in name
-            for name in generation_int4_ops
-        ),
+        "kernel_verified": bool(packed_cuda_kernels),
+        "profiled_quantized_cuda_kernels": packed_cuda_kernels,
         "profiled_int4_ops": generation_int4_ops,
         "profiled_compiled_regions": compiled_regions,
+        "generation_profile": profile_summary,
         "load_seconds": load_seconds,
         "conversion_seconds": conversion_seconds,
         "generation_tokens_per_second": args.batch_size

@@ -8,6 +8,7 @@
 import copy
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -15,6 +16,153 @@ SCRIPT = Path(__file__).parent / "benchmarks/scripts/quantized_inference_report.
 spec = importlib.util.spec_from_file_location("quantized_report", SCRIPT)
 report = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(report)
+
+
+def profile_event(key, device, count, cpu_us=0, device_us=0, annotation=False):
+    return SimpleNamespace(
+        key=key,
+        device_type=SimpleNamespace(name=device),
+        count=count,
+        self_cpu_time_total=cpu_us,
+        self_device_time_total=device_us,
+        is_user_annotation=annotation,
+    )
+
+
+def test_profile_separates_cuda_activities_from_cpu_linked_device_time():
+    events = [
+        profile_event("gemm", "CPU", 2, cpu_us=40, device_us=999),
+        profile_event("gemm", "CUDA", 2, device_us=80),
+        profile_event("attention", "CUDA", 1, device_us=20),
+        profile_event("annotation", "CUDA", 1, device_us=1000, annotation=True),
+        profile_event("cudaDeviceSynchronize", "CPU", 1, cpu_us=60),
+    ]
+    actual = report.summarize_profile(events, wall_ms=2, top_k=1)
+    assert actual["cuda_activities_observed"]
+    assert actual["cuda"]["count"] == 3
+    assert actual["cuda"]["self_us"] == 100
+    assert actual["cuda"]["top"][0] == {
+        "name": "gemm",
+        "count": 2,
+        "self_us": 80,
+        "mean_self_us": 40,
+        "fraction_of_activity_time": 0.8,
+    }
+    assert actual["cuda"]["other_count"] == 1
+    assert actual["cuda"]["other_self_us"] == 20
+    assert actual["cpu"]["self_us"] == 100
+    assert actual["cpu"]["top"][0]["name"] == "cudaDeviceSynchronize"
+    assert actual["timing_used_for_throughput"] is False
+    assert actual["iterations"] == 1
+
+
+def test_empty_profile_does_not_claim_cuda_evidence():
+    actual = report.summarize_profile([], wall_ms=1)
+    assert not actual["cuda_activities_observed"]
+    assert actual["cuda"]["top"] == []
+    assert actual["cuda"]["self_us"] == 0
+
+
+def test_quantized_kernel_evidence_requires_matching_cuda_activity():
+    events = [
+        profile_event("gemm_INT_kernel", "CPU", 1, cpu_us=10),
+        profile_event("attention", "CUDA", 1, device_us=100),
+        profile_event("gemm_INT_kernel", "CUDA", 1, device_us=0),
+        profile_event("gemv_INT_kernel", "CUDA", 1, device_us=10, annotation=True),
+    ]
+    assert report.quantized_cuda_kernels(events, backend="gemlite_int8") == []
+    events.append(profile_event("gemv_INT_kernel", "CUDA", 1, device_us=1))
+    assert report.quantized_cuda_kernels(events, backend="gemlite_int8") == [
+        "gemv_INT_kernel"
+    ]
+    assert report.quantized_cuda_kernels(events, backend="torchao_int4") == []
+
+
+def test_quantized_kernel_evidence_is_not_limited_to_top_k():
+    events = [profile_event("attention", "CUDA", 100, device_us=1000)]
+    events.append(profile_event("gemm_INT_kernel", "CUDA", 1, device_us=1))
+    assert (
+        report.summarize_profile(events, wall_ms=2, top_k=1)["cuda"]["top"][0]["name"]
+        == "attention"
+    )
+    assert report.quantized_cuda_kernels(events, backend="gemlite_int8") == [
+        "gemm_INT_kernel"
+    ]
+
+
+def test_int4_kernel_evidence_excludes_cpu_operator_and_packing():
+    events = [
+        profile_event("aten::_weight_int4pack_mm", "CPU", 1, cpu_us=10),
+        profile_event("matrix_to_m16n8k16_Bint4_layout", "CUDA", 1, device_us=2),
+    ]
+    assert report.quantized_cuda_kernels(events, backend="torchao_int4") == []
+    kernel = "void at::native::tinygemm_m16n8k16_chunk_kernel<...>()"
+    events.append(profile_event(kernel, "CUDA", 1, device_us=1))
+    assert report.quantized_cuda_kernels(events, backend="torchao_int4") == [kernel]
+    assert report.quantized_cuda_kernels(events, backend="unknown") == []
+
+
+@pytest.mark.parametrize("kernel", ["gemv_INT_splitK_kernel", "gemm_splitK_INT_kernel"])
+def test_quantized_kernel_evidence_accepts_split_k(kernel):
+    events = [profile_event(kernel, "CUDA", 1, device_us=2)]
+    assert report.quantized_cuda_kernels(events, backend="gemlite_int8") == [kernel]
+
+
+@pytest.mark.parametrize("value", [-1, float("inf"), float("nan")])
+def test_profile_rejects_invalid_activity_time(value):
+    with pytest.raises(ValueError, match="profile"):
+        report.summarize_profile(
+            [profile_event("kernel", "CUDA", 1, device_us=value)], wall_ms=1
+        )
+
+
+def test_benchmark_profile_trace_is_opt_in():
+    from tests.benchmarks.scripts.benchmark_quantized_inference import parser
+
+    required = [
+        "--model",
+        "m",
+        "--data",
+        "d",
+        "--data-description",
+        "test",
+        "--output",
+        "o",
+    ]
+    assert not parser().parse_args(required).export_profile_trace
+    assert (
+        parser().parse_args([*required, "--export-profile-trace"]).export_profile_trace
+    )
+
+
+def test_profile_summary_observes_real_cuda_graph_activities():
+    torch = pytest.importorskip("torch")
+    if not torch.cuda.is_available():
+        pytest.skip("requires CUDA profiler")
+    inputs = torch.randn(256, 256, device="cuda")
+    stream = torch.cuda.Stream()
+    stream.wait_stream(torch.cuda.current_stream())
+    with torch.cuda.stream(stream):
+        for _ in range(3):
+            inputs @ inputs
+    torch.cuda.current_stream().wait_stream(stream)
+    graph = torch.cuda.CUDAGraph()
+    with torch.cuda.graph(graph):
+        output = inputs @ inputs
+    with torch.profiler.profile(
+        activities=[
+            torch.profiler.ProfilerActivity.CPU,
+            torch.profiler.ProfilerActivity.CUDA,
+        ]
+    ) as trace:
+        graph.replay()
+        torch.cuda.synchronize()
+    actual = report.summarize_profile(trace.key_averages(), wall_ms=1)
+    assert output.shape == (256, 256)
+    assert actual["cuda_activities_observed"]
+    assert actual["cuda"]["count"] > 0
+    assert actual["cuda"]["self_us"] > 0
+    assert actual["cpu"]["count"] > 0
 
 
 def result(mode, latency, ppl):
