@@ -58,7 +58,7 @@ exact executed configurations and limitations.
 exercises the experimental Python stage API for DP, TP, PP and four-GPU
 two-dimensional combinations. Residual-MLP and Llama decoder fixtures test
 numerical parity and checkpoints using synthetic inputs. This does not enable
-TP/PP in the ordinary workload CLI or certify full eight-GPU 3D parallelism.
+TP/PP in the ordinary data-parallel backends or certify full eight-GPU 3D parallelism.
 See [the API boundary](../docs/distributed_parallel.md).
 
 [010 Complete Llama parallel validation](gpu/example_010_llama_parallel/README.md)
@@ -71,3 +71,11 @@ against matched native PyTorch plans, with bounded validation NLL and explicit
 measurement exclusions.
 It also includes a fresh-process checkpoint comparison with exact per-rank
 parameter, Adam-state, RNG and continuation-loss checks on real local Llama/text.
+
+[012 Native parallel training CLI](gpu/example_012_native_parallel_training/README.md)
+connects the stage executor to `plan` and `train` with the explicit
+`native_parallel` backend. Its YAML examples use local TinyLlama and an immutable
+WikiText token corpus, bounded metrics, complete checkpoints and same-topology
+resume. It supports the admitted one/two/four-GPU layouts, not arbitrary model
+partitioning or eight-rank 3D execution. Follow its README commands instead of
+the `run.sh` convention above.

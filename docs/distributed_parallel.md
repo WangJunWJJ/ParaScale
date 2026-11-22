@@ -1,9 +1,12 @@
 # Distributed Parallel Training
 
-ParaScale has two intentionally separate execution paths:
+ParaScale distinguishes ordinary data-parallel backends from stage execution:
 
-- The workload CLI supports data parallelism and backend-managed state sharding.
-  Requests for TP, PP or generic model parallelism now fail explicitly there.
+- Ordinary workload backends support data parallelism and backend-managed state
+  sharding. Requests for TP, PP or generic model parallelism fail explicitly there.
+- The explicit `native_parallel` CLI backend connects local Llama stages and an
+  immutable token corpus to the same stage executor, with bounded update loops,
+  complete checkpoint/resume and coordinated rank-local failures.
 - The experimental Python API accepts an explicitly partitioned stage and a
   model-specific PyTorch tensor-parallel plan. It does not automatically split
   arbitrary CLIP, YOLO, VLM or Hugging Face models.
@@ -30,6 +33,35 @@ all models. Keep run results in the selected output directory. Full
 DP2 x TP2 x PP2 requires eight ranks and is rejected, not simulated on four GPUs.
 Ascend, multi-node execution, FP16/GradScaler, variable shapes, interleaved stages and
 unvalidated topology combinations are outside this implementation's boundary.
+
+## Unified Training CLI
+
+Use `training_backend: native_parallel` with `training.workload: causal_lm`, a
+local Llama checkpoint, and `data.type: token_corpus`. The
+[TinyLlama example](../examples/gpu/example_012_native_parallel_training/README.md)
+provides complete YAML files and `prepare-text`, `plan`, `train --dry-run`, and
+torchrun commands. Even one-rank execution requires torchrun metadata.
+
+`training.gradient_accumulation_steps` is the microbatch count. Global batch
+counts DP replicas only. `training.max_steps` means additional optimizer updates
+per invocation, including resume. FP32/BF16 computation, AdamW, fixed token
+blocks, and the layouts below are admitted; QAT, distillation, activation
+checkpointing, FP16 and unrelated backend options are explicitly rejected on
+this path. They remain separate capabilities of their supported runtimes.
+
+Use a dedicated trusted checkpoint root, one writer, no links or parent
+traversal, and at least two retained snapshots. The CLI writes a final complete
+checkpoint, and resumes committed data position, optimizer, scheduler and RNG
+state. Changed model/data/optimizer/implementation identities fail closed.
+Discovery does not authorize overwriting corrupt snapshots: any newer canonical
+directory blocks continuation before model construction. Preserve and explicitly
+relocate conflicting artifacts before retrying, or start a fresh run.
+
+Reported throughput covers the update loop, including coordinated data access,
+transfers, optimizer updates, checkpoint writes and retention scans. Model
+loading and identity hashing are excluded. Do not compare it directly with
+compute-only benchmark windows or interpret configuration admission as production
+quality/performance certification.
 
 ## Python API
 
@@ -432,8 +464,9 @@ concurrent filesystem mutations; this is not an adversarial filesystem sandbox.
 Pruning unlinks and synchronizes the manifest before removing declared rank
 files. An interruption may leave an uncommitted directory, which is preserved
 and reported on subsequent scans. Such orphans require deliberate cleanup.
-Full checksum scans add checkpoint I/O and are outside throughput windows.
-This API does not automatically enable retention in the training CLI.
+Full checksum scans add checkpoint I/O. Diagnostic benchmark windows exclude
+them; the `native_parallel` CLI includes them in end-to-end update-loop timing
+and invokes retention after each complete all-rank save.
 
 Add `--validate-catalog` to both fresh-process validator commands above, using
 a new checkpoint root. The baseline saves real updates0/1/2, prunes update0,
