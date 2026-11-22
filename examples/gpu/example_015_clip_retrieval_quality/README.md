@@ -132,3 +132,27 @@ alternating-order pairs of fresh product CLI launches, 50 updates each, with the
 first 10 excluded from steady-state metrics. It also reports whole-fit throughput.
 Checkpoints are disabled only in this timing protocol. A speed gate passing does
 not replace trained-checkpoint quality, distributed recovery or long-run gates.
+
+## Fresh-Process Recovery Gate
+
+The following Linux/CUDA gate requires at least 20 GiB free space. It trains
+50 updates with CPU lookahead, saves updates 25 and 50, copies the validated
+update-25 checkpoint into a separate run, and resumes 25 updates in fresh ranks.
+Training shards and model assets must match the evaluation inputs. It checks
+Adam moments and exact optimizer step counts, per-rank cursor/RNG, and held-out
+retrieval for both trained checkpoints. This is a correctness test, not a speed
+benchmark; checkpoint I/O is enabled.
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,3,4 python -m tests.benchmarks.scripts.validate_clip_prefetch_recovery \
+  --config examples/gpu/example_015_clip_retrieval_quality/train.json \
+  --model "$PARASCALE_MODEL" --data "$PARASCALE_DATA" \
+  --output "$PARASCALE_RUN_DIR/recovery"
+```
+
+The output directory must be new. Model/moment comparisons use fixed
+`atol=1e-5, rtol=1e-4`; progress and RNG must match exactly. A failed state gate
+remains a failure even when retrieval passes. Preserve its checkpoints and logs
+to localize the first divergent update instead of relaxing the tolerance.
+`--check-only` revalidates the existing artifacts without training again, binding
+retrieval reports to current checkpoint hashes and verifying the restore origin.
