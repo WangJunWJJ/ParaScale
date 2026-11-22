@@ -268,18 +268,52 @@ def fixed_length_generation(
     *,
     static_cache=False,
     compile_static=False,
+    logits_processor=None,
+    configuration_observer=None,
 ):
     from transformers import CompileConfig, GenerationConfig
 
+    neutral = {
+        "do_sample": False,
+        "eos_token_id": None,
+        "forced_bos_token_id": None,
+        "forced_eos_token_id": None,
+        "repetition_penalty": 1.0,
+        "encoder_repetition_penalty": 1.0,
+        "no_repeat_ngram_size": 0,
+        "encoder_no_repeat_ngram_size": 0,
+        "bad_words_ids": None,
+        "suppress_tokens": None,
+        "begin_suppress_tokens": None,
+        "sequence_bias": None,
+        "watermarking_config": None,
+        "renormalize_logits": False,
+        "remove_invalid_values": False,
+        "token_healing": False,
+        "guidance_scale": 1.0,
+        "exponential_decay_length_penalty": None,
+        "max_time": None,
+        "stop_strings": None,
+        "output_scores": False,
+        "output_logits": False,
+        "output_attentions": False,
+        "output_hidden_states": False,
+    }
+    # Newer HF versions merge defaults before applying kwargs. Empty containers
+    # prevent conflicting token restrictions during that intermediate validation.
     config = GenerationConfig(
-        do_sample=False,
+        **{
+            **neutral,
+            "bad_words_ids": [],
+            "suppress_tokens": [],
+            "begin_suppress_tokens": [],
+            "sequence_bias": {},
+        },
         num_beams=1,
         num_return_sequences=1,
         return_dict_in_generate=False,
         max_new_tokens=new_tokens,
         min_new_tokens=new_tokens,
-        eos_token_id=None,
-        forced_eos_token_id=None,
         pad_token_id=pad_token_id,
         use_cache=True,
         cache_implementation="static" if static_cache else None,
@@ -292,22 +326,34 @@ def fixed_length_generation(
         if "use_model_defaults" in signature(model.generate).parameters
         else {}
     )
+    if configuration_observer is not None:
+        # Diagnostic snapshot only; do not mutate the model or instrument forward.
+        resolved, _ = model._prepare_generation_config(config, **defaults, **neutral)
+        configuration_observer(json.loads(resolved.to_json_string(use_diff=False)))
     # Explicit None kwargs prevent EOS defaults from being filled by the model.
     return model.generate(
         input_ids=prompt,
         attention_mask=attention,
         generation_config=config,
         **defaults,
-        do_sample=False,
-        eos_token_id=None,
-        forced_eos_token_id=None,
+        **(
+            {"logits_processor": logits_processor}
+            if logits_processor is not None
+            else {}
+        ),
+        **neutral,
     )
 
 
 def run_worker(args):
     import torch
     import torch.nn.functional as functional
-    from quantized_inference_report import quantized_cuda_kernels, summarize_profile
+    from quantized_generation_quality import evaluate_generation
+    from quantized_inference_report import (
+        compiled_generation_regions,
+        quantized_cuda_kernels,
+        summarize_profile,
+    )
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     from parascale.quantization import (
@@ -491,9 +537,7 @@ def run_worker(args):
             or "gemv_INT" in name
             or "gemm_INT" in name
         ]
-        compiled_regions = [
-            name for name in generation_events if "compiled" in name.lower()
-        ]
+        compiled_regions = compiled_generation_regions(generation_trace.key_averages())
         # Non-overlapping fixed-context blocks. Same tokens for both variants;
         # the first token of each block has no preceding context and is omitted.
         total_nll, count = 0.0, 0
@@ -514,6 +558,39 @@ def run_worker(args):
         perplexity = math.exp(total_nll / count)
         if not math.isfinite(perplexity):
             raise RuntimeError("Nonfinite perplexity; accuracy validation failed")
+        generation_config_snapshot = {}
+
+        def observe_generation_config(resolved):
+            if generation_config_snapshot and generation_config_snapshot != resolved:
+                raise RuntimeError(
+                    "Generation configuration changed between quality segments"
+                )
+            generation_config_snapshot.update(resolved)
+
+        generation_quality = evaluate_generation(
+            lambda quality_prompt, processor: fixed_length_generation(
+                model,
+                quality_prompt,
+                torch.ones_like(quality_prompt),
+                args.new_tokens,
+                tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0,
+                static_cache=args.static_cache,
+                compile_static=args.static_cache and args.compile,
+                logits_processor=[processor],
+                configuration_observer=observe_generation_config,
+            ),
+            evaluation,
+            prompt_length=args.sequence_length,
+            new_tokens=args.new_tokens,
+            batch_size=args.batch_size,
+            device="cuda",
+            profile_cuda=True,
+            backend=args.backend,
+        )
+        generation_quality["generation_config"] = generation_config_snapshot
+        generation_quality["generation_config_stage"] = (
+            "resolved_defaults_snapshot_before_length_expansion"
+        )
     packages = {}
     for package in (
         "torch",
@@ -541,6 +618,7 @@ def run_worker(args):
     source_files = [
         Path(__file__),
         Path(__file__).with_name("quantized_inference_report.py"),
+        Path(__file__).with_name("quantized_generation_quality.py"),
         ROOT / "parascale/quantization/inference.py",
         ROOT / "parascale/quantization/inference_config.py",
         ROOT / "parascale/quantization/inference_gemlite.py",
@@ -583,7 +661,8 @@ def run_worker(args):
             "iterations": args.iterations,
             "repeats": args.repeats,
             "activation_dtype": "bfloat16",
-            "generation_policy": "greedy_fixed_length_no_model_defaults",
+            "generation_policy": "greedy_fixed_length_neutral_logits_v2",
+            "generation_quality_policy": "teacher_forced_nonoverlapping_unpadded_blocks_v1",
             "attention": "sdpa",
             "tf32": False,
             "source_sha256": {
@@ -609,6 +688,7 @@ def run_worker(args):
             "tokens": count,
             "generated_token_ids": generated,
         },
+        "generation_quality": generation_quality,
         "timing": timings,
         "conversion": conversion,
         "eager_kernel_verified": any(
@@ -664,6 +744,12 @@ def main():
             raise ValueError(f"--{key.replace('_', '-')} must be positive")
     if args.sequence_length < 2 or args.eval_tokens < 2:
         raise ValueError("sequence length and evaluation tokens must be >= 2")
+    if args.new_tokens < 2:
+        raise ValueError(
+            "At least two new tokens are required to verify decode quality"
+        )
+    if args.eval_tokens < args.batch_size * (args.sequence_length + args.new_tokens):
+        raise ValueError("Evaluation tokens must cover a full generation quality batch")
     if args.eval_offset < 0:
         raise ValueError("--eval-offset must be nonnegative")
     if args.iterations * args.repeats < 20:

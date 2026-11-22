@@ -50,9 +50,16 @@ evaluation text and the canonical quantized artifact. Keep outputs outside Git.
 - This comparison isolates execution changes, not quality loss from PTQ/QAT.
   Also inspect the PTQ/QAT validator's comparison against the original float
   model and, for QAT attribution, a matched unquantized fine-tuning control.
-- Perplexity is scored with full-context forward calls. With static-cache
-  generation it does not qualify the compiled, one-token decode path; inspect
-  generated outputs and validate that path separately before deployment.
+- Quality checks include full-context perplexity and teacher-forced likelihood
+  through the same generation/cache/compile path. The first token, subsequent
+  decode tokens and combined scores must each meet the quality threshold.
+  `generation_quality` records exact scored counts, discarded tail tokens,
+  prompt/target hashes and a resolved-defaults configuration snapshot taken
+  before generation length expansion. Missing or inconsistent evidence fails
+  the gate; older reports without generation quality cannot pass it.
+- Teacher forcing uses complete, non-overlapping, unpadded corpus blocks and
+  neutral logits settings. It checks conditional likelihood, not free-running
+  task quality. Validate generated responses separately before deployment.
 - Use validation for configuration selection. Freeze the settings before a
   separate test-split evaluation. Small-model, short-sequence or high-batch
   results do not imply acceleration on different workloads.
@@ -65,6 +72,12 @@ for throughput acceptance. CPU synchronization time is not CPU compute time,
 and summed CUDA activity duration is not GPU utilization. Add
 `--export-profile-trace` to export Chrome traces alongside the worker reports;
 existing trace files are not overwritten.
+
+The first teacher-forced segment also records decode execution evidence after
+synchronizing and excluding prefill. It must observe packed CUDA kernels and,
+when compilation is requested, compiled execution regions. This diagnostic
+includes scoring and token-selection work and is not pure model decode latency.
+Neither quality scoring nor its profiler is included in throughput timings.
 
 For batch-size 1 only, repeat the comparison with
 `--gemlite-gemv-autotune fast` and `--gemlite-gemv-autotune max`, using different

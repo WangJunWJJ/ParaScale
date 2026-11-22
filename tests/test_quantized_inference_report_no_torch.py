@@ -8,6 +8,7 @@
 import copy
 import importlib.util
 import json
+import math
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -242,11 +243,39 @@ def test_profile_summary_observes_real_cuda_graph_activities():
 
 
 def result(mode, latency, ppl):
+    generation_quality = {
+        "segments": 1,
+        "discarded_tokens": 0,
+        "prompt_sha256": "prompt",
+        "target_sha256": "targets",
+        "generation_config": {"do_sample": False, "max_new_tokens": 4},
+        "execution_evidence": {
+            "prefill_excluded": True,
+            "compiled_regions": [],
+            "quantized_cuda_kernels": ["tinygemm_m16n8k16_chunk_kernel"]
+            if mode == "int4"
+            else [],
+        },
+    }
+    for name, count in (("first_token", 1), ("decode", 3), ("all", 4)):
+        generation_quality[name] = {
+            "tokens": count,
+            "nll_sum": count * math.log(ppl),
+            "perplexity": ppl,
+        }
     return {
         "mode": mode,
-        "contract": {"model_sha256": "abc", "data_sha256": "def", "batch_size": 1},
+        "contract": {
+            "model_sha256": "abc",
+            "data_sha256": "def",
+            "batch_size": 1,
+            "new_tokens": 4,
+            "sequence_length": 2,
+            "eval_tokens_requested": 6,
+        },
         "environment": {"gpu_uuid": "GPU-1", "torch": "2.9.1"},
         "quality": {"perplexity": ppl, "tokens": 1000},
+        "generation_quality": generation_quality,
         "timing": {"generation": {"wall_ms": [latency] * 20}},
         "conversion": (
             {"converted_layers": ["linear"], "execution": "int4_weight_only_fused_bf16"}
@@ -264,6 +293,69 @@ def test_real_speedup_and_quality_must_both_pass():
     assert summary["engineering_gate_passed"]
     assert summary["speedup"] == pytest.approx(4 / 3)
     candidate["quality"]["perplexity"] = 11
+    assert not report.compare_results(baseline, candidate)["engineering_gate_passed"]
+
+
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        "missing",
+        "decode",
+        "hash",
+        "tokens",
+        "kernel",
+        "truncated",
+        "negative_tail",
+        "missing_length",
+        "prefill_only",
+        "annotation",
+        "configuration",
+        "null_evidence",
+        "list_evidence",
+    ],
+)
+def test_generation_quality_is_required_even_when_prefill_quality_passes(invalid):
+    baseline, candidate = result("bf16", 100, 10), result("int4", 75, 10)
+    quality = candidate["generation_quality"]
+    if invalid == "missing":
+        del candidate["generation_quality"]
+    elif invalid == "decode":
+        quality["decode"]["perplexity"] = 12
+        quality["decode"]["nll_sum"] = 3 * math.log(12)
+        quality["all"]["nll_sum"] = (
+            quality["first_token"]["nll_sum"] + quality["decode"]["nll_sum"]
+        )
+        quality["all"]["perplexity"] = math.exp(quality["all"]["nll_sum"] / 4)
+    elif invalid == "hash":
+        quality["target_sha256"] = "other"
+    elif invalid == "tokens":
+        quality["decode"]["tokens"] = 2
+    elif invalid == "kernel":
+        quality["execution_evidence"]["quantized_cuda_kernels"] = []
+    elif invalid == "truncated":
+        for item in (baseline, candidate):
+            item["contract"]["eval_tokens_requested"] = 600
+    elif invalid == "negative_tail":
+        for item in (baseline, candidate):
+            item["generation_quality"]["discarded_tokens"] = -1
+    elif invalid == "missing_length":
+        for item in (baseline, candidate):
+            del item["contract"]["sequence_length"]
+    elif invalid == "prefill_only":
+        quality["execution_evidence"]["prefill_excluded"] = False
+    elif invalid == "configuration":
+        quality["generation_config"]["do_sample"] = True
+    elif invalid == "null_evidence":
+        quality["execution_evidence"] = None
+    elif invalid == "list_evidence":
+        quality["execution_evidence"] = []
+    else:
+        for item in (baseline, candidate):
+            item["contract"]["compile"] = True
+            item["profiled_compiled_regions"] = ["Torch-Compiled Region"]
+            item["generation_quality"]["execution_evidence"]["compiled_regions"] = [
+                "user compiled annotation"
+            ]
     assert not report.compare_results(baseline, candidate)["engineering_gate_passed"]
 
 
@@ -309,6 +401,10 @@ def test_requested_compile_requires_observed_compiled_regions():
     baseline["profiled_compiled_regions"] = candidate["profiled_compiled_regions"] = [
         "Torch-Compiled Region"
     ]
+    for item in (baseline, candidate):
+        item["generation_quality"]["execution_evidence"]["compiled_regions"] = [
+            "Torch-Compiled Region"
+        ]
     assert report.compare_results(baseline, candidate)["engineering_gate_passed"]
 
 
@@ -388,6 +484,9 @@ def test_artifact_comparison_requires_preserved_stored_quantization(missing):
         stored_codes_and_scales_preserved=True,
         requantized=False,
     )
+    candidate["generation_quality"]["execution_evidence"]["quantized_cuda_kernels"] = [
+        "gemv_INT_splitK_kernel"
+    ]
     for item in (baseline, candidate):
         item["contract"]["reference_artifact"] = {"sha256": "artifact-hash"}
     assert report.compare_results(baseline, candidate)["engineering_gate_passed"]
