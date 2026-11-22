@@ -350,11 +350,15 @@ class DistributedTrainer:
                     with autocast_context(self.precision, self.device):
                         prediction = self.execution_module(batch)
                         loss = self._microbatch_loss(prediction, target)
+                    if not return_outputs:
+                        # Autograd owns required tensors; avoid retaining extra logits.
+                        del prediction
                     loss.backward()
                 losses.append(loss.detach())
                 if return_outputs:
                     outputs.append(prediction.detach())
-                del prediction, loss
+                    del prediction
+                del loss
             output = torch.cat(outputs) if return_outputs else None
         elif self.pp_rank == 0:
             self.schedule.step(inputs, return_outputs=return_outputs)
