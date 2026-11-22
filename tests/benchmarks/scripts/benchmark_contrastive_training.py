@@ -12,6 +12,7 @@ import math
 import os
 import sys
 import time
+from contextlib import nullcontext
 from datetime import timedelta
 from pathlib import Path
 
@@ -36,6 +37,25 @@ from tests.benchmarks.scripts.validate_contrastive_training import (
 )
 
 WARMUP, WINDOWS, STEPS = 10, 3, 50
+
+
+def profile_run(directory, stem, rank):
+    """Optionally capture three warmed-up updates, without changing the workload."""
+    if directory is None:
+        return nullcontext(None)
+    directory.mkdir(parents=True, exist_ok=True)
+    trace = directory / f"{stem}.rank{rank}.trace.json"
+    if trace.exists():
+        raise FileExistsError(trace)
+    return torch.profiler.profile(
+        activities=[
+            torch.profiler.ProfilerActivity.CPU,
+            torch.profiler.ProfilerActivity.CUDA,
+        ],
+        schedule=torch.profiler.schedule(wait=WARMUP, warmup=1, active=3, repeat=1),
+        on_trace_ready=lambda profiler: profiler.export_chrome_trace(str(trace)),
+        record_shapes=True,
+    )
 
 
 def runtime_config(world):
@@ -91,8 +111,9 @@ def finite_state(model, optimizer):
 
 
 class Timing:
-    def __init__(self, model, optimizer, device):
+    def __init__(self, model, optimizer, device, profiler=None):
         self.model, self.optimizer, self.device = model, optimizer, device
+        self.profiler = profiler
         self.index, self.windows, self.steps, self.losses = 0, [], [], []
 
     def start(self):
@@ -135,9 +156,11 @@ class Timing:
                 raise FloatingPointError("nonfinite loss on a rank")
             finite_state(self.model, self.optimizer)
             self.steps, self.losses = [], []
+        if self.profiler is not None:
+            self.profiler.step()
 
 
-def run(args, rank, world, device):
+def run(args, rank, world, device, profiler=None):
     batch, data = load_batch(args)
     identities = [None] * world
     dist.all_gather_object(identities, data)
@@ -188,7 +211,7 @@ def run(args, rank, world, device):
     optimizer = torch.optim.SGD(
         model.parameters(), lr=1e-4, momentum=0.9, foreach=False
     )
-    timing = Timing(hf, optimizer, device)
+    timing = Timing(hf, optimizer, device, profiler)
     total = WARMUP + WINDOWS * STEPS
     torch.manual_seed(42)
     if args.implementation == "parascale":
@@ -260,6 +283,7 @@ def main():
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--data-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--profile-dir", type=Path)
     parser.add_argument("--global-batch", type=int, choices=[32], default=32)
     args = parser.parse_args()
     if args.output.exists() or not args.model.is_dir() or not args.data_dir.is_dir():
@@ -276,7 +300,10 @@ def main():
     torch.set_float32_matmul_precision("highest")
     dist.init_process_group("nccl", timeout=timedelta(seconds=300))
     try:
-        result, provenance = run(args, rank, world, torch.device("cuda", local))
+        with profile_run(args.profile_dir, args.output.stem, rank) as profiler:
+            result, provenance = run(
+                args, rank, world, torch.device("cuda", local), profiler
+            )
         results = [None] * world
         dist.all_gather_object(results, result)
         if len({r["source_sha256"] for r in results}) != 1:
@@ -295,6 +322,10 @@ def main():
         ]
         report = {
             "status": "passed",
+            "measurement_kind": (
+                "diagnostic_profile" if args.profile_dir else "throughput"
+            ),
+            "performance_claim_eligible": args.profile_dir is None,
             "implementation": args.implementation,
             "world_size": world,
             "global_batch": 32,

@@ -10,6 +10,9 @@ import pytest
 pytest.importorskip("torch")
 pytest.importorskip("transformers")
 
+from tests.benchmarks.scripts import (
+    benchmark_contrastive_training as benchmark,  # noqa: E402
+)
 from tests.benchmarks.scripts.benchmark_contrastive_training import (
     runtime_config,  # noqa: E402
 )
@@ -25,3 +28,37 @@ def test_runtime_configuration_is_valid_and_bounded(world):
     assert config.precision == "fp32"
     assert config.ddp_comm_hook == "none"
     assert config.grad_clip_norm is None
+
+
+def test_profile_disabled_is_noop():
+    with benchmark.profile_run(None, "unused", 0) as profiler:
+        assert profiler is None
+
+
+def test_profile_is_bounded_and_rank_specific(monkeypatch, tmp_path):
+    captured = {}
+
+    def profile(**kwargs):
+        captured.update(kwargs)
+        return "profile-context"
+
+    monkeypatch.setattr(benchmark.torch.profiler, "profile", profile)
+    assert benchmark.profile_run(tmp_path, "screen", 3) == "profile-context"
+    schedule = captured["schedule"]
+    action = benchmark.torch.profiler.ProfilerAction
+    assert [schedule(i) for i in (0, 9, 10, 11, 12, 13, 14)] == [
+        action.NONE,
+        action.NONE,
+        action.WARMUP,
+        action.RECORD,
+        action.RECORD,
+        action.RECORD_AND_SAVE,
+        action.NONE,
+    ]
+
+    class Trace:
+        def export_chrome_trace(self, path):
+            captured["path"] = path
+
+    captured["on_trace_ready"](Trace())
+    assert captured["path"] == str(tmp_path / "screen.rank3.trace.json")
