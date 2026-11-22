@@ -33,6 +33,15 @@ from .datacomp import (
 
 
 def build_clip_contrastive_components(spec: ClipContrastiveSpec):
+    if spec.cpu_prefetch and (
+        spec.model_type not in {"hf_clip", "openai_clip", "siglip", "hf_siglip"}
+        or not spec.streaming
+        or spec.num_workers != 0
+        or spec.cuda_prefetch
+    ):
+        raise ValueError(
+            "CPU lookahead requires stateful single-worker pretrained CLIP/SigLIP input without CUDA prefetch"
+        )
     torch = _require_torch()
     import torch.nn as nn
     import torch.optim as optim
@@ -364,7 +373,12 @@ def _build_hf_clip_contrastive_components(torch: Any, spec: ClipContrastiveSpec)
     ):
         from parascale.data.wds_cursor import WdsCursorBatches
 
-        batches = WdsCursorBatches(spec, prepare_batch, paths=_datacomp_tar_paths(spec))
+        batches = WdsCursorBatches(
+            spec,
+            prepare_batch,
+            paths=_datacomp_tar_paths(spec),
+            prefetch=spec.cpu_prefetch,
+        )
     else:
         batches = (
             prepare_batch(samples)
