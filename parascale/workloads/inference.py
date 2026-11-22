@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, Iterable, List, Tuple
 
 from parascale.runtime.inference.postprocess import (
     DetectionPostprocessConfig,
@@ -20,9 +20,13 @@ from parascale.runtime.inference.postprocess import (
 
 def build_inference_components(
     config_data: Dict[str, Any],
-) -> Tuple[Any, List[Any], str]:
+) -> Tuple[Any, Iterable[Any], str]:
     inference = _section(config_data, "inference")
     workload = str(inference.get("workload", "clip_synthetic"))
+    if workload == "causal_lm":
+        from .causal_lm_inference import build_causal_lm_inference_components
+
+        return build_causal_lm_inference_components(config_data)
     batch_size = int(inference.get("batch_size", 2) or 2)
     num_batches = int(inference.get("num_batches", 1) or 1)
     if workload in {"clip_synthetic", "clip", "clip_embedding"}:

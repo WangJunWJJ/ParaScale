@@ -25,7 +25,9 @@ def _load_source(
     spec: CausalLmSpec, *, data_rank: int, data_world_size: int
 ) -> tuple[Any, TokenBatchCursor]:
     import torch
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoTokenizer
+
+    from parascale.workloads.causal_lm_model import load_causal_lm_model
 
     if not Path(spec.model_path).is_dir():
         raise ValueError("causal_lm requires a local model directory")
@@ -48,14 +50,9 @@ def _load_source(
         shuffle_window_blocks=spec.shuffle_window_blocks,
     )
     torch.manual_seed(spec.seed)
-    with torch.device("cpu"):
-        hf_model = AutoModelForCausalLM.from_pretrained(
-            spec.model_path,
-            local_files_only=True,
-            trust_remote_code=False,
-            torch_dtype=torch.float32,
-            attn_implementation=spec.attention_backend,
-        )
+    hf_model = load_causal_lm_model(
+        spec.model_path, attention_backend=spec.attention_backend
+    ).model
     if (
         corpus.manifest["max_token_id"]
         >= hf_model.get_input_embeddings().num_embeddings
@@ -64,7 +61,6 @@ def _load_source(
     maximum = getattr(hf_model.config, "max_position_embeddings", None)
     if maximum is not None and spec.sequence_length > maximum:
         raise ValueError("sequence_length exceeds model max_position_embeddings")
-    hf_model.config.use_cache = False
     if spec.activation_checkpointing:
         hf_model.gradient_checkpointing_enable(
             gradient_checkpointing_kwargs={"use_reentrant": False}
@@ -131,9 +127,8 @@ def build_causal_lm_stage_components(
 
 
 def build_causal_lm_components(config: dict[str, Any]):
-    import torch
-
     from parascale.optimizers import build_optimizer
+    from parascale.workloads.causal_lm_model import CausalLmModel
 
     spec = CausalLmSpec.from_config(config)
     hf_model, batches = _load_source(
@@ -142,21 +137,9 @@ def build_causal_lm_components(config: dict[str, Any]):
         data_world_size=int(os.environ.get("WORLD_SIZE", "1")),
     )
 
-    class CausalModel(torch.nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.model = hf_model
-            self.config = hf_model.config
-
-        def forward(self, input_ids, labels=None, attention_mask=None, **metadata):
-            return self.model(
-                input_ids=input_ids,
-                labels=labels,
-                attention_mask=attention_mask,
-                use_cache=False,
-            )
-
-    model = CausalModel()
+    model = CausalLmModel(
+        hf_model, tokenizer_identity=batches.corpus.manifest["tokenizer"]
+    )
     model.train()
 
     def loss_fn(output, batch):

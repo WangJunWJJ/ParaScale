@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "model": {"pretrained_model_name_or_path": "${PARASCALE_MODEL}"},
+  "data": {"type": "prompts_jsonl", "path": "${PARASCALE_PROMPTS}"},
+  "runtime": {"device": "cuda:0", "run_dir": "${PARASCALE_RUN_DIR}"},
+  "inference": {
+    "workload": "causal_lm",
+    "execution": "float",
+    "precision": "bf16",
+    "batch_size": 1,
+    "max_input_tokens": 128,
+    "max_new_tokens": 128,
+    "warmup_steps": 3,
+    "max_outputs": 0,
+    "output_jsonl": "${PARASCALE_RUN_DIR}/generations.jsonl",
+    "attention_policy": "math",
+    "cache_implementation": "static",
+    "compile_mode": "max-autotune"
+  }
+}

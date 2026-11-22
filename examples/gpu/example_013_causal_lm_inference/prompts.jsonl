@@ -1,0 +1,3 @@
+{"id":"definition","prompt":"Distributed training is"}
+{"id":"comparison","prompt":"The difference between data parallelism and model parallelism is"}
+{"id":"recovery","prompt":"A reliable training checkpoint should contain"}

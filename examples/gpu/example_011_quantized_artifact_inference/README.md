@@ -11,27 +11,31 @@ Passing layer tests is not production or model-quality qualification.
 - Linux CUDA SM80+ and the pinned [INT8 environment](../../../docs/quantized_inference.md).
 - Local Hugging Face Llama architecture configuration and tokenizer matching the
   exported artifact. No remote model code or implicit download is used.
-- A per-channel, weight-only INT8 artifact from [PTQ](../example_005_llama_ptq/README.md)
-  or [QAT](../example_006_llama_qat/README.md). INT4 and activation quantization are
-  not supported by this execution path.
+- A per-channel, weight-only INT8 artifact exported by the current product
+  `causal_lm` workload, as shown in
+  [Example 013](../example_013_causal_lm_inference/README.md). Bare-HF benchmark and
+  old nested-wrapper artifacts must be regenerated; strict signatures are not
+  rewritten. INT4 and activation quantization are unsupported in this path.
 - Independent evaluation text, not the calibration or QAT training corpus.
 
 ## Run the Comparison
 
-Use the fixed SmolLM2/WikiText assets described in the PTQ/QAT examples, or replace
-all paths with a matching local model and dataset. Set `ARTIFACT` to the actual
-exported `ptq-8bit.pt` or `qat-8bit.pt`, and use a fresh output filename:
+Use matching local Llama-family/WikiText assets. Set `ARTIFACT` to the actual
+product-exported artifact and use a fresh output filename. The original float
+weight files are included in benchmark provenance, although artifact loading
+itself constructs the template from configuration and tokenizer only:
 
 ```bash
 ASSET_DIR=/data/production-assets
-ARTIFACT=/data/quantized-model/qat-8bit.pt
+ARTIFACT=/data/artifacts/tinyllama-product-qat.pt
 CUDA_VISIBLE_DEVICES=0 OUTPUT_FILE=/data/results/qat8-validation.json \
 bash examples/gpu/example_011_quantized_artifact_inference/run.sh \
-  --model "$ASSET_DIR/smollm2-135m" --reference-artifact "$ARTIFACT" \
+  --model "$ASSET_DIR/tinyllama-1.1b" --reference-artifact "$ARTIFACT" \
   --data "$ASSET_DIR/wikitext/validation.txt" \
   --data-description WikiText2-validation \
   --sequence-length 128 --batch-size 1 --new-tokens 128 \
-  --eval-tokens 8192 --warmup 3 --iterations 5 --repeats 4
+  --eval-tokens 32768 --warmup 3 --iterations 5 --repeats 4 \
+  --attention-backend math
 ```
 
 The launcher resolves the repository root and supports `PYTHON` and `--help`.

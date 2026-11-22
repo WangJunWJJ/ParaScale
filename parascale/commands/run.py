@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 from typing import Any, Dict
 
@@ -145,6 +146,10 @@ def run_benchmark_from_config(config_data: Dict[str, Any]) -> Dict[str, Any]:
 
 def run_inference_from_config(config_data: Dict[str, Any]) -> Dict[str, Any]:
     model, batches, task = build_inference_components(config_data)
+    if task == "causal_lm_generation":
+        from parascale.runtime.inference.causal_lm import run_causal_lm_inference
+
+        return attach_runtime_evidence(run_causal_lm_inference(model, batches))
     runtime = section(config_data, "runtime")
     inference = section(config_data, "inference")
     device, memory_getter = _resolve_inference_device(runtime)
@@ -379,6 +384,18 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
 def cmd_infer(args: argparse.Namespace) -> int:
     config_data = load_config_file(args.config)
+    causal = section(config_data, "inference").get("workload") == "causal_lm"
+    if causal:
+        from parascale.runtime.inference.causal_lm import validate_command_paths
+        from parascale.workloads.specs.causal_lm_inference import CausalLmInferenceSpec
+
+        spec = CausalLmInferenceSpec.from_config(config_data)
+        validate_command_paths(
+            spec,
+            config_path=args.config,
+            summary_path=args.output,
+            run_dir=_command_run_directory(config_data, args.output, "infer"),
+        )
     config_artifacts = _write_command_config_artifacts(
         config_data,
         output_path=args.output,
@@ -388,7 +405,12 @@ def cmd_infer(args: argparse.Namespace) -> int:
     payload = run_inference_from_config(config_data)
     payload["config_artifacts"] = config_artifacts
     attach_runtime_evidence(payload)
-    emit_json(payload, args.output)
+    if causal and args.output:
+        with Path(args.output).open("x", encoding="utf-8") as stream:
+            json.dump(payload, stream, indent=2, ensure_ascii=False, allow_nan=False)
+            stream.write("\n")
+    else:
+        emit_json(payload, args.output)
     return 0
 
 
@@ -413,6 +435,25 @@ def cmd_benchmark(args: argparse.Namespace) -> int:
     return 0
 
 
+def _command_run_directory(
+    config_data: Dict[str, Any],
+    output_path: str | None,
+    mode: str,
+) -> Path:
+    """Choose the command run directory without writing any files."""
+    runtime = config_data.get("runtime")
+    if not isinstance(runtime, dict):
+        runtime = {}
+        config_data["runtime"] = runtime
+    configured = runtime.get("run_dir")
+    if configured:
+        return Path(str(configured))
+    output = Path(output_path) if output_path else None
+    directory = output.parent / output.stem if output else Path("runs") / mode
+    runtime["run_dir"] = str(directory)
+    return directory
+
+
 def _write_command_config_artifacts(
     config_data: Dict[str, Any],
     *,
@@ -420,20 +461,7 @@ def _write_command_config_artifacts(
     mode: str,
     dry_run: bool,
 ) -> Dict[str, str | None]:
-    runtime = config_data.get("runtime")
-    if not isinstance(runtime, dict):
-        runtime = {}
-        config_data["runtime"] = runtime
-    configured = runtime.get("run_dir")
-    if configured:
-        run_dir = Path(str(configured))
-    elif output_path:
-        output = Path(output_path)
-        run_dir = output.parent / output.stem
-        runtime["run_dir"] = str(run_dir)
-    else:
-        run_dir = Path("runs") / mode
-        runtime["run_dir"] = str(run_dir)
+    run_dir = _command_run_directory(config_data, output_path, mode)
     resolution = config_data.get("_resolution", {})
     emergency = (
         dict(resolution.get("emergency_overrides", {}))

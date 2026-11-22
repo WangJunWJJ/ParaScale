@@ -3,7 +3,7 @@
 # @Author : Wang Jun
 # @Email: wj_xd@foxmail.com
 
-"""Scoped attention selection for isolated inference benchmark workers."""
+"""Scoped attention selection for isolated inference workers."""
 
 from contextlib import contextmanager
 

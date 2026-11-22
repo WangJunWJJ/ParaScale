@@ -1,5 +1,20 @@
 # Fused INT8 and INT4 inference
 
+## Product Causal-LM Entry Point
+
+[Example 013](../examples/gpu/example_013_causal_lm_inference/README.md) uses
+`parascale infer` for single-device local Llama generation with floating weights
+or product-exported PTQ/QAT artifacts. Loading, bounded prompt/response streams,
+actual generated-token accounting and explicit cache/compile policy share the
+normal inference runtime. This is offline generation, not concurrent serving.
+
+Artifacts now use the stable `CausalLmModel` identity with a tokenizer-bound
+signature. Regenerate historical nested-wrapper or bare-HF benchmark artifacts;
+they are not interchangeable with product artifacts. Reference inference is a
+correctness path, not a speed baseline. A product wrapper change requires fresh
+CUDA quality/performance qualification even when the underlying kernels have
+passed earlier tests. Do not infer a production SLA from the smoke examples.
+
 ## Experimental INT8 path
 
 **Experimental: layer correctness is not production or model-quality

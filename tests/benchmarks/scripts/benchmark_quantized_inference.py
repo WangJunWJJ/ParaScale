@@ -27,7 +27,6 @@ import tempfile
 import time
 import traceback
 from datetime import datetime, timezone
-from inspect import signature
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -277,77 +276,20 @@ def fixed_length_generation(
     logits_processor=None,
     configuration_observer=None,
 ):
-    from transformers import CompileConfig, GenerationConfig
+    from parascale.runtime.inference.generation import generate_causal_tokens
 
-    neutral = {
-        "do_sample": False,
-        "eos_token_id": None,
-        "forced_bos_token_id": None,
-        "forced_eos_token_id": None,
-        "repetition_penalty": 1.0,
-        "encoder_repetition_penalty": 1.0,
-        "no_repeat_ngram_size": 0,
-        "encoder_no_repeat_ngram_size": 0,
-        "bad_words_ids": None,
-        "suppress_tokens": None,
-        "begin_suppress_tokens": None,
-        "sequence_bias": None,
-        "watermarking_config": None,
-        "renormalize_logits": False,
-        "remove_invalid_values": False,
-        "token_healing": False,
-        "guidance_scale": 1.0,
-        "exponential_decay_length_penalty": None,
-        "max_time": None,
-        "stop_strings": None,
-        "output_scores": False,
-        "output_logits": False,
-        "output_attentions": False,
-        "output_hidden_states": False,
-    }
-    # Newer HF versions merge defaults before applying kwargs. Empty containers
-    # prevent conflicting token restrictions during that intermediate validation.
-    config = GenerationConfig(
-        **{
-            **neutral,
-            "bad_words_ids": [],
-            "suppress_tokens": [],
-            "begin_suppress_tokens": [],
-            "sequence_bias": {},
-        },
-        num_beams=1,
-        num_return_sequences=1,
-        return_dict_in_generate=False,
-        max_new_tokens=new_tokens,
+    return generate_causal_tokens(
+        model,
+        prompt,
+        attention,
+        new_tokens,
+        pad_token_id,
+        eos_token_id=None,
+        static_cache=static_cache,
+        compile_static=compile_static,
         min_new_tokens=new_tokens,
-        pad_token_id=pad_token_id,
-        use_cache=True,
-        cache_implementation="static" if static_cache else None,
-        disable_compile=not compile_static,
-        compile_config=CompileConfig(mode="max-autotune", fullgraph=True),
-    )
-    # Transformers 4.51 exposes this switch; newer APIs may omit it.
-    defaults = (
-        {"use_model_defaults": False}
-        if "use_model_defaults" in signature(model.generate).parameters
-        else {}
-    )
-    if configuration_observer is not None:
-        # Diagnostic snapshot only; do not mutate the model or instrument forward.
-        resolved, _ = model._prepare_generation_config(config, **defaults, **neutral)
-        configuration_observer(json.loads(resolved.to_json_string(use_diff=False)))
-    # Explicit None kwargs prevent EOS defaults from being filled by the model.
-    return model.generate(
-        input_ids=prompt,
-        attention_mask=attention,
-        generation_config=config,
-        **defaults,
-        **(
-            {"logits_processor": logits_processor}
-            if logits_processor is not None
-            else {}
-        ),
-        **neutral,
+        logits_processor=logits_processor,
+        configuration_observer=configuration_observer,
     )
 
 
@@ -418,6 +360,7 @@ def run_worker(args, attention_state):
             "sha256": artifact_hash,
             "config": artifact_config,
             "float_control": "dequantized_once_bf16",
+            "template": "parascale.workloads.causal_lm_model.CausalLmModel",
         }
         model = model.eval().cuda().bfloat16()
     else:
@@ -625,7 +568,10 @@ def run_worker(args, attention_state):
         Path(__file__),
         Path(__file__).with_name("quantized_inference_report.py"),
         Path(__file__).with_name("quantized_generation_quality.py"),
-        Path(__file__).with_name("quantized_attention_policy.py"),
+        ROOT / "parascale/runtime/inference/attention.py",
+        ROOT / "parascale/runtime/inference/generation.py",
+        ROOT / "parascale/workloads/causal_lm_model.py",
+        ROOT / "parascale/data/text/artifact.py",
         ROOT / "parascale/quantization/inference.py",
         ROOT / "parascale/quantization/inference_config.py",
         ROOT / "parascale/quantization/inference_gemlite.py",
@@ -766,7 +712,7 @@ def main():
         if args.mode == "compare":
             run_comparison(args)
         else:
-            from tests.benchmarks.scripts.quantized_attention_policy import (
+            from parascale.runtime.inference.attention import (
                 attention_policy,
             )
 

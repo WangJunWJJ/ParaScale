@@ -25,7 +25,7 @@ def backend_state():
 
 @pytest.mark.parametrize("fail", [False, True])
 def test_math_attention_policy_restores_state_after_worker(fail):
-    from tests.benchmarks.scripts.quantized_attention_policy import attention_policy
+    from parascale.runtime.inference.attention import attention_policy
 
     before = backend_state()
     cuda = torch.backends.cuda
@@ -60,7 +60,7 @@ def test_math_attention_policy_restores_state_after_worker(fail):
 
 
 def test_auto_attention_policy_does_not_change_enabled_backends():
-    from tests.benchmarks.scripts.quantized_attention_policy import attention_policy
+    from parascale.runtime.inference.attention import attention_policy
 
     before = backend_state()
     with attention_policy("auto") as state:
@@ -70,7 +70,7 @@ def test_auto_attention_policy_does_not_change_enabled_backends():
 
 
 def test_unknown_attention_policy_is_rejected_without_mutation():
-    from tests.benchmarks.scripts.quantized_attention_policy import attention_policy
+    from parascale.runtime.inference.attention import attention_policy
 
     before = backend_state()
     with pytest.raises(ValueError, match="attention"):
