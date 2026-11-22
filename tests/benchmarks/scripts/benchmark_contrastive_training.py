@@ -70,6 +70,21 @@ def runtime_config(world):
     )
 
 
+def summarize_windows(results, global_batch):
+    """Use the slowest rank's elapsed time and the actual global sample count."""
+    windows = []
+    for index in range(1, WINDOWS + 1):
+        wall = max(rank["windows"][index]["wall_seconds"] for rank in results)
+        windows.append(
+            {
+                "window": index,
+                "max_rank_wall_seconds": wall,
+                "global_pairs_per_second": global_batch * STEPS / wall,
+            }
+        )
+    return windows
+
+
 class NativeFeatures(CLIPModel):
     """Materialize the trainable scale inside the DDP forward owner."""
 
@@ -284,7 +299,7 @@ def main():
     parser.add_argument("--data-dir", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--profile-dir", type=Path)
-    parser.add_argument("--global-batch", type=int, choices=[32], default=32)
+    parser.add_argument("--global-batch", type=int, choices=[32, 128], default=32)
     args = parser.parse_args()
     if args.output.exists() or not args.model.is_dir() or not args.data_dir.is_dir():
         parser.error("requires local model/data directories and a new output path")
@@ -308,18 +323,7 @@ def main():
         dist.all_gather_object(results, result)
         if len({r["source_sha256"] for r in results}) != 1:
             raise ValueError("ranks executed different product sources")
-        windows = [
-            {
-                "window": i,
-                "max_rank_wall_seconds": max(
-                    r["windows"][i]["wall_seconds"] for r in results
-                ),
-                "global_pairs_per_second": 32
-                * STEPS
-                / max(r["windows"][i]["wall_seconds"] for r in results),
-            }
-            for i in range(1, WINDOWS + 1)
-        ]
+        windows = summarize_windows(results, args.global_batch)
         report = {
             "status": "passed",
             "measurement_kind": (
@@ -328,7 +332,7 @@ def main():
             "performance_claim_eligible": args.profile_dir is None,
             "implementation": args.implementation,
             "world_size": world,
-            "global_batch": 32,
+            "global_batch": args.global_batch,
             "warmup": WARMUP,
             "steps_per_window": STEPS,
             "precision": "fp32",
@@ -344,7 +348,7 @@ def main():
             "windows": windows,
             "ranks": results,
             "provenance": provenance,
-            "scope": "cached identical 32 pairs repeated; synchronized update windows include engine CPU bookkeeping; exclude decoding, tokenization, H2D, setup and boundary finite scans; not end-to-end data-pipeline throughput or a parity certificate",
+            "scope": f"cached identical {args.global_batch} pairs repeated; synchronized update windows include engine CPU bookkeeping; exclude decoding, tokenization, H2D, setup and boundary finite scans; not end-to-end data-pipeline throughput or a parity certificate",
         }
         if rank == 0:
             args.output.parent.mkdir(parents=True, exist_ok=True)

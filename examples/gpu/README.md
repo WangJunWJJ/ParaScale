@@ -13,3 +13,7 @@ environment-bound model/data/output paths and 1/2/4-process launch options.
 [Example 013](example_013_causal_lm_inference/README.md) runs local Llama generation
 and current product PTQ/QAT artifacts through `parascale infer`, with bounded
 JSONL input/output and explicit eager or static-cache compilation policies.
+
+[Example 014](example_014_clip_strong_scaling/README.md) qualifies real CLIP
+single-/four-GPU strong scaling at a fixed global batch, with a native-HF numerical
+gate, direct PyTorch controls and optional bounded profiling.

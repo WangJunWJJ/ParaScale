@@ -62,3 +62,18 @@ def test_profile_is_bounded_and_rank_specific(monkeypatch, tmp_path):
 
     captured["on_trace_ready"](Trace())
     assert captured["path"] == str(tmp_path / "screen.rank3.trace.json")
+
+
+@pytest.mark.parametrize("global_batch", [32, 128])
+def test_window_throughput_uses_actual_global_batch(global_batch):
+    ranks = [
+        {"windows": [{"wall_seconds": seconds}] * (benchmark.WINDOWS + 1)}
+        for seconds in (1.0, 2.0)
+    ]
+    windows = benchmark.summarize_windows(ranks, global_batch)
+    assert len(windows) == benchmark.WINDOWS
+    assert all(w["max_rank_wall_seconds"] == 2.0 for w in windows)
+    assert all(
+        w["global_pairs_per_second"] == global_batch * benchmark.STEPS / 2.0
+        for w in windows
+    )

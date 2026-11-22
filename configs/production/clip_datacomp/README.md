@@ -108,13 +108,15 @@ torchrun --nnodes=1 --master_addr=127.0.0.1 --master_port=29500 --nproc_per_node
 ```
 
 将 `--implementation` 改为 `pytorch` 并使用新输出路径可运行独立 DDP 对照；
-卡数分别设为 1、2、4，保持同一份数据和模型。脚本固定全局 batch=32、FP32、
+卡数分别设为 1、2、4，保持同一份数据和模型。脚本允许全局 batch=32 或 128，固定 FP32、
 eager attention、SGD、无通信压缩，使用相同样本及权重哈希。
 数值门禁比较原生 HF 全局损失、全部参数梯度及一次更新，而不是仅检查 loss 有限。
 吞吐脚本预热 10 步，再测 3 个各 50 步的窗口，取最慢 rank 的窗口耗时计算全局吞吐。
-输入是预处理后常驻 GPU 的同一组 32 对图文，计时不含解码、tokenization、H2D、加载及窗口边界有限性扫描；
+输入是预处理后常驻 GPU 的同一组图文（数量为选定的全局 batch），计时不含解码、tokenization、H2D、加载及窗口边界有限性扫描；
 它用于隔离运行时开销，不代表完整数据管线吞吐、训练收敛或独立验证集质量。
 两种实现串行测试，不与其他 GPU 作业重叠；保留所有失败输出，不覆盖结果或调整通过阈值。
+完整的单卡/四卡同口径操作见 [Example 014](../../../examples/gpu/example_014_clip_strong_scaling/README.md)。
+增加 `--profile-dir /runs/traces` 可采集预热后的三个更新步；带 profiler 的报告显式标记为诊断，不能用于吞吐结论。
 
 ### 已有图文数据复测
 

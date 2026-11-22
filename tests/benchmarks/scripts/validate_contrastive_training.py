@@ -100,7 +100,9 @@ def load_batch(args):
         if len(samples) == args.global_batch:
             break
     if len(samples) != args.global_batch:
-        raise ValueError("WDS has fewer than 32 paired image/caption samples")
+        raise ValueError(
+            f"WDS has fewer than {args.global_batch} paired image/caption samples"
+        )
     processor = AutoProcessor.from_pretrained(
         args.model, local_files_only=True, trust_remote_code=False
     )
@@ -288,7 +290,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--data-dir", type=Path, required=True)
-    parser.add_argument("--global-batch", type=int, choices=[32], default=32)
+    parser.add_argument("--global-batch", type=int, choices=[32, 128], default=32)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if not args.model.is_dir() or not args.data_dir.is_dir():
@@ -323,7 +325,7 @@ def main():
                         "attention": "eager",
                         "tf32": False,
                         "optimizer": {"type": "sgd", "lr": 1e-4, "momentum": 0.9},
-                        "global_batch": 32,
+                        "global_batch": args.global_batch,
                         "ranks": results,
                         "scope": "one-update numerical parity; no throughput claim",
                     },
