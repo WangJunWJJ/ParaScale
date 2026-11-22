@@ -190,6 +190,10 @@ does not select GPUs or pin CPU cores automatically; optional `--cpu-affinity`
 accepts explicit allowed CPU indices.
 
 The native baseline defaults to the same shared-input PyTorch TP optimization.
+Both drivers release unused logits before backward; the native baseline uses
+its own forward/backward loop and does not call the ParaScale executor. Compare
+fresh runs of both drivers from the same benchmark revision, since older native
+baselines retained logits longer and can overstate the memory difference.
 `--driver native --native-plan layerwise` is a separate ablation of independent
 projection inputs, not the default baseline. For a single-device control, change
 visible devices, process count and `--tp 1` together, keeping the global token
