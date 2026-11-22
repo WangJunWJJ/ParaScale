@@ -120,6 +120,9 @@ warning is expected. This is an explicit example policy, not a framework-wide
 default or an arbitrary-model bitwise-recovery guarantee. Keep the policy,
 precision, world size and input configuration unchanged when resuming, and
 requalify after changing PyTorch, CUDA/NCCL, hardware or model configuration.
+Native checkpoints bind this training policy in their metadata and reject a
+mismatch before state restoration. Checkpoints predating this metadata cannot
+be strictly resumed by the current runtime; do not retrofit the manifest.
 
 The following Linux/CUDA protocol reuses the environment variables above. Run
 the input-equivalence gate before the timing comparison, with no competing jobs:
@@ -176,11 +179,32 @@ to localize the first divergent update instead of relaxing the tolerance.
 `--check-only` revalidates the existing artifacts without training again, binding
 retrieval reports to current checkpoint hashes and verifying the restore origin.
 
+### Process Failure Gate
+
+Run this bounded Linux/CUDA gate with a new output directory and at least 15 GiB
+free space. Both paths share a validated update-2 checkpoint, including process
+RNG states. It compares uninterrupted continuation to update 4 with a process-group
+SIGKILL after publishing update 3, followed by one resumed update via `--resume-latest`.
+It separately injects an incomplete newer manifest to test latest-valid fallback
+and checks that a changed DDP policy is rejected before restoration. Model,
+complete Adam state, per-rank RNG and data cursors must match exactly.
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,3,4 python -m tests.benchmarks.scripts.validate_clip_fault_recovery \
+  --config examples/gpu/example_015_clip_retrieval_quality/train.json \
+  --output "$PARASCALE_RUN_DIR/fault-recovery"
+```
+
+This tests process failure and an explicit incomplete-publication injection,
+not host power loss, disk durability, retrieval quality or sustained throughput.
+It uses the example's fixed-bucket FP32 policy and does not certify other backends.
+
 For a historical failed recovery run with `ddp_find_unused_parameters: false`
 and `ddp_static_graph: false`, the bounded reducer diagnostic below reuses its
 update-25 checkpoint. It does **not** apply to this example's current fixed-bucket
 configuration. Set `PARASCALE_FAILED_RECOVERY_DIR` to that original failed run;
 do not edit its configuration to bypass the diagnostic's bucket-state checks.
+For artifacts from an older checkpoint format, use their matching frozen runtime.
 Run cold then warm in separate four-rank launches with a fresh diagnostic
 directory and at least 10 GiB additional free space:
 

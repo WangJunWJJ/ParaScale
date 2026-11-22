@@ -33,8 +33,11 @@ def test_recovery_requires_exact_metadata_and_supports_rng_trees():
     assert not compare_values(value, {**value, "identity": "other"})["passed"]
 
 
-@pytest.mark.parametrize("bad", [None, "empty", "step", "moment"])
-def test_optimizer_budget_rejects_equal_but_incomplete_states(bad):
+@pytest.mark.parametrize("steps", [4, 50])
+@pytest.mark.parametrize(
+    "bad", [None, "empty", "step", "moment", "missing_moment", "duplicate_id", "nan"]
+)
+def test_optimizer_budget_rejects_equal_but_incomplete_states(bad, steps):
     from tests.benchmarks.scripts.validate_clip_prefetch_recovery import (
         validate_optimizer_budget,
     )
@@ -45,7 +48,7 @@ def test_optimizer_budget_rejects_equal_but_incomplete_states(bad):
             "param_groups": [{"params": [0]}],
             "state": {
                 0: {
-                    "step": torch.tensor(50.0),
+                    "step": torch.tensor(float(steps)),
                     "exp_avg": torch.ones(2),
                     "exp_avg_sq": torch.ones(2),
                 }
@@ -55,10 +58,17 @@ def test_optimizer_budget_rejects_equal_but_incomplete_states(bad):
     if bad == "empty":
         state["optimizer_state_dict"]["state"].clear()
     elif bad == "step":
-        state["optimizer_state_dict"]["state"][0]["step"] = torch.tensor(49.9999)
+        state["optimizer_state_dict"]["state"][0]["step"] = torch.tensor(steps - 0.001)
     elif bad == "moment":
         state["optimizer_state_dict"]["state"][0]["exp_avg"] = torch.ones(1)
-    assert validate_optimizer_budget(state)["passed"] == (bad is None)
+    elif bad == "missing_moment":
+        del state["optimizer_state_dict"]["state"][0]["exp_avg_sq"]
+    elif bad == "duplicate_id":
+        state["model_state_dict"]["bias"] = torch.ones(2)
+        state["optimizer_state_dict"]["param_groups"][0]["params"] = [0, 0]
+    elif bad == "nan":
+        state["optimizer_state_dict"]["state"][0]["exp_avg"][0] = float("nan")
+    assert validate_optimizer_budget(state, steps=steps)["passed"] == (bad is None)
 
 
 @pytest.mark.parametrize("position", [1600, 1599])

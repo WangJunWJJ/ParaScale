@@ -103,17 +103,19 @@ def validate_input_binding(config, data, model):
     }
 
 
-def validate_optimizer_budget(state):
+def validate_optimizer_budget(state, *, steps=50):
     try:
         optimizer = state["optimizer_state_dict"]
         ids = [key for group in optimizer["param_groups"] for key in group["params"]]
         weights = list(state["model_state_dict"].values())
         assert (
-            ids and len(ids) == len(weights) and set(ids) == optimizer["state"].keys()
+            ids
+            and len(ids) == len(set(ids)) == len(weights)
+            and set(ids) == optimizer["state"].keys()
         )
         for key, weight in zip(ids, weights):
             slot = optimizer["state"][key]
-            assert slot["step"].numel() == 1 and slot["step"].item() == 50
+            assert slot["step"].numel() == 1 and slot["step"].item() == steps
             for name in ("exp_avg", "exp_avg_sq"):
                 assert (
                     slot[name].shape == weight.shape
@@ -121,7 +123,7 @@ def validate_optimizer_budget(state):
                 )
     except (AssertionError, KeyError, TypeError, AttributeError) as exc:
         return {"passed": False, "error": f"AdamW budget/moments invalid: {exc}"}
-    return {"passed": True, "parameters": len(ids), "steps": 50}
+    return {"passed": True, "parameters": len(ids), "steps": steps}
 
 
 def validate_runtime_budget(runtime, rank):
