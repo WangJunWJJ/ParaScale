@@ -169,12 +169,16 @@ class HFClipInferenceModel:
             images=batch.get("images", []),
             return_tensors="pt",
             padding=True,
+            truncation=True,
+            max_length=self._model.config.text_config.max_position_embeddings,
         )
         inputs = {key: value.to(self.device) for key, value in inputs.items()}
         with torch.no_grad():
             outputs = self._model(**inputs)
         logits = outputs.logits_per_image
         return {
+            "image_embeddings": outputs.image_embeds.detach().float().cpu().tolist(),
+            "text_embeddings": outputs.text_embeds.detach().float().cpu().tolist(),
             "image_embeddings_shape": list(outputs.image_embeds.shape),
             "text_embeddings_shape": list(outputs.text_embeds.shape),
             "logits_per_image_shape": list(logits.shape),
