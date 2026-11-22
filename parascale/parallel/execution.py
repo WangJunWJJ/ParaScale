@@ -144,6 +144,9 @@ class DistributedTrainer:
                 tensor_plan,
                 precision,
             )
+            validate_example = getattr(module, "validate_example_inputs", None)
+            if validate_example is not None:
+                validate_example(example_input)
             from .checkpoint_context import canonical_checkpoint_context
 
             context = (

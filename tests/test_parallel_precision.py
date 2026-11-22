@@ -293,6 +293,45 @@ def test_precision_agreement_precedes_mesh_creation(monkeypatch, mismatch):
     mesh.assert_not_called()
 
 
+@pytest.mark.parametrize("rank", [0, 1])
+def test_stage_example_validation_is_coordinated_before_mesh(monkeypatch, rank):
+    from unittest.mock import Mock
+
+    from parascale.parallel import DistributedParallelConfig, execution
+
+    monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+    monkeypatch.setattr(torch.distributed, "get_world_size", lambda: 2)
+    monkeypatch.setattr(torch.distributed, "get_rank", lambda: rank)
+    monkeypatch.setattr(execution, "_validate_constructor", lambda *args: None)
+    mesh = Mock(side_effect=AssertionError("mesh created before input validation"))
+    monkeypatch.setattr(torch.distributed.device_mesh, "init_device_mesh", mesh)
+    module = torch.nn.Linear(2, 2)
+    example = torch.zeros(1, 2)
+    validator = Mock(side_effect=ValueError("invalid stage example") if rank else None)
+    module.validate_example_inputs = validator
+    module.forward = Mock(side_effect=AssertionError("forward during preflight"))
+
+    def gather(records, record):
+        if rank:
+            assert record[0] == "invalid stage example"
+            records[:] = [(None, None), record]
+        else:
+            assert record[0] is None
+            records[:] = [record, ("invalid stage example", None)]
+
+    monkeypatch.setattr(torch.distributed, "all_gather_object", gather)
+    with pytest.raises(ValueError, match="rank 1: invalid stage example"):
+        execution.DistributedTrainer(
+            module,
+            DistributedParallelConfig(pp_size=2),
+            example,
+            torch.nn.MSELoss(),
+        )
+    validator.assert_called_once_with(example)
+    module.forward.assert_not_called()
+    mesh.assert_not_called()
+
+
 @pytest.mark.parametrize("dp,tp", [(1, 1), (2, 1), (1, 2)])
 @pytest.mark.parametrize("mismatch", [None, "dtype", "shape", "arity"])
 def test_pipeline_boundaries_are_checked_on_every_rank(monkeypatch, dp, tp, mismatch):

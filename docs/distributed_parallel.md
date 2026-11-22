@@ -243,6 +243,11 @@ construct an optimizer before TP/DP wrapping. Use non-fused `foreach=False`
 optimizers for the mixed Tensor/DTensor parameters. Llama stage examples use
 int64 token IDs on the first stage and FP32 residual hidden states on later
 stages, including when the executor uses BF16 autocast.
+The executor calls an optional `validate_example_inputs` stage hook during its
+coordinated constructor preflight, before mesh creation or shape-inference
+forwards. Llama uses it to reject invalid token IDs and residual shape/dtype
+across all ranks. Custom hooks must perform local validation only, without
+forward execution, module mutation or collectives.
 
 The cursor shards by DP coordinate, not global rank. TP/PP peers receive the
 same ordered blocks when they use identical data settings and advance together;
