@@ -20,6 +20,13 @@ from typing import Any
 from parascale.contracts.checkpoint import CheckpointRuntime
 
 from .checkpoint_context import canonical_checkpoint_context
+from .checkpoint_manifest import (
+    canonical_runtime_identity,
+    validate_manifest_structure,
+)
+from .checkpoint_manifest import (
+    unique_json_object as _unique_json_object,
+)
 
 
 def _digest(path: Path) -> str:
@@ -28,16 +35,6 @@ def _digest(path: Path) -> str:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
-
-
-def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    """Reject ambiguous manifests instead of accepting the last duplicate key."""
-    result = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError(f"Checkpoint manifest contains duplicate key: {key}")
-        result[key] = value
-    return result
 
 
 @contextmanager
@@ -123,37 +120,17 @@ def _optimizer_identity(module: Any, optimizer: Any) -> dict[str, Any]:
 def _runtime_identity(runtime: CheckpointRuntime | None, optimizer: Any) -> str | None:
     if runtime is None:
         return None
-    identity = runtime.identity(optimizer)
-    serialized = json.dumps(identity, sort_keys=True, allow_nan=False)
-    if (
-        not isinstance(identity, dict)
-        or not identity
-        or json.loads(serialized) != identity
-    ):
-        raise ValueError("Checkpoint runtime identity must be a nonempty JSON object")
-    return serialized
+    return canonical_runtime_identity(runtime.identity(optimizer))
 
 
 def _validate_manifest(
     metadata: Any, trainer: Any, runtime_identity: str | None = None
 ) -> None:
-    keys = {
-        "schema_version",
-        "topology",
-        "step",
-        "files",
-        "context",
-    }
-    if runtime_identity is not None:
-        keys.add("runtime")
-    if not isinstance(metadata, dict) or set(metadata) != keys:
-        raise ValueError("Checkpoint manifest schema mismatch")
+    validate_manifest_structure(metadata)
     topology = metadata["topology"]
     expected = asdict(trainer.config)
     if (
-        type(metadata["schema_version"]) is not int
-        or metadata["schema_version"] != (5 if runtime_identity is not None else 4)
-        or not isinstance(topology, dict)
+        metadata["schema_version"] != (5 if runtime_identity is not None else 4)
         or topology != expected
         or any(
             type(topology[key]) is not type(value) for key, value in expected.items()
@@ -162,29 +139,13 @@ def _validate_manifest(
         raise ValueError("Checkpoint topology/schema does not match execution")
     if (
         runtime_identity is not None
-        and json.dumps(metadata["runtime"], sort_keys=True, allow_nan=False)
-        != runtime_identity
+        and canonical_runtime_identity(metadata["runtime"]) != runtime_identity
     ):
         raise ValueError("Checkpoint runtime identity mismatch")
     if canonical_checkpoint_context(
         metadata["context"]
     ) != canonical_checkpoint_context(getattr(trainer, "checkpoint_context", None)):
         raise ValueError("Checkpoint training context mismatch")
-    if type(metadata["step"]) is not int or metadata["step"] < 0:
-        raise ValueError("Checkpoint step must be a nonnegative integer")
-    entries = metadata["files"]
-    if not isinstance(entries, list) or len(entries) != trainer.config.world_size:
-        raise ValueError("Checkpoint rank count mismatch")
-    for rank, entry in enumerate(entries):
-        if (
-            not isinstance(entry, dict)
-            or set(entry) != {"path", "sha256"}
-            or entry["path"] != f"rank-{rank:05d}.pt"
-            or not isinstance(entry["sha256"], str)
-            or len(entry["sha256"]) != 64
-            or any(c not in "0123456789abcdef" for c in entry["sha256"])
-        ):
-            raise ValueError("Checkpoint rank entry schema mismatch")
 
 
 def _validate_optimizer_binding(state: dict, identity: Any) -> None:

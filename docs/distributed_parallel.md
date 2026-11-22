@@ -394,6 +394,52 @@ after a saved update2 against uninterrupted training, including exact local
 parameter/optimizer hashes, data blocks, LR and RNG. It does not establish
 convergence, long-run reliability, public CLI integration or throughput speedup.
 
+### Discovery And Retention
+
+For schema5 snapshots, use a dedicated root with direct children named
+`step-00000000`, `step-00000001`, and so on. The catalog is filesystem-only and
+does not import Torch or deserialize rank payloads:
+
+```python
+from parascale.parallel.checkpoint_catalog import (
+    inspect_stage_checkpoint, latest_stage_checkpoint, prune_stage_checkpoints,
+)
+
+metadata = inspect_stage_checkpoint(root / "step-00000100")
+selected, skipped = latest_stage_checkpoint(root)
+# Only after the save has succeeded on every rank, call pruning on rank zero;
+# coordinate its local I/O errors before any rank starts another collective.
+report = prune_stage_checkpoints(root / "step-00000100", keep_last=3)
+```
+
+Inspection checks the manifest structure, paths and every rank SHA256. It does
+**not** prove payload semantics or recoverability. `latest_stage_checkpoint`
+reports rejected newer candidates and selects the newest intact snapshot;
+execution/context mismatch must still fail in the all-rank loader, rather than
+silently falling back to an older model. Schema4 snapshots are not admitted.
+
+`keep_last` must be an integer of at least two, including the anchor and at least
+one older intact copy when available. Retention groups snapshots by exact JSON
+topology, context and runtime identity. An anchor older than another manifest in
+its family is rejected even when that newer payload is corrupt. Other families
+and corrupt payloads are retained; corrupt payloads do not count toward the
+protected copies. An unknown or malformed manifest blocks all pruning because
+its references cannot be proven self-contained. Extra files and directories are
+never recursively deleted. The report lists `removed`, `protected` and `skipped`.
+
+Paths and ancestors must not be links/reparse points. Use one writer with no
+concurrent filesystem mutations; this is not an adversarial filesystem sandbox.
+Pruning unlinks and synchronizes the manifest before removing declared rank
+files. An interruption may leave an uncommitted directory, which is preserved
+and reported on subsequent scans. Such orphans require deliberate cleanup.
+Full checksum scans add checkpoint I/O and are outside throughput windows.
+This API does not automatically enable retention in the training CLI.
+
+Add `--validate-catalog` to both fresh-process validator commands above, using
+a new checkpoint root. The baseline saves real updates0/1/2, prunes update0,
+and checks that updates1/2 remain; the resume process discovers update2 and
+must reproduce update3 exactly. Generated files remain local test artifacts.
+
 ## Reproducible Validation
 
 From the repository root:

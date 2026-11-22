@@ -69,6 +69,7 @@ def parse_args():
         "--pipeline-schedule", choices=("gpipe", "1f1b"), default="gpipe"
     )
     parser.add_argument("--sequence-length", type=int, default=32)
+    parser.add_argument("--validate-catalog", action="store_true")
     return parser.parse_args()
 
 
@@ -82,7 +83,12 @@ def main():
     from parascale.optimizers import build_optimizer
     from parascale.optimizers.schedule import SchedulerSpec
     from parascale.parallel import DistributedParallelConfig
+    from parascale.parallel.checkpoint_catalog import (
+        latest_stage_checkpoint,
+        prune_stage_checkpoints,
+    )
     from parascale.parallel.execution import DistributedTrainer
+    from parascale.runtime.training.coordination import coordinated_call
     from parascale.runtime.training.data_state import DataResumeController
     from parascale.runtime.training.engine import TrainState
     from parascale.runtime.training.stage_checkpoint import StageTrainingCheckpoint
@@ -106,6 +112,16 @@ def main():
     )
     layout.validate_world_size(dist.get_world_size())
     try:
+
+        def validate_catalog_destination():
+            if (
+                args.validate_catalog
+                and args.mode == "baseline"
+                and args.checkpoint_dir.exists()
+            ):
+                raise ValueError("Catalog validation requires a new checkpoint root")
+
+        coordinated_call(validate_catalog_destination, phase="catalog destination")
         config = {
             "model": {"pretrained_model_name_or_path": str(args.model_path)},
             "data": {
@@ -176,12 +192,27 @@ def main():
         torch.manual_seed(seed)
         torch.cuda.manual_seed(seed)
         if args.mode == "resume":
-            restored = trainer.load_checkpoint(
-                args.checkpoint_dir, optimizer, runtime=runtime
-            )
+            source = args.checkpoint_dir
+            if args.validate_catalog:
+                selected, skipped = coordinated_call(
+                    lambda: latest_stage_checkpoint(args.checkpoint_dir),
+                    phase="catalog discovery",
+                    identity=lambda result: (str(result[0]), result[1]),
+                )
+                if skipped or selected.name != "step-00000002":
+                    raise AssertionError("Catalog did not select update2")
+                source = selected
+            restored = trainer.load_checkpoint(source, optimizer, runtime=runtime)
             if restored != 2:
                 raise AssertionError("Expected update2 checkpoint")
         iterator = engine.data_resume.prepare_iterator(cursor)
+        if args.mode == "baseline" and args.validate_catalog:
+            trainer.save_checkpoint(
+                args.checkpoint_dir / "step-00000000",
+                optimizer,
+                step=0,
+                runtime=runtime,
+            )
         ahead = None
         updates = []
         while engine.state.global_step < 3:
@@ -219,7 +250,45 @@ def main():
             if args.mode == "baseline" and engine.state.global_step == 2:
                 ahead = next(iterator)
                 trainer.save_checkpoint(
-                    args.checkpoint_dir, optimizer, step=2, runtime=runtime
+                    args.checkpoint_dir / "step-00000002"
+                    if args.validate_catalog
+                    else args.checkpoint_dir,
+                    optimizer,
+                    step=2,
+                    runtime=runtime,
+                )
+                if args.validate_catalog:
+
+                    def prune_and_check():
+                        if rank != 0:
+                            return
+                        report = prune_stage_checkpoints(
+                            args.checkpoint_dir / "step-00000002", keep_last=2
+                        )
+                        if (
+                            report["removed"] != [0]
+                            or report["protected"] != [2, 1]
+                            or report["skipped"]
+                        ):
+                            raise AssertionError(
+                                f"Unexpected retention report: {report}"
+                            )
+                        args.output_dir.mkdir(parents=True, exist_ok=True)
+                        (args.output_dir / "catalog-retention.json").write_text(
+                            json.dumps(report, indent=2), encoding="utf-8"
+                        )
+
+                    coordinated_call(prune_and_check, phase="catalog retention")
+            elif (
+                args.mode == "baseline"
+                and args.validate_catalog
+                and engine.state.global_step == 1
+            ):
+                trainer.save_checkpoint(
+                    args.checkpoint_dir / "step-00000001",
+                    optimizer,
+                    step=1,
+                    runtime=runtime,
                 )
 
         def digest_tensor(value):

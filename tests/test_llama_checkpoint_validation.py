@@ -5,12 +5,35 @@
 
 """Fingerprint controls for the fresh-process Llama checkpoint validator."""
 
+import sys
 from types import SimpleNamespace
 
 import pytest
 
 torch = pytest.importorskip("torch")
 pytest.importorskip("transformers")
+
+
+def test_stage_recovery_catalog_validation_is_explicit(monkeypatch):
+    from tests.benchmarks.scripts.validate_stage_recovery import parse_args
+
+    argv = [
+        "validate",
+        "--mode",
+        "baseline",
+        "--model-path",
+        "model",
+        "--corpus-path",
+        "corpus",
+        "--checkpoint-dir",
+        "checkpoint",
+        "--output-dir",
+        "output",
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+    assert parse_args().validate_catalog is False
+    monkeypatch.setattr(sys, "argv", [*argv, "--validate-catalog"])
+    assert parse_args().validate_catalog is True
 
 
 def test_state_fingerprint_tracks_values_layout_and_type():
