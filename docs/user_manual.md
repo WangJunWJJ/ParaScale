@@ -456,6 +456,10 @@ python -m parascale.cli checkpoint validate \
 
 建议每个正式 benchmark 至少保存一次 checkpoint，并在报告中记录 validate 结果。
 
+`training.checkpoint_interval: 0` 关闭训练过程中的周期性保存；结束时是否保存由
+`training.skip_final_checkpoint` 独立控制。纯吞吐测试若要完全禁止检查点写入，需同时设置
+`checkpoint_interval: 0` 和 `skip_final_checkpoint: true`。这类测试不能作为检查点恢复验收。
+
 恢复 quickstart 的 step 1 检查点：
 
 ```bash

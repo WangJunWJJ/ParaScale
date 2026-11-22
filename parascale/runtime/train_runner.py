@@ -210,9 +210,11 @@ def run_train_from_config(
             raise ValueError(
                 "student_output must not overwrite a source model or teacher checkpoint"
             )
+    checkpoint_interval = training.get(
+        "checkpoint_interval", parascale_config.checkpoint_save_interval
+    )
     checkpoint_interval = int(
-        training.get("checkpoint_interval", parascale_config.checkpoint_save_interval)
-        or max_steps
+        max_steps if checkpoint_interval is None else checkpoint_interval
     )
     manager = CheckpointManager(checkpoint_dir)
     checkpoint_recovery = None
