@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import io
+import math
 import warnings
 from itertools import islice
 from typing import Any, Dict, Iterable, List
@@ -22,6 +23,7 @@ from .common import (
     _require_torch,
     _suppress_activation_checkpointing_future_warning,
 )
+from .contrastive_loss import ContrastiveLoss
 from .datacomp import (
     _build_datacomp_metadata_dataset,
     _build_datacomp_wds_dataset,
@@ -51,7 +53,9 @@ def build_clip_contrastive_components(spec: ClipContrastiveSpec):
             self.text_embed = nn.Embedding(spec.vocab_size, spec.embed_dim)
             self.image_proj = nn.Linear(spec.embed_dim, spec.embed_dim)
             self.text_proj = nn.Linear(spec.embed_dim, spec.embed_dim)
-            self.logit_scale = nn.Parameter(torch.tensor(1.0 / spec.temperature))
+            self.logit_scale = nn.Parameter(
+                torch.tensor([math.log(1.0 / spec.temperature)])
+            )
 
         def forward(
             self, pixel_values=None, input_ids=None, attention_mask=None, **kwargs
@@ -76,9 +80,11 @@ def build_clip_contrastive_components(spec: ClipContrastiveSpec):
             text_features = nn.functional.normalize(
                 self._project(text_features, self.text_proj), dim=-1
             )
-            return self.logit_scale.exp().clamp(max=100.0) * (
-                image_features @ text_features.T
-            )
+            return {
+                "image_features": image_features,
+                "text_features": text_features,
+                "logit_scale": self.logit_scale.exp().clamp(max=100.0).reshape(()),
+            }
 
         @staticmethod
         def _project(features, projection):
@@ -127,7 +133,9 @@ def build_clip_contrastive_components(spec: ClipContrastiveSpec):
             self.text_norm = nn.LayerNorm(spec.embed_dim)
             self.image_proj = nn.Linear(spec.embed_dim, spec.embed_dim)
             self.text_proj = nn.Linear(spec.embed_dim, spec.embed_dim)
-            self.logit_scale = nn.Parameter(torch.tensor(1.0 / spec.temperature))
+            self.logit_scale = nn.Parameter(
+                torch.tensor([math.log(1.0 / spec.temperature)])
+            )
             self._init_parameters()
 
         def _init_parameters(self) -> None:
@@ -179,9 +187,11 @@ def build_clip_contrastive_components(spec: ClipContrastiveSpec):
                 self._project_with_norm(text_features, self.text_norm, self.text_proj),
                 dim=-1,
             )
-            return self.logit_scale.exp().clamp(max=100.0) * (
-                image_features @ text_features.T
-            )
+            return {
+                "image_features": image_features,
+                "text_features": text_features,
+                "logit_scale": self.logit_scale.exp().clamp(max=100.0).reshape(()),
+            }
 
         @staticmethod
         def _project_with_norm(features, norm, projection):
@@ -243,13 +253,21 @@ def build_clip_contrastive_components(spec: ClipContrastiveSpec):
             if yielded >= spec.num_batches:
                 break
 
-    def loss_fn(output, batch):
-        labels = batch["labels"]
-        image_to_text = nn.functional.cross_entropy(output, labels)
-        text_to_image = nn.functional.cross_entropy(output.T, labels)
-        return (image_to_text + text_to_image) * 0.5
+    return model, optimizer, dataloader(), ContrastiveLoss("clip")
 
-    return model, optimizer, dataloader(), loss_fn
+
+def _hf_contrastive_features(model: Any, args: Any, output: Any) -> Dict[str, Any]:
+    """Materialize features and scalars before the owning module is resharded."""
+    features = {
+        "image_features": output.image_embeds,
+        "text_features": output.text_embeds,
+        "logit_scale": model.logit_scale.exp(),
+    }
+    if model.config.model_type == "siglip":
+        features["logit_bias"] = model.logit_bias.clone()
+    else:
+        features["logit_scale"] = features["logit_scale"].reshape(())
+    return features
 
 
 def _build_hf_clip_contrastive_components(torch: Any, spec: ClipContrastiveSpec):
@@ -273,6 +291,24 @@ def _build_hf_clip_contrastive_components(torch: Any, spec: ClipContrastiveSpec)
     import torch.optim as optim
 
     hf_model = AutoModel.from_pretrained(spec.pretrained_model_name_or_path)
+    family = "siglip" if spec.model_type in {"siglip", "hf_siglip"} else "clip"
+    if getattr(hf_model.config, "model_type", None) != family:
+        raise ValueError(
+            f"configured contrastive family {family} does not match model checkpoint"
+        )
+    # FSDP1 cannot flatten zero-dimensional parameters. Use a canonical vector
+    # storage layout before optimizer construction; the objective uses scalars.
+    for name in ("logit_scale", "logit_bias"):
+        parameter = getattr(hf_model, name, None)
+        if parameter is not None and parameter.ndim == 0:
+            setattr(
+                hf_model,
+                name,
+                nn.Parameter(
+                    parameter.detach().reshape(1), requires_grad=parameter.requires_grad
+                ),
+            )
+    hf_model.register_forward_hook(_hf_contrastive_features)
     processor = AutoProcessor.from_pretrained(spec.pretrained_model_name_or_path)
     if spec.activation_checkpointing and hasattr(
         hf_model, "gradient_checkpointing_enable"
@@ -335,26 +371,7 @@ def _build_hf_clip_contrastive_components(torch: Any, spec: ClipContrastiveSpec)
             for samples in islice(_clip_sample_batches(torch, spec), spec.num_batches)
         )
 
-    def loss_fn(output, batch):
-        logits = getattr(output, "logits_per_image", None)
-        if logits is None and isinstance(output, dict):
-            logits = output.get("logits_per_image")
-        if logits is None:
-            image_embeds = getattr(output, "image_embeds", None)
-            text_embeds = getattr(output, "text_embeds", None)
-            if image_embeds is None or text_embeds is None:
-                raise RuntimeError(
-                    "HuggingFace CLIP/SigLIP output must expose logits or image/text embeddings."
-                )
-            image_embeds = nn.functional.normalize(image_embeds, dim=-1)
-            text_embeds = nn.functional.normalize(text_embeds, dim=-1)
-            logits = image_embeds @ text_embeds.T
-        labels = batch["labels"]
-        image_to_text = nn.functional.cross_entropy(logits, labels)
-        text_to_image = nn.functional.cross_entropy(logits.T, labels)
-        return (image_to_text + text_to_image) * 0.5
-
-    return model, optimizer, batches, loss_fn
+    return model, optimizer, batches, ContrastiveLoss(family)
 
 
 def _clip_sample_batches(

@@ -132,7 +132,7 @@ def build_report_markdown(
                 "FP32, batch 8/rank, 40 baseline steps; corrupt step 40, recover step 20 and train 20 more steps. "
                 "This is bounded recovery evidence, not DataComp quality or 24-hour production certification. "
                 "End-to-end throughput includes process/model startup and checkpoint writes; no warmup exclusion. "
-                "CLIP uses rank-local negatives, so different world sizes are not equivalent global-negative objectives.",
+                "These historical CLIP runs used rank-local negatives; they are not equivalent to the current global-negative objective.",
                 "",
                 "| GPUs | Physical IDs | Status | End-to-end images/s | Final rank-0 loss | Weight bytes match after resume |",
                 "| --- | --- | --- | --- | --- | --- |",

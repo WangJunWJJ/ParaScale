@@ -168,6 +168,7 @@ class TrainEngine:
                     optimizer = self.training_backend.setup_optimizer(optimizer)
                     self.training_backend.optimizer = optimizer
 
+        self._bind_loss_data_parallel(loss_fn)
         scheduler = self.prepare_scheduler(optimizer, scheduler, scheduler_builder)
         return self.fit_loop.run(
             dataloader,
@@ -180,6 +181,21 @@ class TrainEngine:
             checkpoint_manager=checkpoint_manager,
             checkpoint_interval=checkpoint_interval,
         )
+
+    def _bind_loss_data_parallel(self, loss_fn: Any) -> None:
+        """Bind opt-in objectives to this runtime's validated pure-DP group."""
+        bind = getattr(loss_fn, "bind_data_parallel", None)
+        if not callable(bind):
+            return
+        validate_legacy_parallelism(self.config, self.strategy_plan)
+        group = None
+        if getattr(self.training_backend, "name", "") in {"native_ddp", "fsdp", "deepspeed"}:
+            import torch.distributed as dist
+
+            if not dist.is_available() or not dist.is_initialized():
+                raise RuntimeError("distributed objective requires an initialized process group")
+            group = dist.group.WORLD
+        bind(group)
 
     def prepare_scheduler(
         self, optimizer: Any, scheduler: Any = None, scheduler_builder: Any = None

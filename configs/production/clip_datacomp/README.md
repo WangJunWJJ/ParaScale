@@ -18,8 +18,16 @@
 
 均使用 schema_version=1、FP32、AdamW lr=1e-6、1000 个优化器步、每 100 步保存检查点并保留最终检查点，数据 worker=0。
 world_size=1 的 native_ddp 当前被拒绝，因此单卡使用 native。无量化、KD 或通信压缩。
-当前损失使用 **rank-local negatives**，没有跨 rank 汇聚负样本；固定每卡 batch 是**弱扩展**，global batch 随卡数变化。
-这些运行不具备 global-batch 等价性，也不是标准分布式 global-negative CLIP，不能据此声称质量或收敛等价。
+当前 CLIP 目标使用同一个数据并行组内的可微特征汇聚，每卡计算本地 query 对全组 key 的损失，即 global-negative CLIP。
+SigLIP 使用独立的逐对 sigmoid 损失，不再复用 CLIP 的 softmax 目标。
+固定每卡 batch 仍是**弱扩展**，global batch 和每个 query 的负样本数随卡数变化，不能据此声称质量或收敛等价。
+同口径强扩展需固定每个微批的全局图文对及其顺序，并随卡数调整每卡 batch。
+GAS 只累积梯度，不跨微批汇聚负样本，因此相同 optimizer global batch 不代表相同对比学习目标。
+
+历史报告使用 **rank-local negatives**，不能与当前目标直接计算优化加速比，旧长跑与恢复结果也不构成新目标的验收。
+检查点记录目标版本与负样本语义；不要绕过目标身份检查继续旧目标的训练。
+可微汇聚允许不同 rank 上非空尾批大小不同；运行时按样本数加权，空特征批会报错。
+当前普通训练入口仅绑定纯数据并行组；不能将本功能解释为 CLIP 已支持 TP/PP。
 
 ## 离线环境前置检查
 
@@ -82,6 +90,31 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nnodes=1 --nproc_per_node=4
 更多边界见[用户手册](../../../docs/user_manual.md#111-最新完整检查点恢复)。
 
 ## 当前本地验证记录
+
+### 全局目标数值与运行时开销对照
+
+先用本地真实 CLIP 权重和 WDS 图文运行数值门禁，再测试吞吐。以下命令在仓库根目录执行：
+
+```bash
+torchrun --nnodes=1 --master_addr=127.0.0.1 --master_port=29500 --nproc_per_node=4 \
+  --module tests.benchmarks.scripts.validate_contrastive_training \
+  --model /models/clip --data-dir /datasets/datacomp --global-batch 32 \
+  --output /runs/clip-parity-w4.json
+
+torchrun --nnodes=1 --master_addr=127.0.0.1 --master_port=29500 --nproc_per_node=4 \
+  --module tests.benchmarks.scripts.benchmark_contrastive_training \
+  --implementation parascale --model /models/clip --data-dir /datasets/datacomp \
+  --global-batch 32 --output /runs/clip-parascale-w4.json
+```
+
+将 `--implementation` 改为 `pytorch` 并使用新输出路径可运行独立 DDP 对照；
+卡数分别设为 1、2、4，保持同一份数据和模型。脚本固定全局 batch=32、FP32、
+eager attention、SGD、无通信压缩，使用相同样本及权重哈希。
+数值门禁比较原生 HF 全局损失、全部参数梯度及一次更新，而不是仅检查 loss 有限。
+吞吐脚本预热 10 步，再测 3 个各 50 步的窗口，取最慢 rank 的窗口耗时计算全局吞吐。
+输入是预处理后常驻 GPU 的同一组 32 对图文，计时不含解码、tokenization、H2D、加载及窗口边界有限性扫描；
+它用于隔离运行时开销，不代表完整数据管线吞吐、训练收敛或独立验证集质量。
+两种实现串行测试，不与其他 GPU 作业重叠；保留所有失败输出，不覆盖结果或调整通过阈值。
 
 ### 已有图文数据复测
 
