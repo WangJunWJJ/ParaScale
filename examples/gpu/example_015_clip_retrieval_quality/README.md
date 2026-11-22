@@ -97,11 +97,12 @@ generates real-data evidence.
 Passing this short check does not certify 24h stability, exact interrupted resume,
 HTTP serving, distributed inference or deployment-specific quality requirements.
 
-## Optional CPU Lookahead
+## CPU Lookahead and Recovery Policy
 
 `data.cpu_prefetch: true` prepares at most one following batch in a CPU thread,
 overlapping original-image decoding and checkpoint preprocessing with training.
-It defaults to false. This option requires pretrained CLIP/SigLIP, streaming WDS,
+The framework defaults to false; this example explicitly enables it. This option
+requires pretrained CLIP/SigLIP, streaming WDS,
 `num_workers: 0`, and no CUDA prefetch. It does not change the physical batch,
 sample order or preprocessing algorithm. The checkpoint cursor advances only
 for consumed batches, not speculative work.
@@ -110,6 +111,15 @@ The transform must be deterministic CPU-only code that does not use global RNG.
 Do not add random augmentation or concurrent processor mutation to this path.
 Ending a fit cancels queued work and joins running preprocessing; it cannot
 interrupt a stalled decoder or storage read, so shutdown time is not bounded.
+
+This example also sets `ddp_find_unused_parameters: true` and
+`ddp_static_graph: false`. In the validated PyTorch 2.9.1 environment, this keeps
+gradient buckets fixed across a fresh-process restart. The purpose is stable
+reduction order, not unused parameters in CLIP; PyTorch's extra-graph-traversal
+warning is expected. This is an explicit example policy, not a framework-wide
+default or an arbitrary-model bitwise-recovery guarantee. Keep the policy,
+precision, world size and input configuration unchanged when resuming, and
+requalify after changing PyTorch, CUDA/NCCL, hardware or model configuration.
 
 The following Linux/CUDA protocol reuses the environment variables above. Run
 the input-equivalence gate before the timing comparison, with no competing jobs:
@@ -166,18 +176,23 @@ to localize the first divergent update instead of relaxing the tolerance.
 `--check-only` revalidates the existing artifacts without training again, binding
 retrieval reports to current checkpoint hashes and verifying the restore origin.
 
-For a failed recovery gate, a bounded reducer diagnostic reuses the update-25
-checkpoint. Run cold then warm in separate four-rank launches with a fresh
-diagnostic directory and at least 10 GiB additional free space:
+For a historical failed recovery run with `ddp_find_unused_parameters: false`
+and `ddp_static_graph: false`, the bounded reducer diagnostic below reuses its
+update-25 checkpoint. It does **not** apply to this example's current fixed-bucket
+configuration. Set `PARASCALE_FAILED_RECOVERY_DIR` to that original failed run;
+do not edit its configuration to bypass the diagnostic's bucket-state checks.
+Run cold then warm in separate four-rank launches with a fresh diagnostic
+directory and at least 10 GiB additional free space:
 
 ```bash
 set -euo pipefail
+: "${PARASCALE_FAILED_RECOVERY_DIR:?Set the original default-DDP failed recovery directory}"
 for mode in cold warm; do
   CUDA_VISIBLE_DEVICES=0,1,3,4 timeout 600 python -m torch.distributed.run \
     --nnodes=1 --nproc_per_node=4 --master_addr=127.0.0.1 --master_port=29500 \
     -m tests.benchmarks.scripts.probe_clip_reducer_recovery \
-    --config "$PARASCALE_RUN_DIR/recovery/continuous.config.json" \
-    --checkpoints "$PARASCALE_RUN_DIR/recovery/continuous/checkpoints" \
+    --config "$PARASCALE_FAILED_RECOVERY_DIR/continuous.config.json" \
+    --checkpoints "$PARASCALE_FAILED_RECOVERY_DIR/continuous/checkpoints" \
     --output "$PARASCALE_RUN_DIR/reducer-probe" --mode "$mode"
 done
 ```

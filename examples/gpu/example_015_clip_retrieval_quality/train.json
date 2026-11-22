@@ -8,6 +8,8 @@
     "precision": "fp32",
     "data_parallel_size": 4,
     "ddp_comm_hook": "none",
+    "ddp_find_unused_parameters": true,
+    "ddp_static_graph": false,
     "grad_clip_norm": null,
     "checkpoint_keep_last": 2,
     "metrics_history_limit": 10
@@ -21,6 +23,7 @@
     "type": "datacomp_wds",
     "data_dir": "${PARASCALE_DATA}/train",
     "streaming": true,
+    "cpu_prefetch": true,
     "num_workers": 0,
     "text_length": 77
   },

@@ -5,9 +5,24 @@
 
 """Fixed-policy controls and predeclared paired throughput gates."""
 
+import json
 from copy import deepcopy
+from pathlib import Path
 
 import pytest
+
+
+def test_clip_example_selects_the_qualified_recovery_policy():
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "examples/gpu/example_015_clip_retrieval_quality/train.json"
+    )
+    config = json.loads(path.read_text(encoding="utf-8"))
+    assert config["parascale"]["ddp_find_unused_parameters"] is True
+    assert config["parascale"]["ddp_static_graph"] is False
+    assert config["data"]["cpu_prefetch"] is True
+    assert config["parascale"]["precision"] == "fp32"
+    assert config["training"]["batch_size"] == 32
 
 
 def test_bucket_comparison_changes_only_the_selected_policy():
