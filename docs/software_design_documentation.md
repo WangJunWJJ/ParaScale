@@ -102,6 +102,8 @@ native 路径先完成反向传播和必要的 AMP unscale，再执行梯度裁�
 
 数据实现有 state_dict 协议时优先恢复该状态；否则明确警告并 replay-skip。恢复数据迭代位置时保护训练随机数状态。精确恢复还要求可重复的数据顺序、worker 行为和确定性算子，不能把恢复了 RNG 等同于任意输入管道均逐位一致。
 
+`DataResumeController` 在数据交付边界复制游标元数据，由训练步完成后的消费确认推进已提交位置；CUDA 预取及梯度累积期间尚未消费的游标不进入检查点。正常 fit 循环仅保留当前累积窗口及设备预取所需的状态，不保留历史批次。重复 fit 同一数据源会回退未消费的预取位置，旧迭代器失效。多 worker 数据源必须提供能恢复下一待交付批次的 loader-level 状态协议，不能仅保存提前派发的 sampler 位置。随机数据处理须使用独立且可恢复的数据 RNG 或按样本确定性增强；与模型共享全局 RNG 的预取增强不在精确恢复保证内。
+
 检测蒸馏保存 student、projectors 和 optimizer，教师仅通过 checkpoint/config 哈希描述。纯学生导出不可覆盖源模型、教师 checkpoint 或训练目录下的 step 子目录；部署文件不包含 optimizer，不能用于恢复训练。
 
 ## 7. 参考 PTQ/QAT
