@@ -345,3 +345,15 @@ This verifies bounded same-topology continuation, not equivalence to unsharded
 training, data-loader/scheduler restoration, convergence, crash injection or long-run
 readiness. Input position is reconstructed from the checkpoint step in a fixed,
 unshuffled packed token stream. Keep the result JSON and checkpoints outside Git.
+
+### Prepared-corpus Runtime Recovery
+
+For shuffled prepared data, scheduler and consumed-cursor recovery, use
+[`validate_stage_recovery.py`](../../../tests/benchmarks/scripts/validate_stage_recovery.py)
+and the [schema5 runtime instructions](../../../docs/distributed_parallel.md#complete-token-training-state).
+It uses `build_causal_lm_stage_components`, the optimizer/scheduler factories and
+`StageTrainingCheckpoint`, rather than deriving input position from step alone.
+The baseline deliberately prefetches one unconsumed batch before saving. A second
+`torchrun` must reproduce the next update, parameter/optimizer state, data blocks,
+LR, counters and process RNG exactly. This complements, not replaces, the native
+full-model numerical comparisons and throughput measurements above.

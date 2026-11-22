@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass
+from functools import partial
 from typing import Any
 
 
@@ -91,4 +92,4 @@ class SchedulerSpec:
         """Bind a PyTorch schedule to the final backend optimizer before restore."""
         from torch.optim.lr_scheduler import LambdaLR
 
-        return LambdaLR(optimizer, lr_lambda=lambda step: self.factor(step))
+        return LambdaLR(optimizer, lr_lambda=partial(SchedulerSpec.factor, self))

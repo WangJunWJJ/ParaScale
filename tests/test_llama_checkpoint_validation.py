@@ -32,6 +32,38 @@ def test_state_fingerprint_rejects_nonfinite_tensors(value):
         state_fingerprint({"weight": torch.tensor([value])})
 
 
+@pytest.mark.parametrize(
+    "damage", ["none", "no_op", "nan", "missing", "stale_step", "unchanged"]
+)
+def test_stage_recovery_requires_real_finite_optimizer_updates(damage):
+    from tests.benchmarks.scripts.validate_llama_checkpoint import state_fingerprint
+    from tests.benchmarks.scripts.validate_stage_recovery import training_fingerprint
+
+    for _ in range(2):
+        model = torch.nn.Linear(2, 2)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=0.01)
+        initial = state_fingerprint(dict(model.named_parameters()))
+        for _ in range(3):
+            optimizer.zero_grad(set_to_none=True)
+            model(torch.ones(1, 2)).square().sum().backward()
+            if damage != "no_op":
+                optimizer.step()
+        first = next(model.parameters())
+        if damage == "nan":
+            optimizer.state[first]["exp_avg"].fill_(float("nan"))
+        elif damage == "missing":
+            optimizer.state[first].pop("exp_avg")
+        elif damage == "stale_step":
+            optimizer.state[first]["step"].fill_(2)
+        elif damage == "unchanged":
+            initial = state_fingerprint(dict(model.named_parameters()))
+        if damage == "none":
+            assert training_fingerprint(model, optimizer, steps=3, initial=initial)
+        else:
+            with pytest.raises((ValueError, AssertionError)):
+                training_fingerprint(model, optimizer, steps=3, initial=initial)
+
+
 def test_full_hf_configuration_uses_its_json_contract():
     transformers = pytest.importorskip("transformers")
     from parascale.parallel.checkpoint_context import canonical_checkpoint_context

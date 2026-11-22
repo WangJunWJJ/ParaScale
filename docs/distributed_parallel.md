@@ -319,15 +319,80 @@ Load preflight checks context before deserializing any rank payload.
 This verifies **matching declarations**, not arbitrary runtime behavior. Callers
 must keep descriptors faithful to actual configuration/code/assets. Optimizer
 class names do not fingerprint implementations or custom hooks. Context is not
-sampler position, scheduler state or data-loader state; those require separate
-application-owned restoration. Automatic discovery of undeclared changes is not
-supported.
+sampler position, scheduler state or data-loader state. Schema4 does not restore
+those; use the explicit schema5 runtime participant below for token training.
+Automatic discovery of undeclared changes is not supported.
 
 Only trusted local checkpoint files may be loaded. Topology, microbatch count, schedule
 and rank/device mapping must remain unchanged. This format is not portable
-inference export, topology-changing resharding, dataloader state or automatic
+inference export, topology-changing resharding or automatic
 fault recovery. Python validation failures are coordinated; a dead process or
 failure inside native collectives still requires launcher-level teardown.
+
+### Complete Token Training State
+
+Pass `runtime=StageTrainingCheckpoint(...)` to both save and load to include
+the existing engine's committed token cursor, update/sample counters, scheduler
+and Python/NumPy RNG in the same checksummed rank file. The executor continues to
+own Torch CPU and its current CUDA device RNG. This supports one device per rank,
+not arbitrary user generators or RNG streams on other devices.
+
+```python
+from parascale.optimizers.schedule import SchedulerSpec
+from parascale.runtime.training.stage_checkpoint import StageTrainingCheckpoint
+
+spec = SchedulerSpec("cosine", total_steps=1000, warmup_steps=20)
+engine.scheduler = spec.build(optimizer)
+engine.scheduler_metadata = spec.to_metadata()
+runtime = StageTrainingCheckpoint(
+    engine, cursor, optimizer,
+    microbatches=trainer.config.microbatches, scheduler_spec=spec,
+)
+iterator = engine.data_resume.prepare_iterator(cursor)
+# After each successful full update: optimizer.step(), scheduler.step(),
+# increment engine.state.global_step, then record_consumption with local samples.
+trainer.save_checkpoint(new_directory, optimizer, step=engine.state.global_step,
+                        runtime=runtime)
+# In a fresh process, construct the same model/optimizer/scheduler/runtime first.
+trainer.load_checkpoint(new_directory, optimizer, runtime=runtime)
+iterator = engine.data_resume.prepare_iterator(cursor)
+```
+
+Use the existing `TrainState` and `DataResumeController` in the runtime owner.
+Only `TokenBatchCursor`, fixed full microbatches, counters starting at zero and
+`SchedulerSpec.build()` schedules (or no scheduler) are admitted. A scheduler
+step must follow each optimizer update; skipped updates and GradScaler are not
+supported. `consumed_samples` is **local to the DP replica**, not multiplied by
+TP/PP. All participants must use the trainer's microbatch count and the workload
+builder's DP-coordinate cursor. Saving before iterator setup is rejected because
+there is no committed cursor snapshot yet.
+
+Runtime presence/configuration, cursor identity/position, counters, scheduler
+progress, optimizer LR and RNG are checked before model/optimizer application.
+Pending prefetch is not committed. Restore invalidates existing iterators; obtain
+a new iterator from `prepare_iterator`. It restores RNG without an extra scheduler
+step and clears stale metric history. Schema4/5 cannot be loaded interchangeably.
+Publication is atomic; **state application is not rollback-transactional**. An
+application failure requires process teardown and a fresh restart.
+
+The reusable fresh-process validator uses a pretrained Llama and a corpus made
+by `prepare-text`. Run each command in a separate process, with the same visible
+GPUs, arguments and runtime. Allow space for model plus optimizer shards.
+
+```bash
+torchrun --standalone --nproc_per_node=2 tests/benchmarks/scripts/validate_stage_recovery.py \
+  --mode baseline --model-path /models/tinyllama --corpus-path /data/token-corpus \
+  --checkpoint-dir /checkpoints/new-run --output-dir /results/new-run --tp 2
+torchrun --standalone --nproc_per_node=2 tests/benchmarks/scripts/validate_stage_recovery.py \
+  --mode resume --model-path /models/tinyllama --corpus-path /data/token-corpus \
+  --checkpoint-dir /checkpoints/new-run --output-dir /results/new-run --tp 2
+```
+
+Use four processes with `--dp 2 --tp 2`, or `--tp 2 --pp 2` and optional
+`--pipeline-schedule 1f1b`, for supported mixed layouts. This compares update3
+after a saved update2 against uninterrupted training, including exact local
+parameter/optimizer hashes, data blocks, LR and RNG. It does not establish
+convergence, long-run reliability, public CLI integration or throughput speedup.
 
 ## Reproducible Validation
 

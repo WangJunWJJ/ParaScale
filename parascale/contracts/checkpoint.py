@@ -8,7 +8,34 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict
+from typing import Any, Dict, Protocol
+
+
+class CheckpointRuntime(Protocol):
+    """Local-only participant in an all-rank checkpoint transaction.
+
+    Methods must not perform collectives. Identity/capture/validate must not
+    mutate training or RNG state. Restore may mutate state; application errors
+    require job teardown, not an attempt to continue partially restored training.
+    """
+
+    def identity(self, optimizer: Any) -> dict[str, Any]:
+        """Check optimizer binding and return rank-independent JSON identity."""
+        ...
+
+    def capture(self) -> dict[str, Any]:
+        """Snapshot committed, not merely prefetched, local progress."""
+        ...
+
+    def validate(
+        self, state: Any, *, step: int, optimizer_state: dict[str, Any]
+    ) -> None:
+        """Reject invalid state without applying it or changing global RNG."""
+        ...
+
+    def restore(self, state: dict[str, Any]) -> None:
+        """Apply validated runtime state before the executor restores Torch RNG."""
+        ...
 
 
 @dataclass(frozen=True)

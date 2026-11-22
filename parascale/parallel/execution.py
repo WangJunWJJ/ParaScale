@@ -460,14 +460,18 @@ class DistributedTrainer:
         # DDP/FSDP2 average gradients across DP, but not across TP or PP.
         self._loss_scale = self.config.dp_size / self._normalization_count
 
-    def save_checkpoint(self, directory: Any, optimizer: Any, *, step: int) -> None:
+    def save_checkpoint(
+        self, directory: Any, optimizer: Any, *, step: int, runtime: Any = None
+    ) -> None:
         """Save a new, same-topology checkpoint; all ranks must participate."""
         from .distributed_checkpoint import save_checkpoint
 
-        save_checkpoint(self, directory, optimizer, step=step)
+        save_checkpoint(self, directory, optimizer, step=step, runtime=runtime)
 
-    def load_checkpoint(self, directory: Any, optimizer: Any) -> int:
+    def load_checkpoint(
+        self, directory: Any, optimizer: Any, *, runtime: Any = None
+    ) -> int:
         """Load a trusted local checkpoint; topology changes are rejected."""
         from .distributed_checkpoint import load_checkpoint
 
-        return load_checkpoint(self, directory, optimizer)
+        return load_checkpoint(self, directory, optimizer, runtime=runtime)

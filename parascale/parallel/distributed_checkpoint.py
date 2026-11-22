@@ -17,6 +17,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from parascale.contracts.checkpoint import CheckpointRuntime
+
 from .checkpoint_context import canonical_checkpoint_context
 
 
@@ -118,20 +120,39 @@ def _optimizer_identity(module: Any, optimizer: Any) -> dict[str, Any]:
     return {"type": f"{cls.__module__}.{cls.__qualname__}", "parameter_groups": groups}
 
 
-def _validate_manifest(metadata: Any, trainer: Any) -> None:
-    if not isinstance(metadata, dict) or set(metadata) != {
+def _runtime_identity(runtime: CheckpointRuntime | None, optimizer: Any) -> str | None:
+    if runtime is None:
+        return None
+    identity = runtime.identity(optimizer)
+    serialized = json.dumps(identity, sort_keys=True, allow_nan=False)
+    if (
+        not isinstance(identity, dict)
+        or not identity
+        or json.loads(serialized) != identity
+    ):
+        raise ValueError("Checkpoint runtime identity must be a nonempty JSON object")
+    return serialized
+
+
+def _validate_manifest(
+    metadata: Any, trainer: Any, runtime_identity: str | None = None
+) -> None:
+    keys = {
         "schema_version",
         "topology",
         "step",
         "files",
         "context",
-    }:
+    }
+    if runtime_identity is not None:
+        keys.add("runtime")
+    if not isinstance(metadata, dict) or set(metadata) != keys:
         raise ValueError("Checkpoint manifest schema mismatch")
     topology = metadata["topology"]
     expected = asdict(trainer.config)
     if (
         type(metadata["schema_version"]) is not int
-        or metadata["schema_version"] != 4
+        or metadata["schema_version"] != (5 if runtime_identity is not None else 4)
         or not isinstance(topology, dict)
         or topology != expected
         or any(
@@ -139,6 +160,12 @@ def _validate_manifest(metadata: Any, trainer: Any) -> None:
         )
     ):
         raise ValueError("Checkpoint topology/schema does not match execution")
+    if (
+        runtime_identity is not None
+        and json.dumps(metadata["runtime"], sort_keys=True, allow_nan=False)
+        != runtime_identity
+    ):
+        raise ValueError("Checkpoint runtime identity mismatch")
     if canonical_checkpoint_context(
         metadata["context"]
     ) != canonical_checkpoint_context(getattr(trainer, "checkpoint_context", None)):
@@ -201,14 +228,17 @@ def _validate_optimizer_binding(state: dict, identity: Any) -> None:
 def _validate_payload(payload: Any, metadata: dict, device: Any) -> None:
     import torch
 
-    if not isinstance(payload, dict) or set(payload) != {
+    keys = {
         "model",
         "optimizer",
         "optimizer_identity",
         "cpu_rng",
         "cuda_rng",
         "step",
-    }:
+    }
+    if metadata["schema_version"] == 5:
+        keys.add("runtime")
+    if not isinstance(payload, dict) or set(payload) != keys:
         raise ValueError("Checkpoint payload schema mismatch")
     if type(payload["step"]) is not int or payload["step"] != metadata["step"]:
         raise ValueError("Checkpoint step mismatch")
@@ -231,11 +261,20 @@ def _validate_payload(payload: Any, metadata: dict, device: Any) -> None:
         raise ValueError("CPU checkpoint must not contain CUDA RNG state")
 
 
-def save_checkpoint(trainer: Any, directory: Any, optimizer: Any, *, step: int) -> None:
+def save_checkpoint(
+    trainer: Any,
+    directory: Any,
+    optimizer: Any,
+    *,
+    step: int,
+    runtime: CheckpointRuntime | None = None,
+) -> None:
     """Publish a manifest only after every rank's atomic file is complete.
 
     A path is immutable after commit. This is a trusted, same-topology Python
-    checkpoint, not a portable inference export or a dataloader resume format.
+    checkpoint, not a portable inference export. An explicit runtime participant
+    includes training progress in schema5; without one, schema4 stores only
+    model/optimizer/Torch RNG and must not be treated as full training recovery.
     All ranks must participate; concurrent writers to one directory are unsupported.
     Process death or failures inside native state-dict collectives require job-level
     teardown; Python exception coordination cannot recover a broken process group.
@@ -259,12 +298,17 @@ def save_checkpoint(trainer: Any, directory: Any, optimizer: Any, *, step: int) 
         optimizer_identity = _optimizer_identity(trainer.module, optimizer)
         optimizer_state = optimizer.state_dict()
         _validate_optimizer_binding(optimizer_state, optimizer_identity)
+        runtime_identity = _runtime_identity(runtime, optimizer)
+        if runtime is not None:
+            runtime_state = runtime.capture()
+            runtime.validate(runtime_state, step=step, optimizer_state=optimizer_state)
     _agree_identity(
         dict(
             directory=str(directory),
             topology=asdict(trainer.config),
             step=step,
             context=context,
+            runtime=runtime_identity,
         ),
         "save",
     )
@@ -282,6 +326,8 @@ def save_checkpoint(trainer: Any, directory: Any, optimizer: Any, *, step: int) 
             else None,
             "step": step,
         }
+        if runtime is not None:
+            payload["runtime"] = runtime_state
     with _phase("rank write"):
         temporary = path.with_suffix(".tmp")
         with temporary.open("wb") as stream:
@@ -295,13 +341,15 @@ def save_checkpoint(trainer: Any, directory: Any, optimizer: Any, *, step: int) 
     dist.all_gather_object(entries, entry)
     with _phase("manifest publication"):
         metadata = dict(
-            schema_version=4,
+            schema_version=5 if runtime is not None else 4,
             topology=asdict(trainer.config),
             step=step,
             files=entries,
             context=json.loads(context),
         )
-        _validate_manifest(metadata, trainer)
+        if runtime_identity is not None:
+            metadata["runtime"] = json.loads(runtime_identity)
+        _validate_manifest(metadata, trainer, runtime_identity)
         if trainer.rank == 0:
             temporary_manifest = manifest.with_suffix(".tmp")
             with temporary_manifest.open("w", encoding="utf-8") as stream:
@@ -312,7 +360,13 @@ def save_checkpoint(trainer: Any, directory: Any, optimizer: Any, *, step: int) 
             _fsync_directory(directory)
 
 
-def load_checkpoint(trainer: Any, directory: Any, optimizer: Any) -> int:
+def load_checkpoint(
+    trainer: Any,
+    directory: Any,
+    optimizer: Any,
+    *,
+    runtime: CheckpointRuntime | None = None,
+) -> int:
     """Load trusted same-topology state after coordinated local validation.
 
     Native state-dict APIs are used without a partial-state fallback. An error
@@ -328,7 +382,8 @@ def load_checkpoint(trainer: Any, directory: Any, optimizer: Any) -> int:
             (directory / "manifest.json").read_text(encoding="utf-8"),
             object_pairs_hook=_unique_json_object,
         )
-        _validate_manifest(metadata, trainer)
+        runtime_identity = _runtime_identity(runtime, optimizer)
+        _validate_manifest(metadata, trainer, runtime_identity)
     _agree_identity(
         dict(
             directory=str(directory),
@@ -347,6 +402,12 @@ def load_checkpoint(trainer: Any, directory: Any, optimizer: Any) -> int:
             trainer.module, optimizer
         ):
             raise ValueError("Checkpoint optimizer identity mismatch")
+        if runtime is not None:
+            runtime.validate(
+                payload["runtime"],
+                step=payload["step"],
+                optimizer_state=payload["optimizer"],
+            )
     with _phase("state inspection"):
         current = trainer.module.state_dict()
     with _phase("state validation"):
@@ -370,6 +431,9 @@ def load_checkpoint(trainer: Any, directory: Any, optimizer: Any) -> int:
         trainer.module.load_state_dict(payload["model"], strict=True)
     with _phase("optimizer application"):
         optimizer.load_state_dict(payload["optimizer"])
+    with _phase("runtime application"):
+        if runtime is not None:
+            runtime.restore(payload["runtime"])
     with _phase("RNG application"):
         torch.set_rng_state(payload["cpu_rng"])
         if device.type == "cuda":
