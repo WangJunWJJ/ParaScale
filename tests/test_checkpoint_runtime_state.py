@@ -110,6 +110,136 @@ def test_rank_sidecars_and_precision_roundtrip(tmp_path, monkeypatch):
     assert worker.state.data_state["state"] == {"rank": 1, "position": 6}
 
 
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("precision", "bf16"),
+        ("gradient_accumulation_steps", 2),
+        ("grad_clip_norm", 1.0),
+        ("zero_stage", 1),
+        ("ddp_find_unused_parameters", True),
+        ("ddp_static_graph", True),
+        ("ddp_gradient_as_bucket_view", False),
+        ("ddp_bucket_cap_mb", 64),
+        ("ddp_comm_hook", "fp16_compress"),
+        ("training_backend", "native"),
+    ],
+)
+def test_native_policy_drift_rejected_before_loading_state(
+    tmp_path, monkeypatch, key, value
+):
+    torch = FakeTorch()
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    manager = CheckpointManager(str(tmp_path))
+    target = engine()
+    target.config.training_backend = "native_ddp"
+    target.training_backend.name = "native_ddp"
+    controller = CheckpointController(target)
+    controller.save(manager)
+    setattr(target.config, key, value)
+    target.training_backend.load_state_dict = lambda _: pytest.fail(
+        "must not load backend"
+    )
+    torch.load = lambda *_args, **_kwargs: pytest.fail("must not load tensors or RNG")
+    target.state.global_step = 99
+    with pytest.raises(ValueError, match="training policy mismatch"):
+        controller.load(manager, 3)
+    assert target.state.global_step == 99
+
+
+def test_native_checkpoint_requires_recorded_policy(tmp_path, monkeypatch):
+    torch = FakeTorch()
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    manager = CheckpointManager(str(tmp_path))
+    controller = CheckpointController(engine())
+    controller.save(manager)
+    manifest = manager.read_manifest(3)
+    assert manifest.metadata.pop("native_training_policy")["version"] == 1
+    manager.write_manifest(manifest)
+    with pytest.raises(ValueError, match="missing native training policy"):
+        controller.load(manager, 3)
+
+
+def test_native_policy_allows_retention_and_metrics_changes(tmp_path, monkeypatch):
+    torch = FakeTorch()
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    manager = CheckpointManager(str(tmp_path))
+    target = engine()
+    controller = CheckpointController(target)
+    controller.save(manager)
+    target.config.checkpoint_keep_last = 5
+    target.config.metrics_history_limit = 10
+    assert controller.load(manager, 3).global_step == 3
+
+
+def test_native_policy_uses_effective_hook_and_static_graph():
+    from parascale.runtime.backends.native import NativeDdpTrainingBackend
+
+    config = SimpleNamespace(
+        precision="bf16",
+        ddp_comm_hook="auto",
+        task_type="vision",
+        model_family="clip",
+        gradient_accumulation_steps=2,
+        ddp_static_graph=True,
+    )
+    backend = NativeDdpTrainingBackend(config=config)
+    automatic = backend.checkpoint_policy()
+    config.ddp_comm_hook = automatic["ddp"]["comm_hook"]
+    config.ddp_static_graph = False
+    assert backend.checkpoint_policy() == automatic
+
+
+@pytest.mark.parametrize("action", ["save", "load"])
+def test_active_native_policy_drift_rejected_before_io(tmp_path, monkeypatch, action):
+    from parascale.runtime.backends.native import NativeDdpTrainingBackend
+
+    torch = FakeTorch()
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    target = engine()
+    target.config.training_backend = "native_ddp"
+    target.training_backend = NativeDdpTrainingBackend(config=target.config)
+    target.training_backend.setup()
+    manager = CheckpointManager(str(tmp_path))
+    controller = CheckpointController(target)
+    controller.save(manager)
+    target.config.ddp_find_unused_parameters = True
+    monkeypatch.setattr(
+        controller, "_save_runtime_state", lambda *_: pytest.fail("must not write")
+    )
+    torch.load = lambda *_args, **_kwargs: pytest.fail("must not read state")
+    with pytest.raises(ValueError, match="policy changed after backend setup"):
+        getattr(controller, action)(manager, 3)
+
+
+@pytest.mark.parametrize("action", ["save", "load"])
+@pytest.mark.parametrize("drift", ["replacement_config", "non_native_backend"])
+def test_engine_policy_and_active_backend_must_agree(
+    tmp_path, monkeypatch, action, drift
+):
+    from parascale.runtime.backends.native import NativeTrainingBackend
+
+    torch = FakeTorch()
+    monkeypatch.setitem(sys.modules, "torch", torch)
+    target = engine()
+    target.training_backend = NativeTrainingBackend(config=target.config)
+    target.training_backend.setup()
+    manager = CheckpointManager(str(tmp_path))
+    controller = CheckpointController(target)
+    controller.save(manager)
+    if drift == "replacement_config":
+        target.config = copy.deepcopy(target.config)
+        target.config.grad_clip_norm = 1.0
+    else:
+        target.training_backend = SimpleNamespace(name="fsdp")
+    monkeypatch.setattr(
+        controller, "_save_runtime_state", lambda *_: pytest.fail("must not write")
+    )
+    torch.load = lambda *_args, **_kwargs: pytest.fail("must not read state")
+    with pytest.raises(ValueError, match="training policy mismatch"):
+        getattr(controller, action)(manager, 3)
+
+
 @pytest.mark.parametrize("exhausted", [False, True])
 def test_replay_preserves_random_even_on_failure(exhausted):
     target = engine()
@@ -217,7 +347,7 @@ def test_runtime_failure_is_synchronized_before_raising(tmp_path, monkeypatch):
     target.precision.state_dict = fail
     with pytest.raises(ValueError, match="bad precision"):
         CheckpointController(target).save(CheckpointManager(str(tmp_path)))
-    assert calls == ["sync"]
+    assert calls == ["sync", "sync"]  # Policy agreement, then failed sidecar phase.
 
 
 def test_peer_failure_stops_checkpoint_phase(monkeypatch):
