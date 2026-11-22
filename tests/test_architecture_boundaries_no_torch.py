@@ -314,7 +314,6 @@ def test_deprecated_facades_and_empty_placeholders_are_physically_removed():
         Path("parascale/runtime/inference/memory.py"),
         Path("parascale/reporting/profile.py"),
         Path("parascale/reporting/tuner.py"),
-        Path("parascale/data/text"),
     ]
 
     assert [str(path) for path in deprecated_paths if path.exists()] == []
@@ -350,6 +349,7 @@ def test_workload_modules_do_not_import_runtime_specs():
 def test_workload_specs_are_split_by_scenario_modules():
     specs_root = Path("parascale/workloads/specs")
     expected_modules = {
+        "causal_lm": "CausalLmSpec",
         "tiny": "TinyTorchWorkloadSpec",
         "vision": "VisionSyntheticSpec",
         "clip": "ClipContrastiveSpec",
@@ -449,6 +449,7 @@ def test_cli_delegates_command_parser_registration():
         "parascale.commands.stability": "register_stability_parser",
         "parascale.commands.vision": "register_vision_profile_parser",
         "parascale.commands.checkpoint": "register_checkpoint_parser",
+        "parascale.commands.text": "register_text_parser",
     }
     for module_name, function_name in modules.items():
         assert hasattr(import_module(module_name), function_name)

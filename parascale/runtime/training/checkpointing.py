@@ -181,6 +181,7 @@ class CheckpointController:
         model: Any = None,
         optimizer: Any = None,
         scheduler: Any = None,
+        dataloader: Any = None,
     ) -> Any:
         from parascale.runtime.backends import create_runtime_training_backend
 
@@ -193,7 +194,11 @@ class CheckpointController:
                     "checkpoint training objective does not match the current teacher/configuration"
                 )
             self._validate_optimizer_metadata(manifest, optimizer)
-            return manifest, self._read_runtime_state(checkpoint_manager, manifest)
+            runtime_state = self._read_runtime_state(checkpoint_manager, manifest)
+            if dataloader is not None:
+                data_state = (runtime_state or {}).get("data_state", manifest.data_state)
+                self.engine.data_resume.validate_resume(dataloader, data_state)
+            return manifest, runtime_state
 
         manifest, runtime_state = self._collective_call(validate_runtime)
         backend_state_loaded = False

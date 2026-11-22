@@ -235,6 +235,7 @@ def run_train_from_config(
 
         quantizer = QuantizationAwareTraining(model, parascale_config.quantization)
         model = quantizer.prepare()
+    workload_objective = dict(getattr(loss_fn, "objective_metadata", {}) or {})
     objective_metadata = {}
     if distillation.enabled:
         if distillation.task == "detection":
@@ -247,6 +248,8 @@ def run_train_from_config(
             loss_fn, objective_metadata = build_distillation_objective(
                 model, distillation, teacher_spec
             )
+    if workload_objective:
+        objective_metadata["workload"] = workload_objective
     optimizer = build_optimizer_for_model(model, config_data)
     runtime_status = "synthetic" if flags["synthetic"] else "real_local"
     engine = TrainEngine(
@@ -258,7 +261,11 @@ def run_train_from_config(
     resumed_from = None
     if resume_step is not None:
         manifest = engine.load_checkpoint(
-            manager, int(resume_step), model=model, optimizer=optimizer
+            manager,
+            int(resume_step),
+            model=model,
+            optimizer=optimizer,
+            dataloader=dataloader,
         )
         resumed_from = manifest.to_dict()
 

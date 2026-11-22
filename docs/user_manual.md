@@ -351,6 +351,16 @@ Python API 支持分类 `[B,C]` 和因果语言预测 `[B,L,V]`，采用 hard CE
 
 CLI 在完整学生配置中设置顶层 `distillation`，选择 `task: classification` 或 `causal_lm`，提供 `temperature`、`alpha`、嵌套教师配置和 tensor 权重检查点。仅支持已有 workload 构造路径、单进程 native FP32、梯度累积为 1。续训会校验教师权重和目标配置指纹，不能不经说明更换教师。完整示例见[蒸馏指南](distillation.md)。
 
+### 7.9 本地因果语言模型训练
+
+`training.workload: causal_lm` 将本地 Hugging Face 因果语言模型接入统一 `train`、检查点和 PTQ/QAT 流程。模型目录必须包含匹配的 fast tokenizer；不会隐式下载模型或执行远程模型代码。
+
+先用 `python -m parascale.cli prepare-text --input train.txt --tokenizer /data/model --output /data/tokens/train` 生成不可变 token 语料，再设置 `data.type: token_corpus` 和 `data.path`。每个非空、去除首尾空白的 UTF-8 行作为一篇文档，末尾追加 EOS；默认拒绝超过 1 MiB 的行，不截断。对照实验必须使用同一份预处理 token，不能与整文件一次性分词混用。
+
+数据通过只读内存映射读取，`data.num_workers` 必须为 0。各 DP rank 分配互不重叠的完整块，共同舍弃不足一个全局 microbatch 的尾部。`data.shuffle_window_blocks` 默认 65536，仅在固定顺序的窗口内打乱，不等同于全语料随机排列。恢复时校验模型配置、训练目标、数据身份和并行拓扑；任一 rank 校验失败，各 rank 在应用模型、优化器和 RNG 状态之前共同拒绝恢复。
+
+完整配置及单卡、2/4 卡 DDP 启动命令见 [causal-LM 示例](../examples/gpu/example_012_causal_lm_training/README.md)。离线小型 Llama 的 CPU、双进程 Gloo 恢复及 PTQ/QAT 导出已纳入回归测试；真实预训练模型质量、A6000 吞吐、长跑稳定性及 FSDP/DeepSpeed 仍需独立验收。该入口尚未接入 TP/PP 或配置式学习率调度器，示例关闭 CUDA 预取；不能据此宣称已完成生产性能验收。
+
 ## 8. 后端选择建议
 
 | 后端 | 推荐场景 | 注意事项 |

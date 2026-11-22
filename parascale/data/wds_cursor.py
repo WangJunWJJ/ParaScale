@@ -83,6 +83,11 @@ class WdsCursorBatches:
 
     def load_state_dict(self, state):
         """Reject changed data/topology before applying a saved cursor."""
+        self.validate_state_dict(state)
+        self.position = state["position"]
+
+    def validate_state_dict(self, state):
+        """Validate a saved cursor without changing data or RNG state."""
         if state.get("identity") != self.identity:
             raise ValueError(
                 "WDS resume identity mismatch: dataset, topology or preprocessing changed"
@@ -90,7 +95,6 @@ class WdsCursorBatches:
         position = state.get("position")
         if not isinstance(position, int) or position < 0:
             raise ValueError("Invalid WDS resume position")
-        self.position = position
 
     def __iter__(self):
         remaining = min(

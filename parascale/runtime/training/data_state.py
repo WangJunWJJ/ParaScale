@@ -221,6 +221,25 @@ class DataResumeController:
         self.active_dataloader = None
         self._generation += 1
 
+    def validate_resume(self, dataloader: Any, data_state: Dict[str, Any]) -> None:
+        """Preflight stateful data before any model/optimizer/RNG restoration."""
+        mode = data_state.get("resume_mode", "replay_skip")
+        if mode == "replay_skip":
+            return
+        if mode != "state_dict":
+            raise ValueError(f"unsupported data resume mode: {mode}")
+        target = self._resolve_target(
+            dataloader, data_state.get("target", "dataloader")
+        )
+        validate = getattr(target, "validate_state_dict", None)
+        if not callable(validate) or not callable(
+            getattr(target, "load_state_dict", None)
+        ):
+            raise ValueError(
+                "Data preflight requires validate_state_dict() and load_state_dict()"
+            )
+        validate(copy.deepcopy(data_state.get("state", {})))
+
     @staticmethod
     def _stateful_target(dataloader: Any) -> Optional[Tuple[str, Any]]:
         if dataloader is None:

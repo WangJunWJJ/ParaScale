@@ -368,6 +368,7 @@ class TrainEngine:
         model: Any = None,
         optimizer: Any = None,
         scheduler: Any = None,
+        dataloader: Any = None,
     ) -> Any:
         return CheckpointController(self).load(
             checkpoint_manager,
@@ -375,6 +376,7 @@ class TrainEngine:
             model=model,
             optimizer=optimizer,
             scheduler=scheduler,
+            dataloader=dataloader,
         )
 
     def record_step(self, metrics: Optional[Dict[str, Any]] = None) -> TrainState:
