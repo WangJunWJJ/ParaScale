@@ -31,6 +31,12 @@
     "workload": "causal_lm",
     "seed": 42,
     "max_steps": 100,
+    "scheduler": {
+      "type": "cosine",
+      "total_steps": 1000,
+      "warmup_steps": 50,
+      "min_lr_ratio": 0.1
+    },
     "checkpoint_interval": 50,
     "checkpoint_dir": "${PARASCALE_RUN_DIR}/checkpoints"
   },

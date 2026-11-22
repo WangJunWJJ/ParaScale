@@ -39,6 +39,20 @@ sizes. Resume with the same topology, corpus, data seed, batch and model config.
 4 is per rank and gradient accumulation is 4. These defaults are a starting
 configuration, not an A6000 throughput recommendation established by measurement.
 
+The example configures `training.scheduler` with a 1,000-update cosine horizon,
+50 warmup updates and a final LR ratio of 0.1. It counts successful optimizer
+updates, not microbatches; skipped AMP updates do not advance it. Warmup begins
+at LR zero, reaches the configured base LR after 50 updates, and the final floor
+is held after update 1,000. `max_steps=100` does not reset or redefine this horizon
+on resume. Use a fixed horizon for the full training run, including all resumed
+invocations; remove the scheduler section for a constant LR.
+
+The configured scheduler currently supports native and native DDP, including
+native ZeRO-1; other backends reject it explicitly. It binds after backend
+optimizer wrapping. Checkpoint resume rejects changes to scheduler presence,
+type, warmup, horizon, floor or base LR. Per-step `next_learning_rates` reports
+the LR for the **next** optimizer update, not the update just completed.
+
 Data reads use a read-only memory map, without DataLoader workers. Blocks are
 disjoint across DP ranks; incomplete global batches are dropped equally. Fixed
 windows of at most 65,536 blocks are shuffled internally with PyTorch's sampler.
@@ -66,6 +80,6 @@ including PTQ/QAT export, continuous-versus-resumed native and two-process Gloo 
 training, and coordinated rejection when one rank changes its data identity.
 This is functional evidence, not pretrained quality or GPU performance acceptance.
 Real A6000 1/2/4-card throughput, held-out quality, FSDP/DeepSpeed qualification,
-TP/PP product-CLI integration, configured scheduler support and long-run tests
+TP/PP product-CLI integration and long-run tests
 remain separate acceptance work. CUDA prefetch defaults off in this example
 until the outstanding real-stream stress tests are completed.

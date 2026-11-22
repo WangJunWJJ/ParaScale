@@ -80,6 +80,10 @@ class FitLoopRunner:
                 data_resume.record_consumption(metrics)
             if not metrics.get("optimizer_updated", True):
                 continue
+            if scheduler is not None and hasattr(scheduler, "get_last_lr"):
+                metrics["next_learning_rates"] = [
+                    float(rate) for rate in scheduler.get_last_lr()
+                ]
             self.engine.record_step(metrics)
             if checkpoint_manager is not None and checkpoint_interval:
                 if self.engine.state.global_step % int(checkpoint_interval) == 0:

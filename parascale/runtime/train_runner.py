@@ -14,6 +14,7 @@ from typing import Any, Dict
 
 from parascale.checkpoint import CheckpointManager, CheckpointManifest
 from parascale.configuration import normalize_execution_config
+from parascale.optimizers.schedule import SchedulerSpec
 from parascale.optimizers.spec import OptimizerSpec
 from parascale.runtime.distillation import (
     build_detection_distillation_components,
@@ -34,6 +35,7 @@ from parascale.runtime.runner_common import (
     _write_runtime_config_artifacts,
 )
 from parascale.runtime.training import TrainEngine
+from parascale.runtime.training.coordination import coordinated_call
 from parascale.strategy import build_strategy_plan
 from parascale.workloads import build_optimizer_for_model, build_training_components
 from parascale.workloads.capability import capability_level_for_scope, describe_workload
@@ -163,6 +165,17 @@ def run_train_from_config(
         parascale_config.training_backend,
         zero_stage=int(parascale_config.zero_stage or 0),
     )
+    def parse_scheduler():
+        spec = SchedulerSpec.from_config(config_data)
+        if spec is not None:
+            spec.validate_backend(parascale_config.training_backend)
+        return spec
+
+    scheduler_spec = coordinated_call(
+        parse_scheduler,
+        phase="scheduler configuration",
+        identity=lambda spec: spec.to_metadata() if spec is not None else None,
+    )
 
     config_artifacts = _write_runtime_config_artifacts(
         config_data,
@@ -257,7 +270,16 @@ def run_train_from_config(
         model_profile=_section(config_data, "model_profile"),
         hardware_profile=_section(config_data, "hardware_profile"),
         objective_metadata=objective_metadata,
+        scheduler_metadata=(
+            {**scheduler_spec.to_metadata(), "base_learning_rate": optimizer_spec.lr}
+            if scheduler_spec is not None else {}
+        ),
     )
+    optimizer_builder = (
+        (lambda wrapped_model: build_optimizer_for_model(wrapped_model, config_data))
+        if distributed_requested else None
+    )
+    scheduler_builder = scheduler_spec.build if scheduler_spec is not None else None
     resumed_from = None
     if resume_step is not None:
         manifest = engine.load_checkpoint(
@@ -266,21 +288,19 @@ def run_train_from_config(
             model=model,
             optimizer=optimizer,
             dataloader=dataloader,
+            optimizer_builder=optimizer_builder,
+            scheduler_builder=scheduler_builder,
         )
         resumed_from = manifest.to_dict()
 
     start = time.perf_counter()
-    optimizer_builder = (
-        (lambda wrapped_model: build_optimizer_for_model(wrapped_model, config_data))
-        if distributed_requested
-        else None
-    )
     state = engine.fit(
         dataloader,
         max_steps=max_steps,
         model=model,
         optimizer=optimizer,
         optimizer_builder=optimizer_builder,
+        scheduler_builder=scheduler_builder if resume_step is None else None,
         loss_fn=loss_fn,
         checkpoint_manager=manager,
         checkpoint_interval=checkpoint_interval,
@@ -340,6 +360,14 @@ def run_train_from_config(
                 getattr(optimizer, "_parascale_optimizer_metadata", {}) or {}
             ),
             "global_step": state.global_step,
+            "scheduler": (
+                {
+                    **engine.scheduler_metadata,
+                    "last_epoch": engine.scheduler.last_epoch,
+                    "next_learning_rates": engine.scheduler.get_last_lr(),
+                }
+                if engine.scheduler is not None else None
+            ),
             "last_metrics": dict(state.last_metrics),
             "metrics_history": list(state.metrics_history),
             "metrics_history_dropped": state.metrics_history_dropped,

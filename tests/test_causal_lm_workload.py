@@ -217,7 +217,7 @@ def test_data_identity_is_checked_before_backend_state_is_loaded(
     assert not calls
 
 
-def _distributed_resume_worker(rank, root, model_path, data_path):
+def _distributed_resume_worker(rank, root, model_path, data_path, schedule, zero_stage):
     torch.set_num_threads(1)
     os.environ.update(RANK=str(rank), WORLD_SIZE="2", LOCAL_RANK=str(rank))
     root = Path(root)
@@ -232,45 +232,73 @@ def _distributed_resume_worker(rank, root, model_path, data_path):
         for label in ("continuous", "split"):
             config = configuration(model_path, data_path, root / label)
             config["parascale"]["training_backend"] = "native_ddp"
+            config["parascale"]["zero_stage"] = zero_stage
+            if schedule:
+                config["training"]["scheduler"] = {
+                    "type": "cosine", "total_steps": 4, "warmup_steps": 1,
+                    "min_lr_ratio": 0.1,
+                }
             config["hardware_profile"] = {"world_size": 2, "gpus_per_node": 2}
             config["training"]["max_steps"] = 4 if label == "continuous" else 2
             result = run_train_from_config(config)
             if label == "split":
                 result = run_train_from_config(config, resume_step=2)
             assert result["global_step"] == 4
+            if schedule:
+                assert result["scheduler"]["last_epoch"] == 4
+                assert result["scheduler"]["next_learning_rates"] == pytest.approx([0.0001])
         if rank == 0:
             states = [
                 torch.load(
                     root / label / "step-00000004" / "backend_state.pt",
                     map_location="cpu",
                     weights_only=True,
-                )["backend_state"]
+                )
                 for label in ("continuous", "split")
             ]
-            for name, value in states[0]["model_state_dict"].items():
+            assert states[0]["scheduler_state_dict"] == states[1]["scheduler_state_dict"]
+            torch.testing.assert_close(
+                states[0]["backend_state"]["optimizer_state_dict"],
+                states[1]["backend_state"]["optimizer_state_dict"],
+                rtol=0, atol=0,
+            )
+            for name, value in states[0]["backend_state"]["model_state_dict"].items():
                 torch.testing.assert_close(
-                    states[1]["model_state_dict"][name], value, rtol=0, atol=0
+                    states[1]["backend_state"]["model_state_dict"][name], value, rtol=0, atol=0
                 )
         from parascale.checkpoint import CheckpointManager
         from parascale.config import ParaScaleConfig
         from parascale.runtime.training import TrainEngine
 
         config = configuration(model_path, data_path, root / "split")
-        config["data"]["seed"] += rank  # Only rank 1 has an incompatible input stream.
+        # Only rank 1 changes identity; rank 0 must also fail before applying state.
+        if not schedule:
+            config["data"]["seed"] += rank
+        scheduler_metadata, builder = {}, None
+        if schedule:
+            from parascale.optimizers.schedule import SchedulerSpec
+
+            spec = SchedulerSpec(
+                type="cosine", total_steps=4 + rank, warmup_steps=1, min_lr_ratio=0.1
+            )
+            scheduler_metadata = {**spec.to_metadata(), "base_learning_rate": 0.001}
+            builder = spec.build
         model, optimizer, data, loss = build_training_components(config)
         engine = TrainEngine(
-            ParaScaleConfig(training_backend="native_ddp"),
+            ParaScaleConfig(training_backend="native_ddp", zero_stage=zero_stage),
             objective_metadata={"workload": loss.objective_metadata},
+            scheduler_metadata=scheduler_metadata,
         )
         before = {key: value.clone() for key, value in model.state_dict().items()}
         rng = torch.get_rng_state().clone()
-        with pytest.raises((ValueError, RuntimeError), match="identity|another rank"):
+        with pytest.raises((ValueError, RuntimeError), match="identity|scheduler|another rank"):
             engine.load_checkpoint(
                 CheckpointManager(str(root / "split")),
                 2,
                 model=model,
                 optimizer=optimizer,
                 dataloader=data,
+                scheduler_builder=builder,
             )
         assert torch.equal(torch.get_rng_state(), rng)
         assert not optimizer.state
@@ -281,8 +309,9 @@ def _distributed_resume_worker(rank, root, model_path, data_path):
         torch.distributed.destroy_process_group()
 
 
+@pytest.mark.parametrize(("schedule", "zero_stage"), [(False, 0), (True, 0), (True, 1)])
 def test_real_two_rank_causal_lm_checkpoint_resume(
-    tmp_path, model_path, capsys, monkeypatch
+    tmp_path, model_path, capsys, monkeypatch, schedule, zero_stage
 ):
     if not torch.distributed.is_gloo_available():
         pytest.skip("Gloo unavailable")
@@ -292,7 +321,7 @@ def test_real_two_rank_causal_lm_checkpoint_resume(
     processes = [
         context.Process(
             target=_distributed_resume_worker,
-            args=(rank, str(tmp_path), str(model_path), str(data_path)),
+            args=(rank, str(tmp_path), str(model_path), str(data_path), schedule, zero_stage),
         )
         for rank in range(2)
     ]

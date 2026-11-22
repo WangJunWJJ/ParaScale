@@ -359,7 +359,17 @@ CLI 在完整学生配置中设置顶层 `distillation`，选择 `task: classifi
 
 数据通过只读内存映射读取，`data.num_workers` 必须为 0。各 DP rank 分配互不重叠的完整块，共同舍弃不足一个全局 microbatch 的尾部。`data.shuffle_window_blocks` 默认 65536，仅在固定顺序的窗口内打乱，不等同于全语料随机排列。恢复时校验模型配置、训练目标、数据身份和并行拓扑；任一 rank 校验失败，各 rank 在应用模型、优化器和 RNG 状态之前共同拒绝恢复。
 
-完整配置及单卡、2/4 卡 DDP 启动命令见 [causal-LM 示例](../examples/gpu/example_012_causal_lm_training/README.md)。离线小型 Llama 的 CPU、双进程 Gloo 恢复及 PTQ/QAT 导出已纳入回归测试；真实预训练模型质量、A6000 吞吐、长跑稳定性及 FSDP/DeepSpeed 仍需独立验收。该入口尚未接入 TP/PP 或配置式学习率调度器，示例关闭 CUDA 预取；不能据此宣称已完成生产性能验收。
+完整配置及单卡、2/4 卡 DDP 启动命令见 [causal-LM 示例](../examples/gpu/example_012_causal_lm_training/README.md)。离线小型 Llama 的 CPU、双进程 Gloo 恢复及 PTQ/QAT 导出已纳入回归测试；真实预训练模型质量、A6000 吞吐、长跑稳定性及 FSDP/DeepSpeed 仍需独立验收。该入口尚未接入 TP/PP，示例关闭 CUDA 预取；不能据此宣称已完成生产性能验收。
+
+### 7.10 学习率调度与恢复
+
+在 `training.scheduler` 中设置 `type: cosine` 或 `linear`，并显式指定 `total_steps`；`warmup_steps` 默认 0，`min_lr_ratio` 默认 0。例如 `{"type": "cosine", "total_steps": 1000, "warmup_steps": 50, "min_lr_ratio": 0.1}` 表示先从零学习率 warmup，完成 50 次更新后达到 `optimizer.lr`，再衰减至第 1000 次更新时的 10%，之后保持该下限。未配置或设为 `null` 时不创建调度器。
+
+调度单位为成功的 optimizer update，不是 microbatch；梯度累积及 AMP 跳过更新不会多推进调度。`total_steps` 是全程固定计划，与每次调用的追加训练步数 `max_steps` 独立，恢复时不要改写它。训练结果的 `next_learning_rates` 是下次更新将使用的学习率。
+
+目前配置式调度支持 native/native DDP（含 native ZeRO-1），其他后端显式拒绝，不能静默忽略。检查点保存调度状态及其配置身份；恢复时禁止增删调度器或修改类型、总步数、warmup、下限及基础学习率。所有 rank 在训练/保存前协调校验调度器，单 rank 创建失败或身份不一致时共同失败。
+
+SDK 使用 `TrainEngine.fit(..., scheduler_builder=factory)` 将调度器绑定到后端最终 optimizer；恢复时向 `load_checkpoint` 传递同一配置的 factory，后续 `fit` 不再重复传 factory。引擎保留调度器，最终 `save_checkpoint` 自动包含其状态。直接传入的 scheduler 必须绑定最终 optimizer，不能在训练中替换。调度状态支持有限值 JSON 与 PyTorch Tensor；跨 rank 比较 Tensor 的 dtype、shape 和数值，不比较各 rank 的设备编号。自定义 LambdaLR 等函数型调度器（包括嵌套调度）必须通过 `TrainEngine(scheduler_metadata=...)` 提供稳定配置身份，否则拒绝执行；函数语义不会被 PyTorch 保存，不能仅依赖相同的序列化状态证明函数未改变。
 
 ## 8. 后端选择建议
 
