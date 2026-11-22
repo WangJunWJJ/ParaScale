@@ -29,9 +29,11 @@ from parascale.runtime.lifecycle import destroy_distributed_runtime
 from parascale.runtime.serve_runner import (
     run_serve_from_config as _run_serve_from_config,
 )
+from parascale.runtime.stage_plan import build_stage_training_plan, is_native_parallel
 from parascale.runtime.train_runner import (
     run_train_from_config as _run_train_from_config,
 )
+from parascale.runtime.training.coordination import coordinated_call
 from parascale.workloads.inference import build_inference_components
 
 TRAIN_EXAMPLES = """examples:
@@ -62,7 +64,7 @@ def register_run_parsers(subparsers: argparse._SubParsersAction) -> None:
     resume.add_argument(
         "--resume-latest",
         action="store_true",
-        help="Resume the latest complete native/native_ddp checkpoint, reporting skipped candidates.",
+        help="Resume the latest complete native/native_ddp/native_parallel checkpoint, reporting skipped candidates.",
     )
     train_parser.add_argument(
         "--output", help="Optional path to write the dry-run JSON."
@@ -205,6 +207,20 @@ def _inference_capability(task: str, device: str) -> str:
 
 
 def build_train_dry_run_payload(config_data: Dict[str, Any]) -> Dict[str, Any]:
+    if is_native_parallel(config_data):
+        plan = build_stage_training_plan(config_data)
+        return {
+            **plan.to_dict(),
+            "mode": "train",
+            "dry_run": True,
+            "runtime_status": "plan_only",
+            "entrypoint_status": "ready",
+            "next_step": (
+                "torchrun --standalone --nnodes=1 "
+                f"--nproc-per-node={plan.topology.world_size} "
+                "-m parascale.cli train --config <config.json>"
+            ),
+        }
     config_data, effective = normalize_execution_config(config_data)
     payload = build_plan_payload(config_data)
     resolved_config = resolve_config(config_data, dry_run=True)
@@ -284,6 +300,32 @@ def build_benchmark_dry_run_payload(config_data: Dict[str, Any]) -> Dict[str, An
 
 def cmd_train(args: argparse.Namespace) -> int:
     config_data = load_config_file(args.config)
+    if is_native_parallel(config_data):
+        if args.dry_run:
+            emit_json(build_train_dry_run_payload(config_data), args.output)
+            return 0
+        try:
+            # Only choose a path here. The runner coordinates artifact writes
+            # after initialization so rank-local I/O cannot strand peers.
+            runtime = config_data.setdefault("runtime", {})
+            if not isinstance(runtime, dict):
+                raise ValueError("runtime must be a mapping")
+            if not runtime.get("run_dir"):
+                output = Path(args.output) if args.output else None
+                runtime["run_dir"] = str(
+                    output.parent / output.stem if output else Path("runs") / "train"
+                )
+            payload = (
+                run_train_from_config(config_data, args.resume_step, resume_latest=True)
+                if getattr(args, "resume_latest", False)
+                else run_train_from_config(config_data, args.resume_step)
+            )
+            coordinated_call(
+                lambda: emit_json(payload, args.output), phase="training output"
+            )
+        finally:
+            destroy_distributed_runtime()
+        return 0
     config_artifacts = _write_command_config_artifacts(
         config_data,
         output_path=args.output,

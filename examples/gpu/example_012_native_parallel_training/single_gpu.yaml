@@ -1,0 +1,38 @@
+parascale:
+  training_backend: native_parallel
+  precision: bf16
+  data_parallel_size: 1
+  tensor_parallel_size: 1
+  pipeline_parallel_size: 1
+  pipeline_schedule: gpipe
+  checkpoint_save_path: /data/checkpoints/tinyllama-dp1-tp1-pp1
+  checkpoint_save_interval: 10
+  checkpoint_keep_last: 2
+  metrics_history_limit: 20
+training:
+  workload: causal_lm
+  max_steps: 20
+  batch_size: 4
+  gradient_accumulation_steps: 4
+  seed: 42
+model:
+  pretrained_model_name_or_path: /models/tinyllama
+  attention_backend: sdpa
+data:
+  type: token_corpus
+  path: /data/wikitext-tokens
+  sequence_length: 256
+  seed: 42
+  shuffle: true
+  repeat: true
+  shuffle_window_blocks: 65536
+  num_workers: 0
+optimizer:
+  type: adamw
+  lr: 0.00001
+  betas: [0.9, 0.999]
+  eps: 0.00000001
+  weight_decay: 0.01
+runtime:
+  run_dir: /data/runs/tinyllama-dp1-tp1-pp1
+  distributed_timeout_seconds: 300

@@ -118,6 +118,14 @@ def build_causal_lm_stage_components(
     stage = LlamaStage(
         source.train(), pipeline, parallel.pp_size, tp_size=parallel.tp_size
     )
+    effective_config = json.loads(source.config.to_json_string(use_diff=False))
+    for key in ("_name_or_path", "_commit_hash"):
+        effective_config.pop(key, None)
+    # HF serialization omits the runtime-selected attention implementation.
+    effective_config["_attn_implementation"] = source.config._attn_implementation
+    stage.effective_model_config = json.loads(
+        json.dumps(effective_config, allow_nan=False)
+    )
     del source
     return stage, batches, CausalLMLoss(stage.vocab_size)
 

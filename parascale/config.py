@@ -33,6 +33,7 @@ class ParallelConfig:
     tensor_parallel_mode: Literal["row", "column"] = "row"
     pipeline_parallel_size: int = 1
     pipeline_parallel_chunks: int = 1
+    pipeline_schedule: Literal["gpipe", "1f1b"] = "gpipe"
     max_tensor_parallel_size: int = 8
     max_pipeline_parallel_size: int = 16
 
@@ -43,7 +44,7 @@ class ParallelConfig:
 @dataclass
 class BackendConfig:
     training_backend: Literal[
-        "native", "native_ddp", "fsdp", "deepspeed", "ascend_native", "auto"
+        "native", "native_ddp", "native_parallel", "fsdp", "deepspeed", "ascend_native", "auto"
     ] = "native"
     zero_optimization: bool = False
     zero_stage: int = 0
@@ -308,16 +309,19 @@ class ParaScaleConfig:
             )
         if self.zero_stage not in [0, 1, 2, 3]:
             raise ValueError(f"zero_stage must be 0, 1, 2, or 3, got {self.zero_stage}")
+        if self.pipeline_schedule not in ("gpipe", "1f1b"):
+            raise ValueError("pipeline_schedule must be gpipe or 1f1b")
         if self.training_backend not in [
             "native",
             "native_ddp",
+            "native_parallel",
             "fsdp",
             "deepspeed",
             "ascend_native",
             "auto",
         ]:
             raise ValueError(
-                "training_backend must be native, native_ddp, fsdp, deepspeed, "
+                "training_backend must be native, native_ddp, native_parallel, fsdp, deepspeed, "
                 f"ascend_native, or auto, got {self.training_backend}"
             )
         if self.fsdp_sharding_strategy not in [
@@ -444,9 +448,11 @@ class ParaScaleConfig:
             )
         if self.checkpoint_keep_last < 2:
             raise ValueError("checkpoint_keep_last must be >= 2")
-        if self.metrics_history_limit < 1 or self.max_resume_replay_batches < 0:
+        history_minimum = 0 if self.training_backend == "native_parallel" else 1
+        if self.metrics_history_limit < history_minimum or self.max_resume_replay_batches < 0:
             raise ValueError(
-                "metrics_history_limit must be positive; max_resume_replay_batches must be nonnegative"
+                f"metrics_history_limit must be >= {history_minimum}; "
+                "max_resume_replay_batches must be nonnegative"
             )
 
     def update(self, config_dict: Dict[str, Any]) -> "ParaScaleConfig":

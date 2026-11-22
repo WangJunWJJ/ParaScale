@@ -34,6 +34,7 @@ from parascale.runtime.runner_common import (
     _section,
     _write_runtime_config_artifacts,
 )
+from parascale.runtime.stage_plan import is_native_parallel
 from parascale.runtime.training import TrainEngine
 from parascale.runtime.training.coordination import coordinated_call
 from parascale.runtime.training.identity import collect_execution_identity
@@ -82,6 +83,12 @@ def run_train_from_config(
     *,
     resume_latest: bool = False,
 ) -> Dict[str, Any]:
+    if is_native_parallel(config_data):
+        from parascale.runtime.stage_train_runner import run_stage_train_from_config
+
+        return run_stage_train_from_config(
+            config_data, resume_step=resume_step, resume_latest=resume_latest
+        )
     config_data, parascale_config = normalize_execution_config(config_data)
     launch_world_size = coordinated_call(
         validate_launcher_context, phase="execution topology", identity=lambda size: size
