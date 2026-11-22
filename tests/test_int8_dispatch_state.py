@@ -142,6 +142,7 @@ def test_compiled_adapter_reads_buffer_replacement_mutation_and_restore():
             source, InferenceQuantizationConfig(backend="gemlite_int8")
         )
         saved = copy.deepcopy(model.state_dict())
+        weight_stride = model.W_q.stride()
         compiled = torch.compile(model, mode="reduce-overhead", fullgraph=True)
         with torch.inference_mode():
             inputs = torch.randn(1, 128, device="cuda", dtype=torch.bfloat16)
@@ -163,8 +164,20 @@ def test_compiled_adapter_reads_buffer_replacement_mutation_and_restore():
                     compiled(batch), model(batch), rtol=0, atol=0
                 )
             model.cpu().cuda()
-            torch.testing.assert_close(compiled(inputs), model(inputs), rtol=0, atol=0)
+            assert model.W_q.stride() == weight_stride
+            for name, expected in saved.items():
+                torch.testing.assert_close(
+                    getattr(model, name), expected, rtol=0, atol=0
+                )
+            torch.testing.assert_close(compiled(inputs), initial, rtol=0, atol=0)
             cloned = copy.deepcopy(model)
-            torch.testing.assert_close(cloned(inputs), model(inputs), rtol=0, atol=0)
+            assert cloned.W_q.stride() == weight_stride
+            assert cloned.W_q.data_ptr() != model.W_q.data_ptr()
+            assert cloned.scales.data_ptr() != model.scales.data_ptr()
+            for name, expected in saved.items():
+                torch.testing.assert_close(
+                    getattr(cloned, name), expected, rtol=0, atol=0
+                )
+            torch.testing.assert_close(cloned(inputs), initial, rtol=0, atol=0)
     finally:
         torch.compiler.reset()
