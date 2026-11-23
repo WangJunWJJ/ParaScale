@@ -96,3 +96,164 @@ generates real-data evidence.
 
 Passing this short check does not certify 24h stability, exact interrupted resume,
 HTTP serving, distributed inference or deployment-specific quality requirements.
+
+## CPU Lookahead and Recovery Policy
+
+`data.cpu_prefetch: true` prepares at most one following batch in a CPU thread,
+overlapping original-image decoding and checkpoint preprocessing with training.
+The framework defaults to false; this example explicitly enables it. This option
+requires pretrained CLIP/SigLIP, streaming WDS,
+`num_workers: 0`, and no CUDA prefetch. It does not change the physical batch,
+sample order or preprocessing algorithm. The checkpoint cursor advances only
+for consumed batches, not speculative work.
+
+The transform must be deterministic CPU-only code that does not use global RNG.
+Do not add random augmentation or concurrent processor mutation to this path.
+Ending a fit cancels queued work and joins running preprocessing; it cannot
+interrupt a stalled decoder or storage read, so shutdown time is not bounded.
+
+This example also sets `ddp_find_unused_parameters: true` and
+`ddp_static_graph: false`. In the validated PyTorch 2.9.1 environment, this keeps
+gradient buckets fixed across a fresh-process restart. The purpose is stable
+reduction order, not unused parameters in CLIP; PyTorch's extra-graph-traversal
+warning is expected. This is an explicit example policy, not a framework-wide
+default or an arbitrary-model bitwise-recovery guarantee. Keep the policy,
+precision, world size and input configuration unchanged when resuming, and
+requalify after changing PyTorch, CUDA/NCCL, hardware or model configuration.
+Native checkpoints bind this training policy in their metadata and reject a
+mismatch before state restoration. Checkpoints predating this metadata cannot
+be strictly resumed by the current runtime; do not retrofit the manifest.
+
+The following Linux/CUDA protocol reuses the environment variables above. Run
+the input-equivalence gate before the timing comparison, with no competing jobs:
+
+```bash
+set -euo pipefail
+python -m torch.distributed.run --nnodes=1 --nproc_per_node=4 \
+  --master_addr=127.0.0.1 --master_port=29500 \
+  -m tests.benchmarks.scripts.profile_clip_input \
+  --model "$PARASCALE_MODEL" --data "$PARASCALE_DATA/train" \
+  --output "$PARASCALE_RUN_DIR/input-parity" --verify-prefetch
+
+CUDA_VISIBLE_DEVICES=0,1,3,4 python -m tests.benchmarks.scripts.validate_clip_input_prefetch \
+  --config examples/gpu/example_015_clip_retrieval_quality/train.json \
+  --output "$PARASCALE_RUN_DIR/input-timing"
+```
+
+The input gate compares all tensor bytes for 25 batches/rank. Timing uses three
+alternating-order pairs of fresh product CLI launches, 50 updates each, with the
+first 10 excluded from steady-state metrics. It also reports whole-fit throughput.
+Checkpoints are disabled only in this timing protocol. A speed gate passing does
+not replace trained-checkpoint quality, distributed recovery or long-run gates.
+
+To compare the fixed-bucket recovery policy against default DDP bucketing, pass
+`--comparison ddp-buckets` to the same timing command and use a new output
+directory. Both arms enable CPU lookahead and disable `ddp_static_graph`; only
+`ddp_find_unused_parameters` changes. The predefined gate permits at most a 5%
+median steady-throughput regression across three pairs. This measures the whole
+policy, including its extra unused-parameter graph traversal, not buckets alone.
+Whole-fit throughput and every individual pair remain in the report. Passing
+the median gate does not mean every pair regressed by less than 5%.
+
+## Fresh-Process Recovery Gate
+
+The following Linux/CUDA gate requires at least 20 GiB free space. It trains
+50 updates with CPU lookahead, saves updates 25 and 50, copies the validated
+update-25 checkpoint into a separate run, and resumes 25 updates in fresh ranks.
+Training shards and model assets must match the evaluation inputs. It checks
+Adam moments and exact optimizer step counts, per-rank cursor/RNG, and held-out
+retrieval for both trained checkpoints. This is a correctness test, not a speed
+benchmark; checkpoint I/O is enabled.
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,3,4 python -m tests.benchmarks.scripts.validate_clip_prefetch_recovery \
+  --config examples/gpu/example_015_clip_retrieval_quality/train.json \
+  --model "$PARASCALE_MODEL" --data "$PARASCALE_DATA" \
+  --output "$PARASCALE_RUN_DIR/recovery"
+```
+
+The output directory must be new. Model/moment comparisons use fixed
+`atol=1e-5, rtol=1e-4`; progress and RNG must match exactly. A failed state gate
+remains a failure even when retrieval passes. Preserve its checkpoints and logs
+to localize the first divergent update instead of relaxing the tolerance.
+`--check-only` revalidates the existing artifacts without training again, binding
+retrieval reports to current checkpoint hashes and verifying the restore origin.
+
+### Process Failure Gate
+
+Run this bounded Linux/CUDA gate with a new output directory and at least 15 GiB
+free space. Both paths share a validated update-2 checkpoint, including process
+RNG states. It compares uninterrupted continuation to update 4 with a process-group
+SIGKILL after publishing update 3, followed by one resumed update via `--resume-latest`.
+It separately injects an incomplete newer manifest to test latest-valid fallback
+and checks that a changed DDP policy is rejected before restoration. Model,
+complete Adam state, per-rank RNG and data cursors must match exactly.
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,3,4 python -m tests.benchmarks.scripts.validate_clip_fault_recovery \
+  --config examples/gpu/example_015_clip_retrieval_quality/train.json \
+  --output "$PARASCALE_RUN_DIR/fault-recovery"
+```
+
+This tests process failure and an explicit incomplete-publication injection,
+not host power loss, disk durability, retrieval quality or sustained throughput.
+It uses the example's fixed-bucket FP32 policy and does not certify other backends.
+
+### Training and Offline Inference Soak
+
+The Linux supervisor below requires all five A6000 GPUs visible: training owns
+GPUs `0,1,3,4` and resident inference owns GPU `2`. Use an otherwise idle machine,
+a new output directory and at least 30 GiB free disk space. It stops if free space
+falls below 20 GiB. Run `--hours 0.0333333334` first for a two-minute preflight;
+this does not replace the 24-hour run.
+
+```bash
+python -m tests.benchmarks.scripts.production_soak \
+  --config examples/gpu/example_015_clip_retrieval_quality/train.json \
+  --model "$PARASCALE_MODEL" --data "$PARASCALE_DATA/train" \
+  --output "$PARASCALE_RUN_DIR/soak" --revision "$(git rev-parse HEAD)" \
+  --hours 24
+```
+
+The timer starts after all workers report progress. The supervisor checks finite
+loss, bounded metric history, checkpoint retention, disk space, progress and
+worker RSS. After stopping training, it resumes 100 updates and tests inference
+from the trained checkpoint. A known incomplete checkpoint left by interruption
+is recorded separately and must not grow or be joined by new incomplete states.
+Inference compares complete image/text embeddings and logits mean with direct
+HF on the same inputs; the inputs are training pairs, not a held-out quality set.
+Latency windows are instrumented co-run observations, not isolated acceleration
+benchmarks or HTTP service SLAs. `stability_checks_passed_quality_pending` means
+only these gates passed for the requested duration; retrieval and service gates
+remain separate.
+
+For a historical failed recovery run with `ddp_find_unused_parameters: false`
+and `ddp_static_graph: false`, the bounded reducer diagnostic below reuses its
+update-25 checkpoint. It does **not** apply to this example's current fixed-bucket
+configuration. Set `PARASCALE_FAILED_RECOVERY_DIR` to that original failed run;
+do not edit its configuration to bypass the diagnostic's bucket-state checks.
+For artifacts from an older checkpoint format, use their matching frozen runtime.
+Run cold then warm in separate four-rank launches with a fresh diagnostic
+directory and at least 10 GiB additional free space:
+
+```bash
+set -euo pipefail
+: "${PARASCALE_FAILED_RECOVERY_DIR:?Set the original default-DDP failed recovery directory}"
+for mode in cold warm; do
+  CUDA_VISIBLE_DEVICES=0,1,3,4 timeout 600 python -m torch.distributed.run \
+    --nnodes=1 --nproc_per_node=4 --master_addr=127.0.0.1 --master_port=29500 \
+    -m tests.benchmarks.scripts.probe_clip_reducer_recovery \
+    --config "$PARASCALE_FAILED_RECOVERY_DIR/continuous.config.json" \
+    --checkpoints "$PARASCALE_FAILED_RECOVERY_DIR/continuous/checkpoints" \
+    --output "$PARASCALE_RUN_DIR/reducer-probe" --mode "$mode"
+done
+```
+
+This fixed FP32/native-DDP diagnostic performs only two updates per launch.
+The warm arm first runs one backward without an optimizer update, then restores
+model, optimizer, cursor and RNG without replacing DDP. It compares first-step
+local gradients before reduction, reduced gradients, and resulting parameters
+and Adam moments. Per-rank JSON files report differences, not a pass certificate.
+Snapshots remain outside Git. The probe uses private PyTorch DDP diagnostic
+state; use the validated PyTorch 2.9.1 environment. Its instrumentation overhead
+must not be used as throughput evidence, and its warmup is not a product fix.

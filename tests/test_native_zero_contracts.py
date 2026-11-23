@@ -71,7 +71,7 @@ def test_checkpoint_preparation_runs_on_worker_before_rank0_save(tmp_path, monke
         _distributed_world_size=lambda: 2,
     )
     controller = CheckpointController(engine)
-    monkeypatch.setattr(controller, "_collective_call", lambda fn: fn())
+    monkeypatch.setattr(controller, "_collective_call", lambda fn, **kwargs: fn())
     monkeypatch.setattr(controller, "_save_runtime_state", lambda *args: False)
     result = controller.save(SimpleNamespace(payload_path=lambda *args: tmp_path))
     assert result["rank"] == 1

@@ -31,6 +31,9 @@ class CheckpointController:
         if checkpoint_manager is None:
             return {"step": step if step is not None else self.engine.state.global_step}
 
+        policy = self._collective_call(
+            self._native_training_policy, identity=lambda value: value
+        )
         from parascale.checkpoint import CheckpointManifest
 
         if scheduler is None:
@@ -171,6 +174,8 @@ class CheckpointController:
             objective = dict(getattr(self.engine, "objective_metadata", {}) or {})
             if objective:
                 manifest.metadata["objective"] = objective
+            if policy is not None:
+                manifest.metadata["native_training_policy"] = policy
             path = checkpoint_manager.write_manifest(manifest)
             if backend_name in {"native", "native_ddp"} and callable(
                 getattr(checkpoint_manager, "prune", None)
@@ -217,6 +222,19 @@ class CheckpointController:
             )
             if bool(manifest.metadata.get("scheduler_state_written", False)) != requested:
                 raise ValueError("checkpoint scheduler presence mismatch")
+            policy = self._native_training_policy()
+            saved_policy = manifest.metadata.get("native_training_policy")
+            if policy is not None and saved_policy is None:
+                raise ValueError(
+                    "checkpoint is missing native training policy; strict resume "
+                    "requires a checkpoint written by this runtime. Load model "
+                    "weights explicitly to start a new training run instead."
+                )
+            if saved_policy != policy:
+                raise ValueError(
+                    "native training policy mismatch: "
+                    f"checkpoint={saved_policy!r}, requested={policy!r}"
+                )
             runtime_state = self._read_runtime_state(checkpoint_manager, manifest)
             if dataloader is not None:
                 data_state = (runtime_state or {}).get("data_state", manifest.data_state)
@@ -319,6 +337,37 @@ class CheckpointController:
                     getattr(self.engine.training_backend, "optimizer_state_error")
                 )
         return manifest
+
+    def _native_training_policy(self) -> dict[str, Any] | None:
+        from parascale.runtime.backends.native import (
+            NativeDdpTrainingBackend,
+            NativeTrainingBackend,
+        )
+
+        active = self.engine.training_backend
+        active_name = getattr(active, "name", None)
+        backend_name = getattr(self.engine.config, "training_backend", active_name)
+        native_classes = {
+            "native": NativeTrainingBackend,
+            "native_ddp": NativeDdpTrainingBackend,
+        }
+        if (
+            active_name is not None
+            and active_name != backend_name
+            and (active_name in native_classes or backend_name in native_classes)
+        ):
+            raise ValueError("native training policy mismatch: configured backend changed")
+        backend_cls = native_classes.get(backend_name)
+        requested = (
+            backend_cls(config=self.engine.config).checkpoint_policy()
+            if backend_cls is not None
+            else None
+        )
+        describe = getattr(active, "checkpoint_policy", None)
+        if backend_cls is not None and callable(describe):
+            if describe() != requested:
+                raise ValueError("native training policy mismatch: engine/backend configuration differs")
+        return requested
 
     @staticmethod
     def _validate_optimizer_metadata(manifest: Any, optimizer: Any) -> None:
@@ -681,10 +730,13 @@ class CheckpointController:
                 return 0
         return 0
 
-    def _collective_call(self, operation: Any) -> Any:
+    def _collective_call(self, operation: Any, *, identity: Any = None) -> Any:
         """Finish a local I/O phase on every rank before propagating errors."""
         return coordinated_call(
-            operation, phase="Checkpoint", fallback_barrier=self._barrier
+            operation,
+            phase="Checkpoint",
+            identity=identity,
+            fallback_barrier=self._barrier,
         )
 
     def _world_size(self) -> int:

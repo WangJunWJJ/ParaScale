@@ -26,6 +26,7 @@ class ClipContrastiveSpec:
     dataset_local_cache_dir: str | None = None
     wds_image_mode: str = "tensor"
     cuda_prefetch: bool = False
+    cpu_prefetch: bool = False
     image_size: int = 32
     channels: int = 3
     patch_size: int = 16
@@ -115,7 +116,11 @@ class ClipContrastiveSpec:
                 else None
             ),
             wds_image_mode=str(data.get("wds_image_mode", "tensor")),
-            cuda_prefetch=bool(parascale.get("cuda_prefetch", False)),
+            cuda_prefetch=bool(
+                parascale.get("device_prefetch", False)
+                or parascale.get("cuda_prefetch", False)
+            ),
+            cpu_prefetch=bool(data.get("cpu_prefetch", False)),
             image_size=int(data.get("image_size", model.get("image_size", 32))),
             channels=int(data.get("channels", model.get("channels", 3))),
             patch_size=int(model.get("patch_size", data.get("patch_size", 16))),

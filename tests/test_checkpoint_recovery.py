@@ -34,7 +34,10 @@ def test_recovery_cli_flags_are_mutually_exclusive():
 def test_recovery_rejects_configured_explicit_step():
     with pytest.raises(ValueError, match="resume.*exclusive"):
         train_runner.run_train_from_config(
-            {"parascale": {"training_backend": "native"}, "training": {"resume_step": 1}},
+            {
+                "parascale": {"training_backend": "native"},
+                "training": {"resume_step": 1},
+            },
             resume_latest=True,
         )
 
@@ -128,6 +131,23 @@ def _distributed_recovery_worker(rank, root, fail_load):
             },
             "runtime": {"device": "cpu", "run_dir": str(root / "run")},
         }
+        if fail_load == "save_policy":
+            from parascale.runtime.backends.native import NativeTrainingBackend
+
+            config["parascale"]["grad_clip_norm"] = 1.0 if rank == 1 else None
+            original_prepare = NativeTrainingBackend.prepare_checkpoint
+
+            def reject_prepare(*_args, **_kwargs):
+                pytest.fail("must reject before backend consolidation")
+
+            NativeTrainingBackend.prepare_checkpoint = reject_prepare
+            try:
+                with pytest.raises(ValueError, match="identity mismatch across ranks"):
+                    train_runner.run_train_from_config(config)
+                assert not list((root / "checkpoints").glob("**/*"))
+            finally:
+                NativeTrainingBackend.prepare_checkpoint = original_prepare
+            return
         result = train_runner.run_train_from_config(config)
         assert result["global_step"] == 2
         assert result["backend"] == "native_ddp"
@@ -137,6 +157,24 @@ def _distributed_recovery_worker(rank, root, fail_load):
             manager = CheckpointManager(config["training"]["checkpoint_dir"])
             manager.payload_path(2, "backend_state.pt").write_bytes(b"corrupt")
         dist.barrier()
+        if fail_load == "policy":
+            config["parascale"]["ddp_find_unused_parameters"] = rank == 1
+            from parascale.runtime.backends.native import NativeTrainingBackend
+
+            original_state_load = NativeTrainingBackend.load_state_dict
+
+            def reject_state_load(*_args, **_kwargs):
+                pytest.fail("no rank may restore backend state after policy mismatch")
+
+            NativeTrainingBackend.load_state_dict = reject_state_load
+            try:
+                with pytest.raises(
+                    (ValueError, RuntimeError), match="training policy mismatch"
+                ):
+                    train_runner.run_train_from_config(config, resume_latest=True)
+            finally:
+                NativeTrainingBackend.load_state_dict = original_state_load
+            return
         if fail_load:
             original_load = torch.load
 
@@ -162,7 +200,7 @@ def _distributed_recovery_worker(rank, root, fail_load):
         dist.destroy_process_group()
 
 
-@pytest.mark.parametrize("fail_load", [False, True])
+@pytest.mark.parametrize("fail_load", [False, True, "policy", "save_policy"])
 def test_real_two_rank_gloo_training_recovery(tmp_path, monkeypatch, fail_load):
     torch = pytest.importorskip("torch")
     if (

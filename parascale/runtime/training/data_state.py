@@ -28,8 +28,10 @@ class DataResumeController:
         self._pending_states: deque = deque()
         self._committed_state: Optional[Dict[str, Any]] = None
         self._generation = 0
+        self._source_iterator = None
 
     def prepare_iterator(self, dataloader: Any) -> Iterator[Any]:
+        self.close_iterator()
         continuing = dataloader is self.active_dataloader
         restoring = not self._resume_applied and bool(
             getattr(self.engine.state, "data_state", {})
@@ -74,30 +76,45 @@ class DataResumeController:
         else:
             iterator = self._restore_iterator(dataloader, data_state)
         return (
-            self._track_iterator(iterator, target, self._generation)
+            self._track_iterator(
+                iterator, target, self._generation, iterator is not dataloader
+            )
             if self._tracking
             else iterator
         )
 
     def _start_iterator(self, dataloader: Any) -> Iterator[Any]:
         self._committed_state = self._snapshot(self._stateful_target(dataloader))
-        return iter(dataloader)
+        self._source_iterator = iter(dataloader)
+        return self._source_iterator
+
+    def close_iterator(self) -> None:
+        """Join any source lookahead before restart or RNG restoration."""
+        iterator, self._source_iterator = self._source_iterator, None
+        close = getattr(iterator, "close", None)
+        if iterator is not self.active_dataloader and callable(close):
+            close()
 
     def _track_iterator(
-        self, iterator: Iterator[Any], target: Any, generation: int
+        self, iterator: Iterator[Any], target: Any, generation: int, owned: bool
     ) -> Iterator[Any]:
         # Only metadata is retained, bounded by accumulation plus device lookahead.
-        while True:
-            if generation != self._generation:
-                raise RuntimeError(
-                    "Data iterator was superseded by a new fit or checkpoint load"
-                )
-            try:
-                batch = next(iterator)
-            except StopIteration:
-                return
-            self._pending_states.append(self._snapshot(target))
-            yield batch
+        try:
+            while True:
+                if generation != self._generation:
+                    raise RuntimeError(
+                        "Data iterator was superseded by a new fit or checkpoint load"
+                    )
+                try:
+                    batch = next(iterator)
+                except StopIteration:
+                    return
+                self._pending_states.append(self._snapshot(target))
+                yield batch
+        finally:
+            close = getattr(iterator, "close", None)
+            if owned and callable(close):
+                close()
 
     def _restore_iterator(
         self, dataloader: Any, data_state: Dict[str, Any]
@@ -205,6 +222,7 @@ class DataResumeController:
         return None
 
     def restore_manifest(self, manifest: Any) -> None:
+        self.close_iterator()
         self.engine.state.consumed_micro_batches = int(
             getattr(manifest, "data_state", {}).get("consumed_micro_batches", 0) or 0
         )
