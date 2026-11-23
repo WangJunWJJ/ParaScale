@@ -13,6 +13,7 @@ all timing samples, hashes, environment, quality and an engineering gate result.
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import importlib.metadata
 import json
@@ -22,6 +23,7 @@ import platform
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
 import traceback
 from datetime import datetime, timezone
@@ -88,6 +90,22 @@ def parser():
         "--backend", choices=("torchao_int4", "gemlite_int8"), default="torchao_int4"
     )
     result.add_argument("--static-cache", action="store_true")
+    result.add_argument(
+        "--attention-backend",
+        choices=("auto", "math"),
+        default="auto",
+        help="Matched attention policy for all warmup, timing and quality calls",
+    )
+    result.add_argument(
+        "--gemlite-gemv-autotune",
+        choices=("fast", "max"),
+        help="Experiment only: reset backend tuning cache and search GEMV candidates",
+    )
+    result.add_argument(
+        "--export-profile-trace",
+        action="store_true",
+        help="Export one diagnostic generation trace outside throughput timing",
+    )
     result.add_argument("--warmup", type=int, default=10)
     result.add_argument("--iterations", type=int, default=20)
     result.add_argument("--repeats", type=int, default=5)
@@ -106,6 +124,59 @@ def write_json(path, content):
         json.dumps(content, indent=2, ensure_ascii=False, allow_nan=False) + "\n",
         encoding="utf-8",
     )
+
+
+def configure_gemlite_tuning(mode: str | None) -> dict | None:
+    """Configure an isolated worker's GEMV experiment before model preparation.
+
+    None preserves backend defaults. Explicit fast/max uses the same empty
+    initial cache for all modes; only the GEMV search space changes. Raises
+    ValueError for an unsupported mode or RuntimeError for an unqualified backend.
+    """
+    if mode is None:
+        return None
+    if mode not in ("fast", "max"):
+        raise ValueError("Unsupported GemLite GEMV tuning mode")
+    from parascale.quantization.inference_gemlite import _load_gemlite
+
+    _load_gemlite()
+    import gemlite
+
+    gemlite.reset_config()
+    gemlite.set_autotune({"GEMV_SPLITK": mode})
+    return {"gemv_splitk": mode, "initial_cache": "empty_all_modes"}
+
+
+def gemlite_tuning_evidence(required_shapes: set[tuple[int, int]]) -> dict:
+    """Validate observed M1 INT8 K/N winners; reject missing tuning evidence.
+
+    Exported configurations cover warmup, timing, profiling and quality calls,
+    not only the throughput measurement window. Collection is outside timing.
+    """
+    import gemlite
+
+    from parascale.quantization.inference_gemlite import _validate_kernel_cache
+
+    with tempfile.TemporaryDirectory(prefix="parascale-gemlite-tuning-") as folder:
+        path = Path(folder) / "config.json"
+        gemlite.cache_config(str(path))
+        configs = json.loads(path.read_text(encoding="utf-8"))
+        _validate_kernel_cache(configs)
+        observed = set()
+        for signature in configs.get("GEMV_SPLITK", {}):
+            rows, outputs, features, group, elements, dtype_id = ast.literal_eval(
+                signature
+            )
+            if (rows, elements, dtype_id) == (1, 1, 108) and group == features:
+                observed.add((features, outputs))
+        if not required_shapes or not required_shapes.issubset(observed):
+            raise RuntimeError("Missing GEMV tuning evidence for converted shapes")
+        return {
+            "config_sha256": sha256(path),
+            "winning_configs": configs,
+            "scope": "warmup, timing, profiling and quality calls",
+            "required_gemv_shapes_kn": sorted(required_shapes),
+        }
 
 
 def run_comparison(args):
@@ -203,18 +274,52 @@ def fixed_length_generation(
     *,
     static_cache=False,
     compile_static=False,
+    logits_processor=None,
+    configuration_observer=None,
 ):
     from transformers import CompileConfig, GenerationConfig
 
+    neutral = {
+        "do_sample": False,
+        "eos_token_id": None,
+        "forced_bos_token_id": None,
+        "forced_eos_token_id": None,
+        "repetition_penalty": 1.0,
+        "encoder_repetition_penalty": 1.0,
+        "no_repeat_ngram_size": 0,
+        "encoder_no_repeat_ngram_size": 0,
+        "bad_words_ids": None,
+        "suppress_tokens": None,
+        "begin_suppress_tokens": None,
+        "sequence_bias": None,
+        "watermarking_config": None,
+        "renormalize_logits": False,
+        "remove_invalid_values": False,
+        "token_healing": False,
+        "guidance_scale": 1.0,
+        "exponential_decay_length_penalty": None,
+        "max_time": None,
+        "stop_strings": None,
+        "output_scores": False,
+        "output_logits": False,
+        "output_attentions": False,
+        "output_hidden_states": False,
+    }
+    # Newer HF versions merge defaults before applying kwargs. Empty containers
+    # prevent conflicting token restrictions during that intermediate validation.
     config = GenerationConfig(
-        do_sample=False,
+        **{
+            **neutral,
+            "bad_words_ids": [],
+            "suppress_tokens": [],
+            "begin_suppress_tokens": [],
+            "sequence_bias": {},
+        },
         num_beams=1,
         num_return_sequences=1,
         return_dict_in_generate=False,
         max_new_tokens=new_tokens,
         min_new_tokens=new_tokens,
-        eos_token_id=None,
-        forced_eos_token_id=None,
         pad_token_id=pad_token_id,
         use_cache=True,
         cache_implementation="static" if static_cache else None,
@@ -227,21 +332,34 @@ def fixed_length_generation(
         if "use_model_defaults" in signature(model.generate).parameters
         else {}
     )
+    if configuration_observer is not None:
+        # Diagnostic snapshot only; do not mutate the model or instrument forward.
+        resolved, _ = model._prepare_generation_config(config, **defaults, **neutral)
+        configuration_observer(json.loads(resolved.to_json_string(use_diff=False)))
     # Explicit None kwargs prevent EOS defaults from being filled by the model.
     return model.generate(
         input_ids=prompt,
         attention_mask=attention,
         generation_config=config,
         **defaults,
-        do_sample=False,
-        eos_token_id=None,
-        forced_eos_token_id=None,
+        **(
+            {"logits_processor": logits_processor}
+            if logits_processor is not None
+            else {}
+        ),
+        **neutral,
     )
 
 
-def run_worker(args):
+def run_worker(args, attention_state):
     import torch
     import torch.nn.functional as functional
+    from quantized_generation_quality import evaluate_generation
+    from quantized_inference_report import (
+        compiled_generation_regions,
+        quantized_cuda_kernels,
+        summarize_profile,
+    )
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     from parascale.quantization import (
@@ -257,6 +375,7 @@ def run_worker(args):
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cudnn.allow_tf32 = False
     torch.set_num_threads(1)
+    tuning_policy = configure_gemlite_tuning(args.gemlite_gemv_autotune)
     args.model, args.data = args.model.resolve(), args.data.resolve()
     manifest, model_hash = model_manifest(args.model)
     data_hash = sha256(args.data)
@@ -317,6 +436,7 @@ def run_worker(args):
     torch.cuda.synchronize()
     load_seconds = time.perf_counter() - started
     conversion, conversion_seconds = None, 0.0
+    tuning_shapes = set()
     if args.mode in ("int4", "int8"):
         started = time.perf_counter()
         if args.reference_artifact:
@@ -333,6 +453,13 @@ def run_worker(args):
             )
         torch.cuda.synchronize()
         conversion_seconds = time.perf_counter() - started
+        if tuning_policy is not None:
+            from parascale.quantization.inference_gemlite import _requires_safe_gemm
+
+            for name in conversion["converted_layers"]:
+                layer = model.get_submodule(name)
+                if not _requires_safe_gemm(layer.in_features, layer.out_features, 1):
+                    tuning_shapes.add((layer.in_features, layer.out_features))
     elif args.reference_artifact:
         started = time.perf_counter()
         model = materialize_reference_weights(model)
@@ -377,15 +504,34 @@ def run_worker(args):
             "generation": measure(torch, generate, args),
         }
         generated = generate().cpu().tolist()
+        torch.cuda.synchronize()
         with torch.profiler.profile(
             activities=[
                 torch.profiler.ProfilerActivity.CPU,
                 torch.profiler.ProfilerActivity.CUDA,
             ]
         ) as generation_trace:
+            profile_started = time.perf_counter()
             profiled_generation = generate()
             torch.cuda.synchronize()
+            profile_wall_ms = (time.perf_counter() - profile_started) * 1000
             del profiled_generation
+        profile_summary = summarize_profile(
+            generation_trace.key_averages(), wall_ms=profile_wall_ms
+        )
+        packed_cuda_kernels = quantized_cuda_kernels(
+            generation_trace.key_averages(), backend=args.backend
+        )
+        if args.export_profile_trace:
+            trace_path = args.output.with_suffix(".trace.json")
+            if trace_path.exists():
+                raise FileExistsError(
+                    f"Refusing to replace profile trace: {trace_path}"
+                )
+            trace_path.parent.mkdir(parents=True, exist_ok=True)
+            generation_trace.export_chrome_trace(str(trace_path))
+            profile_summary["trace_path"] = str(trace_path)
+            profile_summary["trace_sha256"] = sha256(trace_path)
         generation_events = sorted(
             {event.key for event in generation_trace.key_averages()}
         )
@@ -397,9 +543,7 @@ def run_worker(args):
             or "gemv_INT" in name
             or "gemm_INT" in name
         ]
-        compiled_regions = [
-            name for name in generation_events if "compiled" in name.lower()
-        ]
+        compiled_regions = compiled_generation_regions(generation_trace.key_averages())
         # Non-overlapping fixed-context blocks. Same tokens for both variants;
         # the first token of each block has no preceding context and is omitted.
         total_nll, count = 0.0, 0
@@ -420,6 +564,39 @@ def run_worker(args):
         perplexity = math.exp(total_nll / count)
         if not math.isfinite(perplexity):
             raise RuntimeError("Nonfinite perplexity; accuracy validation failed")
+        generation_config_snapshot = {}
+
+        def observe_generation_config(resolved):
+            if generation_config_snapshot and generation_config_snapshot != resolved:
+                raise RuntimeError(
+                    "Generation configuration changed between quality segments"
+                )
+            generation_config_snapshot.update(resolved)
+
+        generation_quality = evaluate_generation(
+            lambda quality_prompt, processor: fixed_length_generation(
+                model,
+                quality_prompt,
+                torch.ones_like(quality_prompt),
+                args.new_tokens,
+                tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0,
+                static_cache=args.static_cache,
+                compile_static=args.static_cache and args.compile,
+                logits_processor=[processor],
+                configuration_observer=observe_generation_config,
+            ),
+            evaluation,
+            prompt_length=args.sequence_length,
+            new_tokens=args.new_tokens,
+            batch_size=args.batch_size,
+            device="cuda",
+            profile_cuda=True,
+            backend=args.backend,
+        )
+        generation_quality["generation_config"] = generation_config_snapshot
+        generation_quality["generation_config_stage"] = (
+            "resolved_defaults_snapshot_before_length_expansion"
+        )
     packages = {}
     for package in (
         "torch",
@@ -447,6 +624,8 @@ def run_worker(args):
     source_files = [
         Path(__file__),
         Path(__file__).with_name("quantized_inference_report.py"),
+        Path(__file__).with_name("quantized_generation_quality.py"),
+        Path(__file__).with_name("quantized_attention_policy.py"),
         ROOT / "parascale/quantization/inference.py",
         ROOT / "parascale/quantization/inference_config.py",
         ROOT / "parascale/quantization/inference_gemlite.py",
@@ -471,6 +650,7 @@ def run_worker(args):
             "seed": args.seed,
             "compile": args.compile,
             "static_cache": args.static_cache,
+            "gemlite_tuning": tuning_policy,
             "quality_execution": (
                 "eager" if args.static_cache or not args.compile else "compiled_forward"
             ),
@@ -488,8 +668,10 @@ def run_worker(args):
             "iterations": args.iterations,
             "repeats": args.repeats,
             "activation_dtype": "bfloat16",
-            "generation_policy": "greedy_fixed_length_no_model_defaults",
+            "generation_policy": "greedy_fixed_length_neutral_logits_v2",
+            "generation_quality_policy": "teacher_forced_nonoverlapping_unpadded_blocks_v1",
             "attention": "sdpa",
+            "attention_policy": attention_state,
             "tf32": False,
             "source_sha256": {
                 str(p.relative_to(ROOT)): sha256(p) for p in source_files
@@ -514,18 +696,23 @@ def run_worker(args):
             "tokens": count,
             "generated_token_ids": generated,
         },
+        "generation_quality": generation_quality,
         "timing": timings,
         "conversion": conversion,
         "eager_kernel_verified": any(
             "_weight_int4pack_mm" in name for name in kernel_names
         ),
         "eager_profiled_int4_ops": kernel_names,
-        "kernel_verified": any(
-            "_weight_int4pack_mm" in name or "gemv_INT" in name or "gemm_INT" in name
-            for name in generation_int4_ops
-        ),
+        "kernel_verified": bool(packed_cuda_kernels),
+        "profiled_quantized_cuda_kernels": packed_cuda_kernels,
         "profiled_int4_ops": generation_int4_ops,
         "profiled_compiled_regions": compiled_regions,
+        "generation_profile": profile_summary,
+        "gemlite_tuning_evidence": (
+            gemlite_tuning_evidence(tuning_shapes)
+            if tuning_policy is not None and args.mode == "int8"
+            else None
+        ),
         "load_seconds": load_seconds,
         "conversion_seconds": conversion_seconds,
         "generation_tokens_per_second": args.batch_size
@@ -539,6 +726,10 @@ def run_worker(args):
 
 def main():
     args = parser().parse_args()
+    if args.gemlite_gemv_autotune is not None and args.backend != "gemlite_int8":
+        raise ValueError("--gemlite-gemv-autotune requires --backend gemlite_int8")
+    if args.gemlite_gemv_autotune is not None and args.batch_size != 1:
+        raise ValueError("--gemlite-gemv-autotune requires --batch-size 1")
     expected_mode = "int8" if args.backend == "gemlite_int8" else "int4"
     if args.mode in ("int4", "int8") and args.mode != expected_mode:
         raise ValueError(
@@ -561,6 +752,12 @@ def main():
             raise ValueError(f"--{key.replace('_', '-')} must be positive")
     if args.sequence_length < 2 or args.eval_tokens < 2:
         raise ValueError("sequence length and evaluation tokens must be >= 2")
+    if args.new_tokens < 2:
+        raise ValueError(
+            "At least two new tokens are required to verify decode quality"
+        )
+    if args.eval_tokens < args.batch_size * (args.sequence_length + args.new_tokens):
+        raise ValueError("Evaluation tokens must cover a full generation quality batch")
     if args.eval_offset < 0:
         raise ValueError("--eval-offset must be nonnegative")
     if args.iterations * args.repeats < 20:
@@ -569,7 +766,12 @@ def main():
         if args.mode == "compare":
             run_comparison(args)
         else:
-            run_worker(args)
+            from tests.benchmarks.scripts.quantized_attention_policy import (
+                attention_policy,
+            )
+
+            with attention_policy(args.attention_backend) as attention_state:
+                run_worker(args, attention_state)
     except Exception as exc:
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         failure_path = args.output.with_name(f"{args.output.stem}.failure-{stamp}.json")

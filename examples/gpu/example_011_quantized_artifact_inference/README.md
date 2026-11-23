@@ -50,9 +50,59 @@ evaluation text and the canonical quantized artifact. Keep outputs outside Git.
 - This comparison isolates execution changes, not quality loss from PTQ/QAT.
   Also inspect the PTQ/QAT validator's comparison against the original float
   model and, for QAT attribution, a matched unquantized fine-tuning control.
+- Quality checks include full-context perplexity and teacher-forced likelihood
+  through the same generation/cache/compile path. The first token, subsequent
+  decode tokens and combined scores must each meet the quality threshold.
+  `generation_quality` records exact scored counts, discarded tail tokens,
+  prompt/target hashes and a resolved-defaults configuration snapshot taken
+  before generation length expansion. Missing or inconsistent evidence fails
+  the gate; older reports without generation quality cannot pass it.
+- Teacher forcing uses complete, non-overlapping, unpadded corpus blocks and
+  neutral logits settings. It checks conditional likelihood, not free-running
+  task quality. Validate generated responses separately before deployment.
 - Use validation for configuration selection. Freeze the settings before a
   separate test-split evaluation. Small-model, short-sequence or high-batch
   results do not imply acceleration on different workloads.
+
+## Diagnose Kernel Costs
+
+Use `--attention-backend math` for a matched attention-numerics experiment.
+The default `auto` preserves PyTorch's enabled SDPA backends. `math` allows only
+math SDPA and disables its optional FP16/BF16 reduction for both workers during
+warmup, timing, profiling and scoring. `contract.attention_policy` records the
+requested policy and enabled backend flags; these are dispatch constraints,
+not observed-kernel evidence. Compare each policy using a fresh output path.
+Do not combine an auto baseline with a math candidate or infer that a first-token
+quality improvement implies faster complete generation. Production defaults are
+not changed by this experiment.
+
+Every result includes `generation_profile`: CPU and CUDA self-times and call
+counts from one separate diagnostic generation. These measurements are not used
+for throughput acceptance. CPU synchronization time is not CPU compute time,
+and summed CUDA activity duration is not GPU utilization. Add
+`--export-profile-trace` to export Chrome traces alongside the worker reports;
+existing trace files are not overwritten.
+
+The first teacher-forced segment also records decode execution evidence after
+synchronizing and excluding prefill. It must observe packed CUDA kernels and,
+when compilation is requested, compiled execution regions. This diagnostic
+includes scoring and token-selection work and is not pure model decode latency.
+Neither quality scoring nor its profiler is included in throughput timings.
+
+For batch-size 1 only, repeat the comparison with
+`--gemlite-gemv-autotune fast` and `--gemlite-gemv-autotune max`, using different
+output filenames. This opt-in experiment resets the backend configuration cache
+inside each worker before preparation, then changes only the GEMV search space.
+Other search modes retain their upstream defaults. Omitting this option retains
+the normal bundled-cache behavior. Never change tuning after preparing a model.
+
+The requested policy is recorded in `contract.gemlite_tuning`. INT8 results also
+include `gemlite_tuning_evidence`, with a hash and the winning configurations
+observed across warmup, measurement, profiling and quality calls. Required
+single-row INT8 projection shapes must be present; missing evidence fails the
+run. These keys identify shapes and quantization settings, not stride/layout
+qualification. A larger search space is not a speed or accuracy guarantee;
+repeat the runs and validate decode-path numerics before selecting a setting.
 
 ## Application API
 
