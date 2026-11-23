@@ -12,27 +12,105 @@ one local stage, its input example, a TP plan and an initialized process group.
 from __future__ import annotations
 
 import inspect
+import json
+import math
 import os
 from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any
 
 from .distributed import DistributedParallelConfig
+from .loss import SummedLoss
+from .precision import autocast_context, validate_precision
+
+
+def _validate_example_input(example: Any, stage: int, precision: str = "fp32") -> None:
+    import torch
+
+    if (
+        not isinstance(example, torch.Tensor)
+        or example.ndim < 1
+        or example.shape[0] < 1
+    ):
+        raise ValueError("example input must contain one nonempty microbatch")
+    if (
+        example.dtype != torch.float32
+        and not (stage == 0 and example.dtype == torch.int64)
+        and not (stage > 0 and precision == "bf16" and example.dtype == torch.bfloat16)
+    ):
+        raise ValueError(
+            "stage input must be float32, int64 on the first stage, "
+            "or bfloat16 on later stages with bf16 precision"
+        )
+
+
+def _validate_constructor(
+    module, config, example, loss_fn, summed_loss, tensor_plan, precision
+):
+    """Check local arguments without creating subgroups or mutating the module."""
+    import torch
+    import torch.distributed as dist
+
+    if torch.__version__.split("+")[0] != "2.9.1":
+        raise RuntimeError(
+            "DistributedTrainer requires the tested torch==2.9.1 runtime; install parascale[parallel]"
+        )
+    config.validate_world_size(dist.get_world_size())
+    _validate_example_input(example, config.coordinates(dist.get_rank())[1], precision)
+    if dist.get_backend() != "nccl" or example.device.type != "cuda":
+        raise ValueError("DistributedTrainer currently requires CUDA/NCCL")
+    validate_precision(precision, example.device)
+    if int(os.environ.get("LOCAL_WORLD_SIZE", config.world_size)) != config.world_size:
+        raise ValueError("Only single-node execution has been validated")
+    if (loss_fn is None) == (summed_loss is None):
+        raise ValueError("Provide exactly one of loss_fn or summed_loss")
+    if loss_fn is not None and not callable(loss_fn):
+        raise ValueError("loss_fn must be callable")
+    if summed_loss is not None and (
+        not callable(summed_loss)
+        or not callable(getattr(summed_loss, "normalization_count", None))
+    ):
+        raise ValueError("summed_loss requires a callable normalization_count")
+    if any(
+        p.device != example.device or p.dtype != torch.float32
+        for p in module.parameters()
+    ):
+        raise ValueError("Stage parameters must be float32 on the input device")
+    if any(buffer.device != example.device for buffer in module.buffers()):
+        raise ValueError("Stage buffers must be on the input device")
+    if config.tp_size > 1 and not tensor_plan:
+        raise ValueError("TP requires an explicit model-specific tensor_plan")
+    if config.tp_size == 1 and tensor_plan:
+        raise ValueError("tensor_plan requires tp_size > 1")
+    if tensor_plan:
+        missing = set(tensor_plan) - set(dict(module.named_modules()))
+        if missing:
+            raise ValueError(f"Unknown tensor_plan modules: {sorted(missing)}")
+    if config.pp_size > 1 and summed_loss is not None:
+        from .pipeline_stage import pipeline_schedule_type
+
+        schedule_type = pipeline_schedule_type(config.pipeline_schedule)
+        if "scale_grads" not in inspect.signature(schedule_type).parameters:
+            raise RuntimeError(
+                "Summed loss requires explicit schedule scale_grads=False"
+            )
 
 
 @dataclass
 class ParallelStepResult:
-    """DP-averaged loss and local output (only on the last pipeline stage)."""
+    """DP-averaged loss and opt-in output (only on the last pipeline stage)."""
 
     loss: float
     output: Any = None
+    normalization_count: int | None = None
 
 
 class DistributedTrainer:
-    """Fixed-shape, FP32 stage training on one to four CUDA devices.
+    """Fixed-shape stage training with FP32 parameters on one to four CUDA devices.
 
-    Loss must be a scalar mean over equal-sized samples/tokens, without ignored
-    target-dependent denominators. Each TP/PP group receives the same local
+    loss_fn is a scalar mean over equal-sized samples/tokens. Alternatively,
+    summed_loss explicitly supplies a scalar sum and valid-unit count, including
+    ignored labels and locally empty targets. Each TP/PP group receives the same local
     data; different DP replicas receive different samples. Caller owns optimizer
     steps, data sampling, process-group lifetime and job-level error handling.
     """
@@ -42,9 +120,12 @@ class DistributedTrainer:
         module: Any,
         config: DistributedParallelConfig,
         example_input: Any,
-        loss_fn: Any,
+        loss_fn: Any = None,
         *,
         tensor_plan: dict[str, Any] | None = None,
+        summed_loss: SummedLoss | None = None,
+        checkpoint_context: dict[str, Any] | None = None,
+        precision: str = "fp32",
     ) -> None:
         import torch
         import torch.distributed as dist
@@ -52,38 +133,61 @@ class DistributedTrainer:
 
         if not dist.is_initialized():
             raise RuntimeError("Initialize a CUDA/NCCL process group first")
-        if torch.__version__.split("+")[0] != "2.9.1":
-            raise RuntimeError(
-                "DistributedTrainer requires the tested torch==2.9.1 runtime; install parascale[parallel]"
+        error, signature = None, None
+        try:
+            _validate_constructor(
+                module,
+                config,
+                example_input,
+                loss_fn,
+                summed_loss,
+                tensor_plan,
+                precision,
             )
-        config.validate_world_size(dist.get_world_size())
-        if dist.get_backend() != "nccl" or example_input.device.type != "cuda":
-            raise ValueError("DistributedTrainer currently requires CUDA/NCCL")
-        if (
-            int(os.environ.get("LOCAL_WORLD_SIZE", config.world_size))
-            != config.world_size
-        ):
-            raise ValueError("Only single-node execution has been validated")
-        if example_input.ndim < 1 or example_input.shape[0] < 1:
-            raise ValueError("example_input must contain one nonempty microbatch")
-        if example_input.dtype != torch.float32:
-            raise ValueError("Only float32 stage inputs are currently validated")
-        if any(
-            p.device != example_input.device or p.dtype != torch.float32
-            for p in module.parameters()
-        ):
-            raise ValueError("Stage parameters must be float32 on the input device")
-        if any(buffer.device != example_input.device for buffer in module.buffers()):
-            raise ValueError("Stage buffers must be on the input device")
-        if config.tp_size > 1 and not tensor_plan:
-            raise ValueError("TP requires an explicit model-specific tensor_plan")
-        if config.tp_size == 1 and tensor_plan:
-            raise ValueError("tensor_plan requires tp_size > 1")
-        if tensor_plan:
-            missing = set(tensor_plan) - set(dict(module.named_modules()))
-            if missing:
-                raise ValueError(f"Unknown tensor_plan modules: {sorted(missing)}")
-        self.config = config
+            from .checkpoint_context import canonical_checkpoint_context
+
+            context = (
+                canonical_checkpoint_context(checkpoint_context)
+                if checkpoint_context is not None
+                else None
+            )
+            if (
+                checkpoint_context is not None
+                and checkpoint_context["precision"] != precision
+            ):
+                raise ValueError(
+                    "Checkpoint context precision must match execution precision"
+                )
+            signature = (
+                config.dp_size,
+                config.tp_size,
+                config.pp_size,
+                config.microbatches,
+                config.pipeline_schedule,
+                summed_loss is not None,
+                context,
+                precision,
+            )
+        except Exception as exc:
+            error = str(exc)
+        records = [(error, signature)]
+        if dist.get_world_size() > 1:
+            records = [None] * dist.get_world_size()
+            dist.all_gather_object(records, (error, signature))
+        errors = [
+            f"rank {rank}: {item[0]}" for rank, item in enumerate(records) if item[0]
+        ]
+        if errors:
+            raise ValueError(
+                f"Parallel constructor preflight failed: {'; '.join(errors)}"
+            )
+        if any(item[1] != records[0][1] for item in records):
+            raise ValueError(
+                "Parallel constructor preflight failed: topology, microbatches, schedule, loss mode, checkpoint context and precision must agree"
+            )
+        self._checkpoint_context = context
+        self._precision = precision
+        self._config = config
         self.device = example_input.device
         self.rank = dist.get_rank()
         self.dp_rank, self.pp_rank, self.tp_rank = config.coordinates(self.rank)
@@ -103,7 +207,11 @@ class DistributedTrainer:
             mesh_dim_names=tuple(name for name, _ in dimensions),
         )
         self.input_shape = tuple(example_input.shape)
+        self.input_dtype = example_input.dtype
         self.loss_fn = loss_fn
+        self.summed_loss = summed_loss
+        self._normalization_count = None
+        self._loss_scale = None
         self.module = module
         # TP only synchronizes planned layers and FSDP2 shards local state.
         # Establish one complete initial stage per DP/TP replica first.
@@ -134,22 +242,48 @@ class DistributedTrainer:
                 )
         self.schedule = None
         if config.pp_size > 1:
-            from torch.distributed.pipelining import PipelineStage, ScheduleGPipe
+            from .pipeline_stage import (
+                PrecisionPipelineStage,
+                pipeline_schedule_type,
+                validate_pipeline_contract,
+            )
 
-            stage = PipelineStage(
+            stage = PrecisionPipelineStage(
                 self.execution_module,
                 self.pp_rank,
                 config.pp_size,
                 self.device,
                 example_input,
                 group=self.mesh["pp"].get_group(),
+                precision=self.precision,
             )
+            validate_pipeline_contract(stage, config)
+            schedule_type = pipeline_schedule_type(config.pipeline_schedule)
             kwargs = {}
-            if "scale_grads" in inspect.signature(ScheduleGPipe).parameters:
+            if "scale_grads" in inspect.signature(schedule_type).parameters:
                 kwargs["scale_grads"] = False
-            self.schedule = ScheduleGPipe(
+            self.schedule = schedule_type(
                 stage, config.microbatches, loss_fn=self._microbatch_loss, **kwargs
             )
+
+    @property
+    def config(self) -> DistributedParallelConfig:
+        """Return the frozen topology and schedule used to construct this executor."""
+        return self._config
+
+    @property
+    def precision(self) -> str:
+        """Return the fixed forward/loss policy; master parameters remain FP32."""
+        return self._precision
+
+    @property
+    def checkpoint_context(self) -> dict[str, Any] | None:
+        """Return a detached view of the constructor's immutable declaration."""
+        return (
+            json.loads(self._checkpoint_context)
+            if self._checkpoint_context is not None
+            else None
+        )
 
     def parameters(self):
         """Return only this rank's local stage parameters for optimizer creation."""
@@ -160,28 +294,39 @@ class DistributedTrainer:
         return self.module.named_parameters()
 
     def _microbatch_loss(self, output: Any, target: Any) -> Any:
-        loss = self.loss_fn(output, target)
-        if loss.ndim != 0:
-            raise ValueError("loss_fn must return a scalar mean loss")
-        return loss / self.config.microbatches
+        with autocast_context(self.precision, self.device):
+            if self.summed_loss is not None:
+                loss = self.summed_loss(output, target)
+                if loss.ndim != 0:
+                    raise ValueError("summed_loss must return a scalar sum")
+                return loss * self._loss_scale
+            loss = self.loss_fn(output, target)
+            if loss.ndim != 0:
+                raise ValueError("loss_fn must return a scalar mean loss")
+            return loss / self.config.microbatches
 
-    def forward_backward(self, inputs: Any, targets: Any) -> ParallelStepResult:
+    def forward_backward(
+        self, inputs: Any, targets: Any, *, return_outputs: bool = False
+    ) -> ParallelStepResult:
         """Accumulate gradients for one local batch; caller zeroes and steps them.
 
         All ranks must call this with identical shapes within their TP/PP group.
         Last-stage targets must match the loss output contract. No optimizer or
         data-loader work is hidden inside this operation.
+        Outputs are opt-in: ordinary training does not retain/concatenate logits
+        in either path; pipeline loss/backward caches remain schedule-owned.
         """
+        with autocast_context("fp32", self.device):
+            self._prepare_step(inputs, targets)
+            return self._execute_step(inputs, targets, return_outputs=return_outputs)
+
+    def _execute_step(
+        self, inputs: Any, targets: Any, *, return_outputs: bool
+    ) -> ParallelStepResult:
+        """Execute with backward outside autocast, including under caller AMP."""
         import torch
         import torch.distributed as dist
 
-        expected_batch = self.input_shape[0] * self.config.microbatches
-        if inputs.shape[0] != expected_batch or targets.shape[0] != expected_batch:
-            raise ValueError("batch size must equal example microbatch * microbatches")
-        if inputs.device != self.device or targets.device != self.device:
-            raise ValueError("inputs and targets must be on the stage device")
-        if self.pp_rank == 0 and tuple(inputs.shape[1:]) != self.input_shape[1:]:
-            raise ValueError("input shape differs from the fixed stage example")
         losses = []
         output = None
         if self.schedule is None:
@@ -202,18 +347,23 @@ class DistributedTrainer:
                     self.execution_module.no_sync() if accumulate else nullcontext()
                 )
                 with context:
-                    prediction = self.execution_module(batch)
-                    loss = self._microbatch_loss(prediction, target)
+                    with autocast_context(self.precision, self.device):
+                        prediction = self.execution_module(batch)
+                        loss = self._microbatch_loss(prediction, target)
                     loss.backward()
                 losses.append(loss.detach())
-                outputs.append(prediction.detach())
-            output = torch.cat(outputs)
+                if return_outputs:
+                    outputs.append(prediction.detach())
+                del prediction, loss
+            output = torch.cat(outputs) if return_outputs else None
         elif self.pp_rank == 0:
-            self.schedule.step(inputs)
+            self.schedule.step(inputs, return_outputs=return_outputs)
         elif self.pp_rank == self.config.pp_size - 1:
-            output = self.schedule.step(target=targets, losses=losses)
+            output = self.schedule.step(
+                target=targets, losses=losses, return_outputs=return_outputs
+            )
         else:
-            self.schedule.step()
+            self.schedule.step(return_outputs=return_outputs)
         value = torch.zeros((), device=self.device)
         if losses:
             value.copy_(torch.stack([loss.detach() for loss in losses]).sum())
@@ -225,11 +375,83 @@ class DistributedTrainer:
         if self.config.dp_size > 1:
             dist.all_reduce(value, group=self.mesh["dp"].get_group())
             value.div_(self.config.dp_size)
-        if not torch.isfinite(value):
+        reported_loss = value.item()
+        if not math.isfinite(reported_loss):
             raise FloatingPointError("Nonfinite distributed loss")
         return ParallelStepResult(
-            value.item(), output.detach() if output is not None else None
+            reported_loss,
+            output.detach() if return_outputs and output is not None else None,
+            self._normalization_count,
         )
+
+    def _prepare_step(self, inputs: Any, targets: Any) -> None:
+        """Agree on preflight errors and DP-only counts before any model work."""
+        import torch
+        import torch.distributed as dist
+
+        error = None
+        count = torch.zeros((), dtype=torch.int64, device=self.device)
+        try:
+            expected_batch = self.input_shape[0] * self.config.microbatches
+            if inputs.shape[0] != expected_batch or targets.shape[0] != expected_batch:
+                raise ValueError(
+                    "batch size must equal example microbatch * microbatches"
+                )
+            if inputs.device != self.device or targets.device != self.device:
+                raise ValueError("inputs and targets must be on the stage device")
+            if self.pp_rank == 0 and (
+                tuple(inputs.shape[1:]) != self.input_shape[1:]
+                or inputs.dtype != self.input_dtype
+            ):
+                raise ValueError(
+                    "input shape/dtype differs from the fixed stage example"
+                )
+            if self.pp_rank == 0:
+                validate_inputs = getattr(self.module, "validate_inputs", None)
+                if validate_inputs is not None:
+                    validate_inputs(inputs)
+            if self.summed_loss is not None and self.pp_rank == self.config.pp_size - 1:
+                count = self.summed_loss.normalization_count(targets)
+                if (
+                    not isinstance(count, torch.Tensor)
+                    or count.ndim != 0
+                    or count.dtype != torch.int64
+                    or count.device != self.device
+                    or count.item() < 0
+                ):
+                    raise ValueError(
+                        "normalization_count must return a nonnegative device int64 scalar"
+                    )
+        except Exception as exc:
+            error = exc
+        failed = torch.tensor(int(error is not None), device=self.device)
+        if self.config.world_size > 1:
+            dist.all_reduce(failed, op=dist.ReduceOp.MAX)
+        if failed.item():
+            raise ValueError(
+                f"Parallel step preflight failed: {error or 'another rank rejected its batch'}"
+            ) from error
+        if self.summed_loss is None:
+            return
+        if self.pp_rank == self.config.pp_size - 1 and self.config.dp_size > 1:
+            dist.all_reduce(count, group=self.mesh["dp"].get_group())
+        if self.config.pp_size > 1:
+            source = (
+                self.dp_rank * self.config.pp_size + self.config.pp_size - 1
+            ) * self.config.tp_size + self.tp_rank
+            dist.broadcast(count, src=source, group=self.mesh["pp"].get_group())
+        # Counts are already global across DP. Do not sum replicated TP/PP counts.
+        bounds = torch.stack((count, -count))
+        if self.config.world_size > 1:
+            dist.all_reduce(bounds, op=dist.ReduceOp.MAX)
+        maximum, negative_minimum = bounds.tolist()
+        if maximum <= 0 or maximum != -negative_minimum:
+            raise ValueError(
+                "Global normalization_count must be positive and agree across ranks"
+            )
+        self._normalization_count = maximum
+        # DDP/FSDP2 average gradients across DP, but not across TP or PP.
+        self._loss_scale = self.config.dp_size / self._normalization_count
 
     def save_checkpoint(self, directory: Any, optimizer: Any, *, step: int) -> None:
         """Save a new, same-topology checkpoint; all ranks must participate."""

@@ -5,12 +5,25 @@
 
 """Optional channelwise INT8 weights with fused GemLite CUDA execution."""
 
+import ast
 import copy
 from dataclasses import asdict
 from importlib.metadata import version
 
 import torch
 from torch import nn
+
+
+def _requires_safe_gemm(features, outputs, rows):
+    """Keep only shapes whose unmasked upstream K/N tiles are all divisible."""
+    if rows == 1:
+        safe_n = outputs % 64 == 0 or outputs & (outputs - 1) == 0
+        # Fast GEMV pruning can eliminate every candidate for small K divisors.
+        area = min(features & -features, 256) * min(outputs, 16)
+        return not (features % 64 == 0 and safe_n and area >= 1024)
+    return not all(
+        value % 512 == 0 or value & (value - 1) == 0 for value in (features, outputs)
+    )
 
 
 class GemliteInt8Linear(nn.Module):
@@ -20,6 +33,14 @@ class GemliteInt8Linear(nn.Module):
         super().__init__()
         self.kernel = kernel.requires_grad_(False).eval()
         self.in_features, self.out_features = kernel.in_features, kernel.out_features
+        self._safe_forward = None
+        if any(
+            _requires_safe_gemm(self.in_features, self.out_features, rows)
+            for rows in (1, 2)
+        ):
+            from .inference_gemlite_tail import gemlite_tail
+
+            self._safe_forward = gemlite_tail
         self.eval()
 
     @property
@@ -39,21 +60,79 @@ class GemliteInt8Linear(nn.Module):
             raise ValueError("INT8 input feature dimension mismatch")
         if inputs.numel() == 0:
             return inputs.new_empty((*inputs.shape[:-1], self.out_features))
+        if _requires_safe_gemm(
+            self.in_features, self.out_features, inputs.numel() // self.in_features
+        ):
+            return self._safe_forward(
+                inputs,
+                self.kernel.W_q,
+                self.kernel.scales,
+                self.kernel.zeros,
+                self.kernel.bias,
+            )
         return self.kernel(inputs)
 
 
-def convert_int8(model, config, selected, skipped, *, inplace):
+def _load_gemlite():
     gem_version = version("gemlite")
     if (
         torch.__version__.split("+")[0] != "2.9.1"
-        or gem_version != "0.6.0.post2"
+        or gem_version != "0.5.1"
         or version("triton") != "3.5.1"
     ):
-        raise RuntimeError(
-            "INT8 requires torch 2.9.1, triton 3.5.1 and gemlite 0.6.0.post2"
-        )
+        raise RuntimeError("INT8 requires torch 2.9.1, triton 3.5.1 and gemlite 0.5.1")
+    from gemlite.core import GEMLITE_TRITON_CONFIG_CACHE
     from gemlite.helper import A16W8_INT8
 
+    _validate_kernel_cache(GEMLITE_TRITON_CONFIG_CACHE)
+
+    return A16W8_INT8, gem_version
+
+
+def _validate_kernel_cache(cache):
+    """Check bundled/external INT8 cache entries that bypass upstream pruning."""
+    for mode in ("GEMM", "GEMM_SPLITK", "GEMV_SPLITK"):
+        for signature, config in cache.get(mode, {}).items():
+            try:
+                rows, outputs, features, group, elements, dtype_id = ast.literal_eval(
+                    signature
+                )
+                if elements != 1 or dtype_id != 108:
+                    continue
+                block_k, block_n = config["BLOCK_SIZE_K"], config["BLOCK_SIZE_N"]
+                block_m = config["BLOCK_SIZE_M"]
+                split = config.get("SPLIT_K", 1)
+                values = (
+                    rows,
+                    outputs,
+                    features,
+                    group,
+                    block_k,
+                    block_n,
+                    block_m,
+                    split,
+                    config["GROUP_SIZE_M"],
+                    config["num_warps"],
+                    config["num_stages"],
+                )
+                if (
+                    any(type(value) is not int or value <= 0 for value in values)
+                    or any(
+                        value & (value - 1)
+                        for value in (block_k, block_n, block_m, split)
+                    )
+                    or (mode != "GEMV_SPLITK" and block_k < 16)
+                    or features % (block_k * split)
+                    or outputs % block_n
+                    or (mode == "GEMV_SPLITK" and config["BLOCK_SIZE_M"] != 1)
+                ):
+                    raise ValueError("non-divisible launch")
+            except (KeyError, TypeError, ValueError, SyntaxError):
+                raise RuntimeError("Unsafe external GemLite kernel cache") from None
+
+
+def convert_int8(model, config, selected, skipped, *, inplace):
+    processor, gem_version = _load_gemlite()
     source_bytes = sum(
         layer.weight.numel() * layer.weight.element_size()
         for layer in selected.values()
@@ -64,8 +143,8 @@ def convert_int8(model, config, selected, skipped, *, inplace):
     with torch.no_grad():
         for name in selected:
             source = modules[name]
-            kernel = A16W8_INT8(
-                device=str(source.weight.device), dtype=torch.bfloat16
+            kernel = processor(
+                device=str(source.weight.device), dtype=torch.bfloat16, fp32_scale=True
             ).from_linear(source)
             if kernel.W_q.dtype != torch.int8 or kernel.scales.dtype != torch.float32:
                 raise RuntimeError(

@@ -59,13 +59,20 @@ class BaseObserver(TensorStateModule):
         self.max_val = self.max_val.new_empty(0)
 
     def _range(self, x):
-        if not x.numel() or not torch.isfinite(x).all():
+        if not x.numel():
+            raise ValueError("observer input must be nonempty and finite")
+        if x.is_complex() and not torch.isfinite(x).all():
             raise ValueError("observer input must be nonempty and finite")
         x = x.detach().float()
         if self.config.per_channel and x.ndim > 1:
-            dims = tuple(range(1, x.ndim))
-            return x.amin(dims), x.amax(dims)
-        return x.amin().reshape(1), x.amax().reshape(1)
+            low, high = torch.aminmax(x.flatten(1), dim=1)
+        else:
+            low, high = torch.aminmax(x)
+            low, high = low.reshape(1), high.reshape(1)
+        # aminmax propagates NaNs; validate ranges instead of another full scan.
+        if not torch.isfinite(torch.stack((low, high))).all():
+            raise ValueError("observer input must be nonempty and finite")
+        return low, high
 
 
 class MinMaxObserver(BaseObserver):

@@ -13,6 +13,32 @@ available under this resource limit. Models and inputs are synthetic diagnostics
 not pretrained quality benchmarks. Read [the API guide](../../../docs/distributed_parallel.md)
 for supported combinations, checkpoint limitations and numerical validation.
 
+## Integer Tokens and Ignored Labels
+
+Run the token-loss contract validator in the same Torch 2.9.1 environment:
+
+```bash
+OUTPUT=$(mktemp -d /tmp/parascale-causal-loss.XXXXXX)
+CUDA_VISIBLE_DEVICES=0,1,3,4 OMP_NUM_THREADS=1 \
+python -m torch.distributed.run \
+  --master_addr=127.0.0.1 --master_port=29500 --nproc_per_node=4 \
+  tests/benchmarks/scripts/validate_parallel_causal_loss.py \
+  --dp 1 --tp 2 --pp 2 --output "$OUTPUT/result.json"
+```
+
+Use `(dp,tp,pp)` values `(1,1,1)`, `(2,1,1)`, `(4,1,1)`, `(1,2,1)`,
+`(1,1,2)`, `(2,2,1)`, `(2,1,2)` or `(1,2,2)`, with matching GPU count and
+`--nproc_per_node`. The fixture has an embedding, two residual projection blocks
+and an untied output head. It compares loss, logits, gradients, updated weights
+and AdamW state against a full-batch reference across four optimizer updates.
+It includes locally empty targets, uneven valid-token counts, one-rank invalid
+arguments and inconsistent TP counts, checking that all ranks reject errors.
+
+This is a synthetic correctness test, not a pretrained LM quality test, complete
+Transformer TP/PP adapter or throughput benchmark. Keep its generated JSON and
+logs outside commits. See the [token-loss contract](../../../docs/distributed_parallel.md#token-weighted-loss)
+before adapting it to a real model.
+
 ## A6000 Batch Throughput
 
 The example sweep uses four RTX A6000 GPUs, four blocks, width 512, sequence

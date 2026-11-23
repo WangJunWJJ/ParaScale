@@ -17,9 +17,60 @@ ROOT = Path(__file__).resolve().parents[1]
 CASES = [
     ("example_005_llama_ptq", "validate_llama_quantization.py", "--mode ptq"),
     ("example_006_llama_qat", "validate_llama_quantization.py", "--mode qat"),
-    ("example_007_llama_distillation", "validate_llama_distillation.py", "--teacher-model"),
-    ("example_008_yolo_distillation", "validate_detection_distillation.py", "--image-dir"),
+    (
+        "example_007_llama_distillation",
+        "validate_llama_distillation.py",
+        "--teacher-model",
+    ),
+    (
+        "example_008_yolo_distillation",
+        "validate_detection_distillation.py",
+        "--image-dir",
+    ),
 ]
+
+
+@pytest.mark.parametrize(
+    "arguments,returncode",
+    [
+        (["--help"], 0),
+        ([], 2),
+        (
+            [
+                "--model",
+                "unused-model",
+                "--data",
+                "unused-data",
+                "--data-description",
+                "missing-artifact",
+            ],
+            2,
+        ),
+    ],
+)
+def test_artifact_inference_example_requires_explicit_assets(
+    tmp_path, arguments, returncode
+):
+    script = ROOT / "examples/gpu/example_011_quantized_artifact_inference/run.sh"
+    output = tmp_path / "artifact comparison.json"
+    result = subprocess.run(
+        [_bash(), script.as_posix(), *arguments],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "PYTHON": Path(sys.executable).as_posix(),
+            "OUTPUT_FILE": output.as_posix(),
+        },
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == returncode, result.stderr
+    if returncode == 0:
+        assert "--reference-artifact" in result.stdout
+    else:
+        assert "required" in result.stderr
+    assert not output.exists()
 
 
 def _bash():
@@ -51,7 +102,9 @@ def test_compression_example_layout(name, validator, contract):
 
 
 @pytest.mark.parametrize("name,validator,contract", CASES)
-def test_compression_launcher_help_from_other_directory(tmp_path, name, validator, contract):
+def test_compression_launcher_help_from_other_directory(
+    tmp_path, name, validator, contract
+):
     script = ROOT / "examples/gpu" / name / "run.sh"
     result = subprocess.run(
         [_bash(), script.as_posix(), "--help"],
@@ -68,7 +121,9 @@ def test_compression_launcher_help_from_other_directory(tmp_path, name, validato
 
 
 @pytest.mark.parametrize("name,validator,contract", CASES)
-def test_compression_launcher_requires_explicit_inputs(tmp_path, name, validator, contract):
+def test_compression_launcher_requires_explicit_inputs(
+    tmp_path, name, validator, contract
+):
     script = ROOT / "examples/gpu" / name / "run.sh"
     output = tmp_path / "output with spaces"
     result = subprocess.run(

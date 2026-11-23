@@ -94,7 +94,7 @@ jobs:
       matrix:
         # torch-npu wheels are vendor-managed through Ascend/CANN channels,
         # so public PyPI resolution cannot validate the Ascend environment.
-        extra: [gpu, deepspeed, vlm, parallel]
+        extra: [gpu, deepspeed, vlm, parallel, inference-int8, inference-int4]
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6

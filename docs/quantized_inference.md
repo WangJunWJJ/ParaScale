@@ -1,9 +1,39 @@
 # Fused INT8 and INT4 inference
 
-## Practical INT8 path
+## Experimental INT8 path
+
+**Experimental: layer correctness is not production or model-quality
+qualification.** GemLite 0.5.1's autotuner can choose tiles that do not divide K/N,
+although its weight loads are unmasked. ParaScale routes vulnerable shapes and
+shapes with no legal GEMV tuning candidates through a controlled launch of the
+same upstream GEMM kernel. This uses divisible K/N tiles, FP32 accumulation and
+no split-K atomics, without padding or reconstructing weights. Proven aligned
+shapes retain the original fast path.
+
+The A6000 CUDA matrix covers PTQ/QAT with and without bias, the previous
+`K=576, N=1536, M=32` regression, small output dimensions, compiled M transitions,
+CUDA graph capture and cold/warm compilation caches. The relative L2 limit
+remains 0.01. Bundled/external INT8 kernel-cache entries are checked before
+preparation; do not mutate backend configuration afterward. These checks do not
+establish end-to-end model quality, throughput or long-running service stability.
+
+The experimental `prepare_quantized_inference_model` API consumes converted or
+reloaded canonical PTQ/QAT INT8 layers, preserving their stored integer codes
+and FP32 scales instead of quantizing floating-point weights again. Its
+benchmark entry point accepts `--reference-artifact`; the BF16 control
+dequantizes those same weights once before timing. Keep this path experimental
+until the numerical regression matrix and matched model quality/performance
+gates pass. The fresh-floating-point INT8 path uses the same kernel backend
+and must also be requalified.
+
+[Example 011](../examples/gpu/example_011_quantized_artifact_inference/README.md)
+provides the saved-artifact comparison. The bounded SmolLM2-135M PTQ/QAT
+validation passes the matched BF16 quality gate but fails the 1.2x generation
+speedup gate. Do not enable INT8 on a workload solely because its stored weights
+are smaller. This result is not a validation of larger models or a serving SLA.
 
 The opt-in `InferenceQuantizationConfig(backend="gemlite_int8")` uses channelwise
-INT8 weights and BF16 activations, with GemLite 0.6.0.post2 / Triton 3.5.1 /
+INT8 weights and BF16 activations, with GemLite 0.5.1 / Triton 3.5.1 /
 PyTorch 2.9.1 on Linux CUDA. Install `parascale[inference-int8]` in an isolated
 environment. `group_size` is an INT4-only option; leave its default for INT8.
 Set the model device and BF16 dtype **before** conversion. Do not cast the
@@ -12,7 +42,42 @@ native transformer modules that read weights functionally are excluded.
 Custom parents must call `Linear.forward`; direct floating-point `.weight`
 access is unsupported for INT8. No float reconstruction fallback is supplied.
 
-For the measured Qwen2.5-7B-Instruct path, configure Hugging Face generation with
+Use a separate Linux environment; do not update a shared training runtime:
+
+```bash
+python3 -m venv .venv-int8
+source .venv-int8/bin/activate
+python -m pip install --upgrade pip
+python -m pip install torch==2.9.1 torchvision==0.24.1 --index-url https://download.pytorch.org/whl/cu126
+python -m pip install -e '.[inference-int8]' transformers==4.51.3
+python -m pip check
+```
+
+GemLite 0.6.0, 0.6.0.post1 and 0.6.0.post2 require Triton >=3.6.0,
+which conflicts with Torch 2.9.1's Linux x86-64 Triton 3.5.1 requirement.
+Do not bypass dependency resolution with `--no-deps`. The 0.5.1 helper requires
+explicit `fp32_scale=True` to retain FP32 scales. Packed kernel tensors are
+registered, but standalone GemLite checkpoint loading is not a supported
+deployment artifact contract. Keep canonical source artifacts and reconstruct
+the runtime representation instead.
+
+CI resolves both inference extras with `--dry-run --ignore-installed`.
+Resolver success and `pip check` do not establish CUDA numerical correctness
+or speed. Measurements from a different GemLite release do not qualify this
+tuple; repeat matched quality, dispatch and performance validation.
+
+Dependency validation on Linux Python 3.10.12 resolved both extras with installed
+packages ignored. A separate GemLite 0.5.1 target, installed with normal dependency
+resolution and the existing runtime's NumPy/tqdm versions, imported successfully;
+full `pip check` passed with that target on `PYTHONPATH`. This was an overlay on
+Torch 2.9.1+cu126 / Triton 3.5.1, not a fresh-venv installation qualification or
+a GemLite 0.5.1 GPU correctness/performance result.
+
+The Qwen2.5-7B-Instruct measurements and 1.7B trials described below used the
+previous runtime, not the GemLite 0.5.1 tuple above. They are historical evidence
+and do not establish performance or quality qualification for GemLite 0.5.1.
+
+To reproduce the historical Qwen2.5-7B-Instruct setup, configure generation with
 `cache_implementation="static"` and
 `CompileConfig(mode="max-autotune", fullgraph=True)`. Both compared variants
 must use the same settings. Compile costs are startup costs, not warm latency.

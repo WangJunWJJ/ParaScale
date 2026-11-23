@@ -12,6 +12,12 @@ import torch
 from torch import nn
 
 from .base import QuantizationConfig
+from .execution_contracts import (
+    validate_artifact,
+    validate_copy,
+    validate_replacement,
+    validate_serialization_hooks,
+)
 from .fake_quantize import (
     FakeQuantize,
     FakeQuantizedConv2d,
@@ -65,6 +71,7 @@ def signature(model):
     Arbitrary custom forward behavior cannot be inferred from a state dictionary.
     Models exposing a config.to_dict() include that semantic contract as well.
     """
+    validate_serialization_hooks(model)
     modules = []
     for name, module in model.named_modules():
         entry = {
@@ -119,6 +126,7 @@ def replace(model, name, replacement):
 
 
 def selected_layers(model, config):
+    validate_copy(model)
     selected = []
     for name, module in model.named_modules(remove_duplicate=False):
         excluded = any(
@@ -130,6 +138,7 @@ def selected_layers(model, config):
         if type(module).__name__ in config.quantizable_layers:
             if type(module) not in (nn.Linear, nn.Conv2d):
                 raise ValueError(f"unsupported selected layer: {name}")
+            validate_replacement(module, name)
             selected.append((name, module))
         elif isinstance(module, (nn.Linear, nn.Conv2d)) and any(
             isinstance(module, cls) and cls.__name__ in config.quantizable_layers
@@ -232,6 +241,7 @@ def convert_model(model, config):
 
 def validate_observed(model, config):
     """Check readiness without allocating or encoding another model."""
+    validate_copy(model)
     found_prepared = False
     for name, layer in model.named_modules():
         if isinstance(layer, _QUANT):
@@ -240,6 +250,7 @@ def validate_observed(model, config):
             )
         if not isinstance(layer, _FAKE):
             continue
+        validate_replacement(layer, name)
         found_prepared = True
         if layer.weight_fake_quant.config.to_dict() != config.to_dict():
             raise ValueError(
@@ -286,6 +297,7 @@ def export_checkpoint(
     """Atomically replace a versioned checkpoint; never serialize Python model objects."""
     if format != "pytorch":
         raise ValueError("only pytorch checkpoint export is supported")
+    validate_artifact(model)
     checkpoint = {
         "schema_version": 2,
         "format": "parascale.reference_quantization",
@@ -314,6 +326,7 @@ def export_checkpoint(
 def load_checkpoint(path, model):
     if model is None:
         raise ValueError("a float model template is required")
+    validate_artifact(model)
     checkpoint = torch.load(path, map_location="cpu", weights_only=True)
     required = {
         "schema_version",

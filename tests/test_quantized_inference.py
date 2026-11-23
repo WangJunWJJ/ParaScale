@@ -74,13 +74,176 @@ def test_hooked_layers_keep_their_activation_preprocessing():
 
 def test_int8_excludes_functional_weight_parents():
     model = nn.ModuleDict(
-        {"linear": nn.Linear(128, 32), "attention": nn.TransformerEncoderLayer(128, 4, 256)}
+        {
+            "linear": nn.Linear(128, 32),
+            "attention": nn.TransformerEncoderLayer(128, 4, 256),
+        }
     ).eval()
     selected, skipped = _select_linear_layers(
         model, InferenceQuantizationConfig(backend="gemlite_int8")
     )
     assert set(selected) == {"linear"}
     assert skipped["attention.linear1"] == "functional_weight_access"
+
+
+@pytest.mark.parametrize(
+    "features,outputs,rows,expected",
+    [
+        (128, 128, 32, False),
+        (2048, 5632, 128, False),
+        (576, 1536, 32, True),
+        (576, 1536, 1, False),
+        (1536, 576, 128, True),
+        (96, 136, 1, True),
+        (96, 136, 65, True),
+        (32, 8, 1, True),
+        (32, 8, 32, False),
+        (544, 1536, 1, True),
+        (32, 16, 32, False),
+    ],
+)
+def test_int8_dispatch_requires_divisible_kernel_tiles(
+    features, outputs, rows, expected
+):
+    from parascale.quantization.inference_gemlite import _requires_safe_gemm
+
+    assert _requires_safe_gemm(features, outputs, rows) is expected
+
+
+@pytest.mark.parametrize(
+    "invalid", [None, "K", "N", "split", "key", "boolean", "short_k", "M", "group"]
+)
+def test_int8_cached_tiles_are_validated_without_mutation(invalid):
+    from parascale.quantization.inference_gemlite import _validate_kernel_cache
+
+    config = {
+        "BLOCK_SIZE_K": 64,
+        "BLOCK_SIZE_N": 64,
+        "SPLIT_K": 1,
+        "BLOCK_SIZE_M": 32,
+        "GROUP_SIZE_M": 8,
+        "num_stages": 2,
+        "num_warps": 4,
+    }
+    signature = "(32, 1536, 576, 576, 1, 108)"
+    if invalid == "K":
+        config["BLOCK_SIZE_K"] = 128
+    elif invalid == "N":
+        config["BLOCK_SIZE_N"] = 1024
+    elif invalid == "split":
+        config["SPLIT_K"] = 2
+    elif invalid == "key":
+        signature = "invalid"
+    elif invalid == "boolean":
+        config["SPLIT_K"] = True
+    elif invalid == "short_k":
+        config["BLOCK_SIZE_K"] = 8
+    elif invalid == "M":
+        config["BLOCK_SIZE_M"] = 0
+    elif invalid == "group":
+        config["GROUP_SIZE_M"] = 0
+    cache = {"GEMM_SPLITK": {signature: config}}
+    before = copy.deepcopy(cache)
+    if invalid is None:
+        _validate_kernel_cache(cache)
+    else:
+        with pytest.raises(RuntimeError, match="cache"):
+            _validate_kernel_cache(cache)
+    assert cache == before
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+@pytest.mark.parametrize(
+    "shape", [(576, 1536), (544, 1536), (1536, 576), (96, 136), (96, 24), (32, 8)]
+)
+def test_int8_tail_dimensions_match_stored_weights_eager_and_compiled(
+    shape, isolated_compile_cache
+):
+    pytest.importorskip("gemlite")
+    torch.manual_seed(81)
+    features, outputs = shape
+    source = nn.Linear(features, outputs).cuda().bfloat16().eval()
+    config = InferenceQuantizationConfig(backend="gemlite_int8")
+    model, _ = quantize_inference_model(source, config)
+    kernel = model.kernel
+    weight = (kernel.W_q.t().float() * kernel.scales.reshape(-1, 1)).bfloat16()
+    with torch.inference_mode():
+        for rows in (1, 4, 32, 65, 128):
+            inputs = torch.randn(rows, features, device="cuda", dtype=torch.bfloat16)
+            expected = nn.functional.linear(inputs, weight, kernel.bias).float()
+            # Repeat the exact shape to cover warmed dispatch as well as first use.
+            for _ in range(2):
+                actual = model(inputs).float()
+                assert torch.isfinite(actual).all()
+                assert (actual - expected).norm() / expected.norm() < 0.01
+        compiled = torch.compile(model, fullgraph=True)
+        for rows in (1, 32, 128, 1):
+            inputs = torch.randn(rows, features, device="cuda", dtype=torch.bfloat16)
+            expected = nn.functional.linear(inputs, weight, kernel.bias).float()
+            actual = compiled(inputs).float()
+            assert (actual - expected).norm() / expected.norm() < 0.01
+
+        for rows in (1, 32):
+            inputs = torch.randn(rows, features, device="cuda", dtype=torch.bfloat16)
+            expected = nn.functional.linear(inputs, weight, kernel.bias).float()
+            stream = torch.cuda.Stream()
+            stream.wait_stream(torch.cuda.current_stream())
+            with torch.cuda.stream(stream):
+                for _ in range(3):
+                    model(inputs)
+            torch.cuda.current_stream().wait_stream(stream)
+            graph = torch.cuda.CUDAGraph()
+            with torch.cuda.graph(graph):
+                captured = model(inputs)
+            graph.replay()
+            assert (captured.float() - expected).norm() / expected.norm() < 0.01
+
+
+@pytest.fixture
+def isolated_compile_cache():
+    # Each parameter is a separate model; preserve all M transitions within it.
+    torch.compiler.reset()
+    yield
+    torch.compiler.reset()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_int8_tail_witness_preserves_last_64_columns():
+    pytest.importorskip("gemlite")
+    import gemlite.core
+
+    before = copy.deepcopy(gemlite.core.GEMLITE_TRITON_CONFIG_CACHE)
+    source = nn.Linear(576, 64, bias=False).cuda().bfloat16().eval()
+    with torch.no_grad():
+        source.weight.zero_()
+        source.weight[:, -64:] = 1
+    model, _ = quantize_inference_model(
+        source, InferenceQuantizationConfig(backend="gemlite_int8")
+    )
+    with torch.inference_mode():
+        inputs = torch.zeros(32, 576, device="cuda", dtype=torch.bfloat16)
+        inputs[:, -64:] = 1
+        torch.testing.assert_close(model(inputs), source(inputs), rtol=0, atol=0)
+        inputs[:, -64:] = 0
+        inputs[:, :512] = 1
+        torch.testing.assert_close(model(inputs), source(inputs), rtol=0, atol=0)
+    assert gemlite.core.GEMLITE_TRITON_CONFIG_CACHE == before
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_int8_rejects_external_kernel_cache_before_replacement(monkeypatch):
+    pytest.importorskip("gemlite")
+    import gemlite.core
+
+    monkeypatch.setattr(
+        gemlite.core, "GEMLITE_TRITON_CONFIG_CACHE", {"GEMM": {"bad": {}}}
+    )
+    source = nn.Linear(128, 128).cuda().bfloat16().eval()
+    with pytest.raises(RuntimeError, match="external.*cache"):
+        quantize_inference_model(
+            source, InferenceQuantizationConfig(backend="gemlite_int8"), inplace=True
+        )
+    assert type(source) is nn.Linear
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
@@ -129,7 +292,15 @@ def test_benchmark_greedy_policy_overrides_model_sampling_defaults(monkeypatch):
     ).eval()
     model.generation_config.do_sample = True
     model.generation_config.temperature = 0.6
+    model.generation_config.num_beams = 3
+    model.generation_config.num_return_sequences = 2
+    model.generation_config.max_new_tokens = 1
+    model.generation_config.min_new_tokens = 0
+    model.generation_config.forced_eos_token_id = 2
+    model.generation_config.pad_token_id = 2
+    model.generation_config.return_dict_in_generate = True
     model.generation_config.transformers_version = "4.51.3"
+    original_defaults = copy.deepcopy(model.generation_config.to_dict())
     original_prepare = model._prepare_generation_config
     observed = []
 
@@ -146,8 +317,50 @@ def test_benchmark_greedy_policy_overrides_model_sampling_defaults(monkeypatch):
     assert first.shape == (1, 7)
     torch.testing.assert_close(first, second)
     assert all(
-        not config.do_sample and config.eos_token_id is None for config in observed
+        not config.do_sample
+        and config.num_beams == config.num_return_sequences == 1
+        and config.min_new_tokens == config.max_new_tokens == 4
+        and config.eos_token_id is config.forced_eos_token_id is None
+        and config.pad_token_id == 0
+        and not config.return_dict_in_generate
+        for config in observed
     )
+    assert model.generation_config.to_dict() == original_defaults
+
+
+@pytest.mark.parametrize("supports_model_defaults", [False, True])
+def test_benchmark_generation_policy_matches_generate_signature(
+    supports_model_defaults,
+):
+    pytest.importorskip("transformers")
+    from tests.benchmarks.scripts.benchmark_quantized_inference import (
+        fixed_length_generation,
+    )
+
+    class Model:
+        def generate(self, **kwargs):
+            assert "use_model_defaults" not in kwargs
+            return kwargs
+
+    class LegacyModel:
+        def generate(self, *, use_model_defaults=None, **kwargs):
+            assert use_model_defaults is False
+            return kwargs
+
+    model = LegacyModel() if supports_model_defaults else Model()
+    prompt = torch.tensor([[1, 3, 4]])
+    attention = torch.ones_like(prompt)
+    result = fixed_length_generation(model, prompt, attention, 4, 0)
+    config = result["generation_config"]
+    assert result["input_ids"] is prompt
+    assert result["attention_mask"] is attention
+    assert result["do_sample"] is config.do_sample is False
+    assert result["eos_token_id"] is config.eos_token_id is None
+    assert result["forced_eos_token_id"] is config.forced_eos_token_id is None
+    assert config.num_beams == config.num_return_sequences == 1
+    assert config.max_new_tokens == config.min_new_tokens == 4
+    assert config.pad_token_id == 0
+    assert config.return_dict_in_generate is False
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA SM80+")

@@ -21,6 +21,18 @@ def compare_results(baseline, candidate, min_speedup=1.2, max_ppl_increase=0.05)
     for key in ("model_sha256", "data_sha256"):
         if not baseline["contract"].get(key):
             raise ValueError(f"Missing provenance: {key}")
+    artifact = baseline["contract"].get("reference_artifact")
+    if artifact is not None:
+        conversion = candidate["conversion"]
+        if (
+            not artifact.get("sha256")
+            or conversion.get("source_format") != "parascale.reference_quantization"
+            or conversion.get("requantized") is not False
+            or conversion.get("stored_codes_and_scales_preserved") is not True
+        ):
+            raise ValueError(
+                "Missing artifact identity or preserved quantization evidence"
+            )
     if not math.isfinite(min_speedup) or min_speedup <= 1:
         raise ValueError("min_speedup must be finite and > 1")
     if not math.isfinite(max_ppl_increase) or max_ppl_increase < 0:
