@@ -438,6 +438,7 @@ CI 覆盖 Python 3.10、3.11、3.12 的源码测试，并在独立 Python 3.11 �
 | [docs/distributed_parallel.md](docs/distributed_parallel.md) | 显式 DP/TP/PP Python API、四卡二维组合及验收边界；普通 workload CLI 不支持 TP/PP |
 | [docs/software_design_documentation.md](docs/software_design_documentation.md) | 产品目标、总体架构、模块边界、路线图 |
 | [docs/software_requirements_specification.md](docs/software_requirements_specification.md) | 功能需求、能力等级、验收标准 |
+| [docs/production_acceptance.md](docs/production_acceptance.md) | 并行训练、LLaMA-7B、量化/蒸馏/剪枝与 diffusion 的目标验收基线，不代表全部已实现 |
 | [docs/remote_server_test_guide.md](docs/remote_server_test_guide.md) | 远程 GPU/NPU 容器测试指南 |
 | [configs/README.md](configs/README.md) | 配置文件组织与示例 |
 | [tests/benchmarks/reports/BENCHMARK_REPORT.md](tests/benchmarks/reports/BENCHMARK_REPORT.md) | 统一 benchmark 证据入口 |

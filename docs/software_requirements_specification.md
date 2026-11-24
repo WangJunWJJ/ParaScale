@@ -1,20 +1,20 @@
 # ParaScale 软件需求规格说明书
 
-文档基线：2026-11-19
+文档基线：2026-11-24
 
-状态：当前开发分支需求基线，与软件设计文档和用户手册同步；不是软件发布版本号。
+状态：当前开发分支需求基线；不是软件发布版本号。2026-11-24 新增的目标功能和验收边界以[生产工具验收基线](production_acceptance.md)为准，尚未实现的目标不得作为当前能力声明。
 
 ## 1. 文档目标
 
 本文定义 ParaScale 当前代码版本的软件需求边界、验收范围和能力分级，与[软件设计文档](software_design_documentation.md)保持一致，用于指导开发、审查和测试。硬件和性能证据统一引用[测试报告](../tests/benchmarks/reports/BENCHMARK_REPORT.md)，历史验证不等于本次提交重新验收。
 
-ParaScale 当前定位不再是泛化覆盖所有 AI 训练/推理形态，而是聚焦为：
+ParaScale 的目标定位为：
 
 ```text
-面向视觉与图文多模态场景、以训练为主的轻量分布式控制层。
+面向 Transformer、扩散模型及已支持视觉/图文任务的并行训练与推理优化工具。
 ```
 
-核心价值链为：
+现有视觉与图文训练能力是工程基础，不限制新增的 LLaMA-7B、模型剪枝和 diffusion 验收目标。本文后续章节中的“当前版本”描述实现边界；新增目标不意味着相关功能已经完成。核心价值链为：
 
 ```text
 Config -> RuntimePlan -> Workload Adapter -> Data Pipeline -> Training/Inference Runtime
