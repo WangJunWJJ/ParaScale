@@ -184,7 +184,11 @@ class CausalLmInferenceModel:
         if tokenizer.pad_token_id is None:
             tokenizer.pad_token_id = eos_ids[0]
         tokenizer.padding_side = "left"
-        dtype = torch.float32 if self.spec.precision == "fp32" else torch.bfloat16
+        dtype = {
+            "fp32": torch.float32,
+            "bf16": torch.bfloat16,
+            "fp16": torch.float16,
+        }[self.spec.precision]
         model = model.eval().to(device=device, dtype=dtype)
         model.requires_grad_(False)
         fusion = None

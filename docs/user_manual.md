@@ -375,6 +375,14 @@ CLI 在完整学生配置中设置顶层 `distillation`，选择 `task: classifi
 
 SDK 使用 `TrainEngine.fit(..., scheduler_builder=factory)` 将调度器绑定到后端最终 optimizer；恢复时向 `load_checkpoint` 传递同一配置的 factory，后续 `fit` 不再重复传 factory。引擎保留调度器，最终 `save_checkpoint` 自动包含其状态。直接传入的 scheduler 必须绑定最终 optimizer，不能在训练中替换。调度状态支持有限值 JSON 与 PyTorch Tensor；跨 rank 比较 Tensor 的 dtype、shape 和数值，不比较各 rank 的设备编号。自定义 LambdaLR 等函数型调度器（包括嵌套调度）必须通过 `TrainEngine(scheduler_metadata=...)` 提供稳定配置身份，否则拒绝执行；函数语义不会被 PyTorch 保存，不能仅依赖相同的序列化状态证明函数未改变。
 
+### 7.11 本地 Llama 生成推理
+
+使用 `python -m parascale.cli infer --config CONFIG --output SUMMARY`，设置 `inference.workload: causal_lm`，提供本地 Llama 模型及匹配的 tokenizer，并用 `data.type: prompts_jsonl` 指定提示词文件。每行包含 `prompt` 和可选的字符串 `id`。完整配置见[生成推理示例](../examples/gpu/example_013_causal_lm_inference/README.md)。
+
+浮点执行设置 `inference.execution: float`。CUDA 支持 `precision: fp32/bf16/fp16`；CPU 仅支持 FP32。FP16 使用动态 KV cache 和非编译执行，现阶段拒绝 FP16 与 reference/GemLite INT8 或静态缓存组合。可直接使用示例中的 `float_fp16.json`，每次运行指定新的输出目录，不能覆盖模型、输入或已有结果。
+
+这是单设备离线生成入口，不是 HTTP 服务或连续批处理服务。摘要区分模型准备、预热和稳态生成；输出 token 数按实际 EOS 停止计算。生成链路功能通过不等于指定 LLaMA-7B 的质量、吞吐或整体生产验收通过，目标边界见[生产工具验收基线](production_acceptance.md)。
+
 ## 8. 后端选择建议
 
 | 后端 | 推荐场景 | 注意事项 |
