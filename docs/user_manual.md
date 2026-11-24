@@ -383,6 +383,16 @@ SDK 使用 `TrainEngine.fit(..., scheduler_builder=factory)` 将调度器绑定�
 
 这是单设备离线生成入口，不是 HTTP 服务或连续批处理服务。摘要区分模型准备、预热和稳态生成；输出 token 数按实际 EOS 停止计算。生成链路功能通过不等于指定 LLaMA-7B 的质量、吞吐或整体生产验收通过，目标边界见[生产工具验收基线](production_acceptance.md)。
 
+### 7.12 本地 diffusion 图像生成
+
+`inference.workload: diffusion` 支持本地 Diffusers 格式的 `StableDiffusionPipeline`，不包含 SDXL、DiT 或 diffusion 训练。安装可选依赖 `.[diffusion]`，使用 Diffusers 0.35.1、Transformers 4.51.3；CUDA 编译额外要求 Torch 2.9.1。所有组件使用 safetensors 权重，不隐式下载或加载自定义 pipeline。
+
+通过 `prompts_jsonl` 提供提示词；配置 `height`、`width`、`num_inference_steps`、`guidance_scale` 和 `seed`。保留模型调度器与安全检查配置，过长提示词明确拒绝。CUDA 可用 FP16/FP32，CPU 仅允许 FP32 非编译执行；`compile_mode: max-autotune` 只编译 UNet，不改变采样预算。
+
+必须提供新的 `inference.output_dir`。每张 PNG 的文件名按请求序号生成，最终 `manifest.jsonl` 记录请求 ID、种子、文件名、SHA256 和安全标记；失败留下 `.partial` 清单，不覆盖历史结果。摘要不保留图片数组。预热重放不消耗请求，PNG 编码与落盘不计入稳态生成耗时，但计入整个任务耗时。
+
+可执行配置、命令和对照口径见[diffusion 示例](../examples/gpu/example_016_diffusion_inference/README.md)。小型扩散组件的数值对照不是预训练模型画质或加速证明，后者须使用固定模型、采样预算和独立评估单独验收。
+
 ## 8. 后端选择建议
 
 | 后端 | 推荐场景 | 注意事项 |

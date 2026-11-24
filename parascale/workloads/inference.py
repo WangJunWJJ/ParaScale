@@ -23,6 +23,10 @@ def build_inference_components(
 ) -> Tuple[Any, Iterable[Any], str]:
     inference = _section(config_data, "inference")
     workload = str(inference.get("workload", "clip_synthetic"))
+    if workload == "diffusion":
+        from .diffusion import build_diffusion_inference_components
+
+        return build_diffusion_inference_components(config_data)
     if workload == "causal_lm":
         from .causal_lm_inference import build_causal_lm_inference_components
 
