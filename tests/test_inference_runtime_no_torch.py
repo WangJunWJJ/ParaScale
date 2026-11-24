@@ -22,6 +22,131 @@ def _identity_runner():
     )
 
 
+@pytest.mark.parametrize("count", [0, 1, 5])
+def test_replayed_warmup_does_not_consume_requests(count):
+    seen, consumed, received = [], [], []
+    runner = _identity_runner()
+    runner.model.predict = lambda value: seen.append(value) or value
+
+    def batches():
+        for value in range(count):
+            assert len(consumed) <= len(received)
+            consumed.append(value)
+            yield value
+
+    result = runner.run(
+        batches(),
+        warmup_steps=3,
+        warmup_policy="replay_first",
+        on_output=received.append,
+        max_outputs=0,
+    )
+    assert seen == ([0] * 3 if count else []) + list(range(count))
+    assert received == list(range(count))
+    assert result["metrics"]["requests"] == count
+    assert result["measurement_window"]["measured_batches"] == count
+    assert result["timing"]["warmup_policy"] == "replay_first"
+    assert result["timing"]["warmup_seconds"] >= 0
+
+
+def test_invalid_warmup_policy_fails_before_model_preparation():
+    runner = _identity_runner()
+    runner.model.eval = lambda: pytest.fail("prepared invalid request")
+    with pytest.raises(ValueError, match="warmup_policy"):
+        runner.run([1], warmup_policy="discard_all")
+
+
+def test_generation_result_counts_are_distinct_from_input_and_batches():
+    from parascale.runtime.inference.runner import InferenceRunner
+
+    outputs = [
+        {
+            "records": [{"id": "one"}, {"id": "two"}],
+            "counts": {"requests": 2, "prompt_tokens": 8, "generated_tokens": 4},
+        }
+    ]
+    runner = InferenceRunner(
+        SimpleNamespace(generate=lambda _: outputs.pop(0)),
+        "causal_lm_generation",
+        memory_getter=lambda: None,
+    )
+    result = runner.run(
+        [{"tokens": 1000}],
+        warmup_steps=0,
+        max_outputs=0,
+        on_output=lambda output: output.clear(),
+    )
+    metrics = result["metrics"]
+    assert metrics["requests"] == 2
+    assert metrics["prompt_tokens"] == 8
+    assert metrics["generated_tokens"] == metrics["tokens"] == 4
+    assert metrics["generated_tokens_per_second"] == metrics["tokens_per_second"]
+    assert result["measurement_window"]["measured_batches"] == 1
+    assert result["output_retention"]["dropped"] == 1
+
+
+def test_generation_batch_latency_is_not_amortized_request_cost(monkeypatch):
+    from parascale.runtime.inference import runner as runtime
+
+    now = [0.0]
+    monkeypatch.setattr(runtime.time, "perf_counter", lambda: now[0])
+
+    def generate(batch):
+        count, seconds = batch["requests"], batch["seconds"]
+        now[0] += seconds
+        return {
+            "records": [{} for _ in range(count)],
+            "counts": {
+                "requests": count,
+                "prompt_tokens": count,
+                "generated_tokens": count,
+            },
+        }
+
+    result = runtime.InferenceRunner(
+        SimpleNamespace(generate=generate),
+        "causal_lm_generation",
+        memory_getter=lambda: None,
+    ).run(
+        [{"requests": 4, "seconds": 0.1}, {"requests": 1, "seconds": 0.2}],
+        warmup_steps=0,
+    )
+    metrics = result["metrics"]
+    assert metrics["requests"] == 5
+    assert metrics["requests_per_second"] == pytest.approx(5 / 0.3)
+    assert metrics["latency_ms_avg"] == pytest.approx(120)
+    assert metrics["latency_ms_total"] == pytest.approx(600)
+    assert metrics["batch_latency_ms_avg"] == pytest.approx(150)
+    assert metrics["batch_latency_ms_total"] == pytest.approx(300)
+    assert metrics["amortized_request_time_ms"] == pytest.approx(60)
+    assert "batch completion" in metrics["latency_scope"]
+
+
+@pytest.mark.parametrize(
+    "counts",
+    [
+        None,
+        {},
+        {"requests": True},
+        {
+            "requests": 1,
+            "prompt_tokens": -1,
+            "generated_tokens": 1,
+        },
+    ],
+)
+def test_invalid_generation_counts_never_report_success(counts):
+    from parascale.runtime.inference.runner import InferenceRunner
+
+    runner = InferenceRunner(
+        SimpleNamespace(generate=lambda _: {"records": [{}], "counts": counts}),
+        "causal_lm_generation",
+        memory_getter=lambda: None,
+    )
+    with pytest.raises(ValueError, match="counts"):
+        runner.run([{}], warmup_steps=0)
+
+
 def test_inference_outputs_are_bounded_by_default_without_losing_counts():
     result = _identity_runner().run(iter(range(100)), warmup_steps=0)
     assert result["outputs"] == list(range(32))

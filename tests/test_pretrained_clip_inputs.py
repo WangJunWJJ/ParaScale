@@ -35,6 +35,9 @@ def hf(monkeypatch):
         def __init__(self):
             super().__init__()
             self.weight = torch.nn.Parameter(torch.ones(1))
+            self.logit_scale = torch.nn.Parameter(torch.zeros(()))
+            self.logit_bias = torch.nn.Parameter(torch.zeros(()))
+            self.config = SimpleNamespace(model_type=getattr(calls, "family", "clip"))
 
         @classmethod
         def from_pretrained(cls, path):
@@ -43,7 +46,8 @@ def hf(monkeypatch):
 
         def forward(self, **kwargs):
             calls.forwarded.append(kwargs)
-            return SimpleNamespace(logits_per_image=self.weight.reshape(1, 1))
+            features = self.weight.expand(kwargs["input_ids"].shape[0], 2)
+            return SimpleNamespace(image_embeds=features, text_embeds=features)
 
     class Processor:
         @classmethod
@@ -97,6 +101,7 @@ def test_checkpoint_processor_receives_original_images_and_captions(
     image_mode,
     streaming,
 ):
+    hf.family = "siglip" if "siglip" in model_type else "clip"
     make_shard(tmp_path)
     spec = ClipContrastiveSpec(
         model_type=model_type,

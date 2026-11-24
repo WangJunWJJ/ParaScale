@@ -40,6 +40,8 @@ def test_distillation_requires_explicit_teacher_checkpoint():
 
 def test_distillation_rejects_distributed_launch(monkeypatch):
     monkeypatch.setenv("WORLD_SIZE", "2")
+    monkeypatch.setenv("RANK", "0")
+    monkeypatch.setenv("LOCAL_RANK", "0")
     with pytest.raises(ValueError, match="single-process"):
         run_train_from_config({"distillation": {"enabled": True}})
 

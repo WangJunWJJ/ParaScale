@@ -5,12 +5,35 @@
 
 """Fingerprint controls for the fresh-process Llama checkpoint validator."""
 
+import sys
 from types import SimpleNamespace
 
 import pytest
 
 torch = pytest.importorskip("torch")
 pytest.importorskip("transformers")
+
+
+def test_stage_recovery_catalog_validation_is_explicit(monkeypatch):
+    from tests.benchmarks.scripts.validate_stage_recovery import parse_args
+
+    argv = [
+        "validate",
+        "--mode",
+        "baseline",
+        "--model-path",
+        "model",
+        "--corpus-path",
+        "corpus",
+        "--checkpoint-dir",
+        "checkpoint",
+        "--output-dir",
+        "output",
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+    assert parse_args().validate_catalog is False
+    monkeypatch.setattr(sys, "argv", [*argv, "--validate-catalog"])
+    assert parse_args().validate_catalog is True
 
 
 def test_state_fingerprint_tracks_values_layout_and_type():
@@ -30,6 +53,38 @@ def test_state_fingerprint_rejects_nonfinite_tensors(value):
 
     with pytest.raises(ValueError, match="nonfinite"):
         state_fingerprint({"weight": torch.tensor([value])})
+
+
+@pytest.mark.parametrize(
+    "damage", ["none", "no_op", "nan", "missing", "stale_step", "unchanged"]
+)
+def test_stage_recovery_requires_real_finite_optimizer_updates(damage):
+    from tests.benchmarks.scripts.validate_llama_checkpoint import state_fingerprint
+    from tests.benchmarks.scripts.validate_stage_recovery import training_fingerprint
+
+    for _ in range(2):
+        model = torch.nn.Linear(2, 2)
+        optimizer = torch.optim.AdamW(model.parameters(), lr=0.01)
+        initial = state_fingerprint(dict(model.named_parameters()))
+        for _ in range(3):
+            optimizer.zero_grad(set_to_none=True)
+            model(torch.ones(1, 2)).square().sum().backward()
+            if damage != "no_op":
+                optimizer.step()
+        first = next(model.parameters())
+        if damage == "nan":
+            optimizer.state[first]["exp_avg"].fill_(float("nan"))
+        elif damage == "missing":
+            optimizer.state[first].pop("exp_avg")
+        elif damage == "stale_step":
+            optimizer.state[first]["step"].fill_(2)
+        elif damage == "unchanged":
+            initial = state_fingerprint(dict(model.named_parameters()))
+        if damage == "none":
+            assert training_fingerprint(model, optimizer, steps=3, initial=initial)
+        else:
+            with pytest.raises((ValueError, AssertionError)):
+                training_fingerprint(model, optimizer, steps=3, initial=initial)
 
 
 def test_full_hf_configuration_uses_its_json_contract():

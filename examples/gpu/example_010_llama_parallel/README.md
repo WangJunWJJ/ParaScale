@@ -29,6 +29,10 @@ identities are recorded independently of the generated test logs:
 The validator loads assets offline, packs token blocks without padding and uses
 alternating ignored-label regions to exercise nonuniform token normalization.
 The retained reference model and optimizer increase memory beyond normal training.
+The stage validation path constructs AdamW through ParaScale's optimizer factory;
+the independent reference uses explicit non-fused `foreach=False` AdamW. The
+factory disables fused/foreach only for mixed trainable Tensor/DTensor parameters
+and records the selected settings in the result. Create it after TP/DP wrapping.
 Do not interpret its peak memory or execution duration as deployment performance.
 
 ## SmolLM2 Data Parallelism
@@ -190,6 +194,10 @@ does not select GPUs or pin CPU cores automatically; optional `--cpu-affinity`
 accepts explicit allowed CPU indices.
 
 The native baseline defaults to the same shared-input PyTorch TP optimization.
+Both drivers release unused logits before backward; the native baseline uses
+its own forward/backward loop and does not call the ParaScale executor. Compare
+fresh runs of both drivers from the same benchmark revision, since older native
+baselines retained logits longer and can overstate the memory difference.
 `--driver native --native-plan layerwise` is a separate ablation of independent
 projection inputs, not the default baseline. For a single-device control, change
 visible devices, process count and `--tp 1` together, keeping the global token
@@ -337,3 +345,15 @@ This verifies bounded same-topology continuation, not equivalence to unsharded
 training, data-loader/scheduler restoration, convergence, crash injection or long-run
 readiness. Input position is reconstructed from the checkpoint step in a fixed,
 unshuffled packed token stream. Keep the result JSON and checkpoints outside Git.
+
+### Prepared-corpus Runtime Recovery
+
+For shuffled prepared data, scheduler and consumed-cursor recovery, use
+[`validate_stage_recovery.py`](../../../tests/benchmarks/scripts/validate_stage_recovery.py)
+and the [schema5 runtime instructions](../../../docs/distributed_parallel.md#complete-token-training-state).
+It uses `build_causal_lm_stage_components`, the optimizer/scheduler factories and
+`StageTrainingCheckpoint`, rather than deriving input position from step alone.
+The baseline deliberately prefetches one unconsumed batch before saving. A second
+`torchrun` must reproduce the next update, parameter/optimizer state, data blocks,
+LR, counters and process RNG exactly. This complements, not replaces, the native
+full-model numerical comparisons and throughput measurements above.

@@ -20,6 +20,112 @@ import time
 from pathlib import Path
 
 
+def build_soak_config(args):
+    """Extend the qualified example without silently changing its training policy."""
+    from parascale.commands.common import load_config_file
+    from parascale.configuration.resolver import normalize_execution_config
+
+    if not math.isfinite(args.hours) or args.hours <= 0:
+        raise ValueError("hours must be finite positive")
+    config = load_config_file(args.config)
+    backend = config["parascale"]
+    training = config["training"]
+    if not (
+        backend["training_backend"] == "native_ddp"
+        and backend["precision"] == "fp32"
+        and backend["data_parallel_size"] == 4
+        and backend.get("ddp_comm_hook") == "none"
+        and backend.get("ddp_find_unused_parameters") is True
+        and backend.get("ddp_static_graph") is False
+        and training["batch_size"] == 32
+        and training.get("gradient_accumulation_steps", 1) == 1
+        and config["data"].get("cpu_prefetch") is True
+    ):
+        raise ValueError("soak requires the qualified FP32 CLIP DDP4 policy")
+    config["model"]["pretrained_model_name_or_path"] = args.model
+    config["data"]["data_dir"] = args.data
+    config["runtime"]["run_dir"] = str(args.output / "run")
+    backend.update(checkpoint_keep_last=3, metrics_history_limit=1000)
+    training.update(
+        max_steps=100000000,
+        checkpoint_interval=100 if args.hours < 1 else 5000,
+        checkpoint_dir=str(args.output / "checkpoints"),
+        skip_final_checkpoint=False,
+    )
+    _, effective = normalize_execution_config(config)
+    if (
+        effective.checkpoint_keep_last != 3
+        or effective.metrics_history_limit != 1000
+        or effective.batch_size != 32
+        or effective.precision != "fp32"
+    ):
+        raise ValueError("configuration aliases override the qualified soak policy")
+    return config
+
+
+def check_embedding_output(output, expected):
+    """Check every returned vector element, not just a shared aggregate."""
+    for name in ("image_embeddings", "text_embeddings"):
+        reference = expected[name]
+        actual = output[name]
+        shape = [len(reference), len(reference[0])]
+        valid = output[name + "_shape"] == shape and len(actual) == shape[0]
+        if valid:
+            valid = all(
+                len(row) == shape[1]
+                and all(
+                    math.isfinite(a)
+                    and math.isfinite(b)
+                    and math.isclose(a, b, rel_tol=1e-5, abs_tol=1e-5)
+                    for a, b in zip(row, target)
+                )
+                for row, target in zip(actual, reference)
+            )
+        if not valid:
+            raise ValueError("Inference embedding differs from direct HF reference")
+
+
+def snapshot_checkpoint_residue(root):
+    """Record invalid checkpoint file sizes only after the writer has stopped."""
+    from parascale.checkpoint import CheckpointManager
+
+    manager = CheckpointManager(str(root))
+    residue = {}
+    for path in sorted(root.glob("step-*")):
+        if not path.is_dir():
+            continue
+        try:
+            if manager.validate(int(path.name.removeprefix("step-"))).ok:
+                continue
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+        residue[path.name] = {
+            file.relative_to(path).as_posix(): file.stat().st_size
+            for file in path.rglob("*")
+            if file.is_file()
+        }
+    return residue
+
+
+def check_checkpoint_retention(root, *, final=False, interrupted=None):
+    """Bound complete states separately from known, non-growing interruption debris."""
+    count = sum(path.is_dir() for path in root.glob("step-*"))
+    if final:
+        residue = snapshot_checkpoint_residue(root)
+        if len(residue) > 1 or any(
+            (interrupted or {}).get(name) != files for name, files in residue.items()
+        ):
+            raise RuntimeError(
+                "Checkpoint retention residue changed after interruption"
+            )
+        complete = count - len(residue)
+    else:
+        complete = count
+    if complete > (3 if final else 4):
+        raise RuntimeError("Checkpoint retention bound exceeded")
+    return count
+
+
 def write_json(path, value):
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
@@ -44,10 +150,20 @@ def rss_bytes():
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * 1024
 
 
-def hf_state_from_training(state):
+def hf_state_from_training(state, target_state=None):
     for prefix in ("module.wrapped_model.", "wrapped_model."):
         if state and all(key.startswith(prefix) for key in state):
-            return {key[len(prefix) :]: value for key, value in state.items()}
+            converted = {key[len(prefix) :]: value for key, value in state.items()}
+            if target_state is not None:
+                for name in ("logit_scale", "logit_bias"):
+                    if name in converted and name in target_state:
+                        if (
+                            converted[name].numel() != 1
+                            or target_state[name].numel() != 1
+                        ):
+                            raise ValueError("Invalid CLIP scalar storage")
+                        converted[name] = converted[name].reshape_as(target_state[name])
+            return converted
     raise ValueError("Unexpected trained CLIP state schema")
 
 
@@ -107,7 +223,9 @@ def inference_worker(args):
             weights_only=True,
         )
         state = payload["backend_state"]["model_state_dict"]
-        model._model.load_state_dict(hf_state_from_training(state), strict=True)
+        model._model.load_state_dict(
+            hf_state_from_training(state, model._model.state_dict()), strict=True
+        )
         del payload, state
     samples = []
     for shard in sorted(Path(args.data).glob("*.tar")):
@@ -157,7 +275,11 @@ def inference_worker(args):
             reference = model._model(
                 **{key: value.to("cuda:0") for key, value in inputs.items()}
             )
-        expected[size] = float(reference.logits_per_image.float().mean())
+        expected[size] = {
+            "mean": float(reference.logits_per_image.float().mean()),
+            "image_embeddings": reference.image_embeds.float().cpu().tolist(),
+            "text_embeddings": reference.text_embeds.float().cpu().tolist(),
+        }
         if not torch.isfinite(reference.logits_per_image).all():
             raise ValueError("Nonfinite reference logits")
     requests = 0
@@ -179,8 +301,11 @@ def inference_worker(args):
                     size,
                 ] or not math.isfinite(value):
                     raise ValueError("Invalid inference output")
-                if not math.isclose(value, expected[size], rel_tol=1e-5, abs_tol=1e-5):
+                if not math.isclose(
+                    value, expected[size]["mean"], rel_tol=1e-5, abs_tol=1e-5
+                ):
                     raise ValueError("Inference disagrees with direct HF reference")
+                check_embedding_output(output, expected[size])
                 requests += 1
             ordered = sorted(latencies)
             windows.append(
@@ -201,7 +326,7 @@ def inference_worker(args):
             "rss_high_water_bytes": rss_bytes(),
             "cuda_allocated": torch.cuda.memory_allocated(),
             "cuda_reserved": torch.cuda.memory_reserved(),
-            "reference_check": "shapes and mean logits; not full embedding or retrieval quality",
+            "reference_check": "full image/text embeddings, shapes and mean logits; not retrieval quality",
             "input_policy": "first 64 usable training pairs; first caption line; omit captions over 77 tokens",
         }
         write_json(args.output / f"{name}.json", row)
@@ -252,25 +377,15 @@ def request_termination(signum, frame):
 
 
 def supervise(args):
+    from tests.benchmarks.scripts.validate_clip_prefetch_recovery import (
+        validate_input_binding,
+    )
+
+    config = build_soak_config(args)
+    binding = validate_input_binding(config, Path(args.data).parent, Path(args.model))
     args.output.mkdir(parents=True, exist_ok=False)
-    config = json.loads(
-        Path("configs/production/clip_datacomp/native_ddp_4gpu.json").read_text()
-    )
-    config["model"]["pretrained_model_name_or_path"] = args.model
-    config["data"]["data_dir"] = args.data
-    config["runtime"]["run_dir"] = str(args.output / "run")
-    interval = 100 if args.hours < 1 else 5000
-    config["parascale"].update(
-        ddp_find_unused_parameters=True,
-        checkpoint_save_path=str(args.output / "checkpoints"),
-        checkpoint_save_interval=interval,
-    )
-    config["training"].update(
-        max_steps=100000000,
-        checkpoint_interval=interval,
-        checkpoint_keep_last=3,
-        metrics_history_limit=1000,
-        checkpoint_dir=str(args.output / "checkpoints"),
+    check_progress(
+        {"time": time.time()}, time.time(), shutil.disk_usage(args.output).free
     )
     write_json(args.output / "train.config.json", config)
     children = []
@@ -283,6 +398,8 @@ def supervise(args):
         args.model,
         "--data",
         args.data,
+        "--config",
+        str(args.config),
     ]
 
     def launch(mode, devices, extra=()):
@@ -291,8 +408,10 @@ def supervise(args):
             command += [
                 "-m",
                 "torch.distributed.run",
-                "--standalone",
+                "--nnodes=1",
                 "--nproc_per_node=4",
+                "--master_addr=127.0.0.1",
+                "--master_port=29500",
             ]
         command += base + ["--mode", mode] + list(extra)
         log = (args.output / f"{mode}-{len(children)}.log").open("w")
@@ -318,6 +437,7 @@ def supervise(args):
         "status": "starting",
         "hours_requested": args.hours,
         "source_revision": args.revision,
+        "input_binding": binding,
         "quality_gate": "not evaluated; training data is not held-out evaluation",
         "service_gate": "offline inference only; no HTTP service tested",
     }
@@ -347,7 +467,11 @@ def supervise(args):
                 if record["rss_high_water_bytes"] > 64 * 1024**3:
                     raise RuntimeError("Worker RSS exceeded 64 GiB")
             status.update(
-                elapsed_seconds=time.monotonic() - started, last_check_unix=time.time()
+                elapsed_seconds=time.monotonic() - started,
+                last_check_unix=time.time(),
+                checkpoint_count=check_checkpoint_retention(
+                    args.output / "checkpoints"
+                ),
             )
             gpu = subprocess.run(
                 [
@@ -376,6 +500,10 @@ def supervise(args):
         status["soak_elapsed_seconds"] = time.monotonic() - started
         require_running(children)
         stop_process(training)
+        residue = snapshot_checkpoint_residue(args.output / "checkpoints")
+        if len(residue) > 1:
+            raise RuntimeError("Multiple incomplete checkpoints after interruption")
+        status["interruption_residue"] = residue
         (args.output / "STOP_INFERENCE").touch()
         inference.wait(timeout=120)
         if inference.returncode:
@@ -388,6 +516,9 @@ def supervise(args):
         result = json.loads((args.output / "resume-result.json").read_text())
         if not result["checkpoint_validation"]["ok"]:
             raise RuntimeError("Final checkpoint validation failed")
+        final_count = check_checkpoint_retention(
+            args.output / "checkpoints", final=True, interrupted=residue
+        )
         if (
             result["global_step"]
             != result["checkpoint_recovery"]["selected_step"] + 100
@@ -396,9 +527,15 @@ def supervise(args):
         trained = launch("infer", "2", ["--checkpoint"])
         if trained.wait(timeout=300):
             raise RuntimeError("Trained checkpoint inference failed")
+        if (
+            validate_input_binding(config, Path(args.data).parent, Path(args.model))
+            != binding
+        ):
+            raise RuntimeError("Input assets changed during soak")
         status.update(
             status="stability_checks_passed_quality_pending",
             finished_at_unix=time.time(),
+            final_checkpoint_count=final_count,
         )
     except BaseException as exc:
         status.update(status="failed", error=str(exc), finished_at_unix=time.time())
@@ -427,6 +564,7 @@ def main():
         "--mode", choices=["supervise", "train", "infer"], default="supervise"
     )
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--data", required=True)
     parser.add_argument("--model", required=True)
     parser.add_argument("--revision", default="unknown")
@@ -434,8 +572,8 @@ def main():
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--checkpoint", action="store_true")
     args = parser.parse_args()
-    if args.hours <= 0:
-        parser.error("hours must be positive")
+    if not math.isfinite(args.hours) or args.hours <= 0:
+        parser.error("hours must be finite positive")
     {"supervise": supervise, "train": train_worker, "infer": inference_worker}[
         args.mode
     ](args)

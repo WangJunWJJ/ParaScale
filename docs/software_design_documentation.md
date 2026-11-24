@@ -100,7 +100,17 @@ native 路径先完成反向传播和必要的 AMP unscale，再执行梯度裁�
 
 恢复状态包括模型、optimizer、可选 scheduler、精度 scaler、随机数和数据消费位置。随机数处理集中在 `random_state.py`，rank-local 状态不得用 rank 0 的状态代替所有 rank。分布式写入/读取错误需要协调传播，校验和、world size、后端布局、optimizer 和训练目标契约必须在恢复时验证。
 
+规划器通过显式 `world_size` 接收执行规模，不读取进程环境；运行时从已初始化进程组或启动器解析规模，拒绝与声明拓扑不一致的配置。产品入口要求完整启动器元数据以保证现有数据分片一致，auto 规划在进程组建立后协调错误；TrainEngine 在初始化和恢复状态应用前跨 rank 比较完整计划。`training/identity.py` 在训练计时结束后一次性收集实际 optimizer 类型和 scheduler 绑定信息，不在每步热路径增加 collective。规划结果与实际执行证据分开报告。
+
+`optimizers/schedule.py` 解析 `training.scheduler` 的不可变计划，使用 PyTorch LambdaLR 实现按成功 optimizer update 计时的 warmup + linear/cosine 调度。总计划步数独立于每次调用的 `max_steps`。CLI 当前只开放 native/native DDP（含 native ZeRO-1），未验证的后端组合显式拒绝。
+
+TrainEngine 在后端完成模型/optimizer 包装后才创建 scheduler，恢复时先创建 scheduler 再加载 optimizer 与 scheduler 状态，后续 fit 复用该实例，最终检查点自动包含调度状态。恢复前比较调度器存在性及类型、总步数、warmup、下限、基础学习率；不允许静默改变训练曲线。`coordination.py` 统一传播本地阶段错误，并在训练/保存前比较各 rank 调度身份和状态，所有 rank 无条件参加相同阶段，避免局部异常使 collective 次序错位。Tensor 状态比较保留 dtype、shape、数值，排除设备编号；函数型调度器必须显式声明 `scheduler_metadata`，不能用相同初始状态替代函数语义身份。
+
 数据实现有 state_dict 协议时优先恢复该状态；否则明确警告并 replay-skip。恢复数据迭代位置时保护训练随机数状态。精确恢复还要求可重复的数据顺序、worker 行为和确定性算子，不能把恢复了 RNG 等同于任意输入管道均逐位一致。
+
+`DataResumeController` 在数据交付边界复制游标元数据，由训练步完成后的消费确认推进已提交位置；CUDA 预取及梯度累积期间尚未消费的游标不进入检查点。正常 fit 循环仅保留当前累积窗口及设备预取所需的状态，不保留历史批次。重复 fit 同一数据源会回退未消费的预取位置，旧迭代器失效。多 worker 数据源必须提供能恢复下一待交付批次的 loader-level 状态协议，不能仅保存提前派发的 sampler 位置。随机数据处理须使用独立且可恢复的数据 RNG 或按样本确定性增强；与模型共享全局 RNG 的预取增强不在精确恢复保证内。
+
+CUDA 预取将 GPU 输入的当前流依赖传递给拷贝流，并在传输前登记源存储的 `record_stream`；交付时等待拷贝流，再为输出登记消费流，避免显存释放后被分配器提前复用。嵌套 dict/list/tuple 中的 CUDA 张量均参与交接。调用者须保证输入在所属设备的当前流上就绪，且不得同时原地修改源数据；在 `next()` 之后改用另一条消费流时仍须自行同步和登记存储生命周期。此机制不隐式发现任意外部生产流，也不等于完成跨设备压力或吞吐验收。
 
 检测蒸馏保存 student、projectors 和 optimizer，教师仅通过 checkpoint/config 哈希描述。纯学生导出不可覆盖源模型、教师 checkpoint 或训练目录下的 step 子目录；部署文件不包含 optimizer，不能用于恢复训练。
 

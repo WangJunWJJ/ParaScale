@@ -23,6 +23,134 @@ from parascale.parallel import distributed_checkpoint as checkpoint
 from parascale.parallel.distributed import DistributedParallelConfig
 
 
+class RuntimeParticipant:
+    """Local-only runtime used to exercise the checkpoint transaction boundary."""
+
+    def __init__(self, optimizer, *, identity="test-runtime-v1"):
+        self.optimizer = optimizer
+        self.name = identity
+        self.state = {"progress": 7}
+        self.restored = False
+
+    def identity(self, optimizer):
+        assert optimizer is self.optimizer
+        return {"kind": self.name}
+
+    def capture(self):
+        return dict(self.state)
+
+    def validate(self, state, *, step, optimizer_state):
+        if state != {"progress": step}:
+            raise ValueError("runtime progress mismatch")
+
+    def restore(self, state):
+        self.state = dict(state)
+        self.restored = True
+
+
+def test_runtime_checkpoint_roundtrip_and_rng_application_order(
+    tmp_path, runtime, monkeypatch
+):
+    trainer, optimizer, _ = runtime
+    participant = RuntimeParticipant(optimizer)
+    checkpoint.save_checkpoint(
+        trainer, tmp_path, optimizer, step=7, runtime=participant
+    )
+    metadata = json.loads((tmp_path / "manifest.json").read_text())
+    assert metadata["schema_version"] == 5
+    assert metadata["runtime"] == participant.identity(optimizer)
+    participant.state = {"progress": 0}
+    original = torch.set_rng_state
+
+    def restore_rng(value):
+        assert participant.restored
+        original(value)
+
+    monkeypatch.setattr(torch, "set_rng_state", restore_rng)
+    assert (
+        checkpoint.load_checkpoint(trainer, tmp_path, optimizer, runtime=participant)
+        == 7
+    )
+    assert participant.state == {"progress": 7}
+
+
+@pytest.mark.parametrize(
+    "saved,requested", [(False, True), (True, False), (True, True)]
+)
+def test_runtime_presence_and_identity_rejected_before_payload_reads(
+    tmp_path, runtime, monkeypatch, saved, requested
+):
+    trainer, optimizer, _ = runtime
+    participant = RuntimeParticipant(optimizer)
+    checkpoint.save_checkpoint(
+        trainer, tmp_path, optimizer, step=7, runtime=participant if saved else None
+    )
+    participant.name = "changed-runtime"
+    loader = Mock(side_effect=AssertionError("payload read"))
+    monkeypatch.setattr(torch, "load", loader)
+    with pytest.raises(RuntimeError, match="runtime|schema"):
+        checkpoint.load_checkpoint(
+            trainer, tmp_path, optimizer, runtime=participant if requested else None
+        )
+    loader.assert_not_called()
+
+
+def test_runtime_validation_failure_prevents_all_rank_application(tmp_path, two_ranks):
+    trainers, optimizers = _rank_trainers()
+    participants = [RuntimeParticipant(optimizer) for optimizer in optimizers]
+    assert two_ranks(
+        lambda rank: checkpoint.save_checkpoint(
+            trainers[rank],
+            tmp_path,
+            optimizers[rank],
+            step=7,
+            runtime=participants[rank],
+        )
+    ) == [None, None]
+    participants[1].validate = Mock(side_effect=ValueError("bad cursor"))
+    for trainer, optimizer, participant in zip(trainers, optimizers, participants):
+        trainer.module.load_state_dict = Mock(
+            side_effect=AssertionError("model mutation")
+        )
+        optimizer.load_state_dict = Mock(
+            side_effect=AssertionError("optimizer mutation")
+        )
+        participant.restore = Mock(side_effect=AssertionError("runtime mutation"))
+    outcomes = two_ranks(
+        lambda rank: checkpoint.load_checkpoint(
+            trainers[rank], tmp_path, optimizers[rank], runtime=participants[rank]
+        )
+    )
+    assert all(
+        isinstance(error, RuntimeError) and "bad cursor" in str(error)
+        for error in outcomes
+    )
+    for trainer, optimizer, participant in zip(trainers, optimizers, participants):
+        trainer.module.load_state_dict.assert_not_called()
+        optimizer.load_state_dict.assert_not_called()
+        participant.restore.assert_not_called()
+
+
+def test_runtime_capture_failure_never_publishes_manifest(tmp_path, two_ranks):
+    trainers, optimizers = _rank_trainers()
+    participants = [RuntimeParticipant(optimizer) for optimizer in optimizers]
+    participants[1].state = {"progress": 8}
+    outcomes = two_ranks(
+        lambda rank: checkpoint.save_checkpoint(
+            trainers[rank],
+            tmp_path,
+            optimizers[rank],
+            step=7,
+            runtime=participants[rank],
+        )
+    )
+    assert all(
+        isinstance(error, RuntimeError) and "runtime progress" in str(error)
+        for error in outcomes
+    )
+    assert not list(tmp_path.rglob("manifest.json"))
+
+
 def training_context():
     return {
         "model": {"kind": "linear", "width": 2},

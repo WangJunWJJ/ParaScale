@@ -31,4 +31,28 @@ class TextInferenceTaskAdapter:
         return {"task": self.name, "preferred_methods": ("generate", "predict")}
 
 
-__all__ = ["TextInferenceTaskAdapter"]
+class CausalLMInferenceTaskAdapter(TextInferenceTaskAdapter):
+    """Generation records carry actual request and post-EOS token counts."""
+
+    name = "causal_lm_generation"
+
+    def prepare_model_batch(self, model: Any, batch: Any) -> Any:
+        prepare = getattr(model, "prepare_batch", None)
+        return prepare(batch) if callable(prepare) else batch
+
+    def output_metric_counts(self, output: Any) -> Dict[str, int]:
+        counts = output.get("counts") if isinstance(output, dict) else None
+        keys = {"requests", "prompt_tokens", "generated_tokens"}
+        if (
+            not isinstance(counts, dict)
+            or set(counts) != keys
+            or any(type(value) is not int or value < 0 for value in counts.values())
+        ):
+            raise ValueError("Invalid causal-LM output counts")
+        records = output.get("records")
+        if not isinstance(records, list) or len(records) != counts["requests"]:
+            raise ValueError("Causal-LM output counts do not match records")
+        return {**counts, "tokens": counts["generated_tokens"]}
+
+
+__all__ = ["CausalLMInferenceTaskAdapter", "TextInferenceTaskAdapter"]

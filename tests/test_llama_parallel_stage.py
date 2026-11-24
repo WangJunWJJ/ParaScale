@@ -179,6 +179,44 @@ def test_wrong_input_contract_and_cache_are_not_silently_accepted():
         first(torch.ones(2, 7, dtype=torch.int64), use_cache=True)
 
 
+@pytest.mark.parametrize(
+    "stage_index,shape,dtype,accepted",
+    [
+        (0, (1, 7), torch.int64, True),
+        (0, (1, 7), torch.float32, False),
+        (1, (1, 7, 32), torch.float32, True),
+        (1, (1, 7, 32), torch.bfloat16, False),
+        (1, (1, 7), torch.float32, False),
+        (1, (1, 7, 31), torch.float32, False),
+    ],
+)
+def test_stage_examples_are_checked_without_forward(
+    monkeypatch, stage_index, shape, dtype, accepted
+):
+    from unittest.mock import Mock
+
+    from parascale.parallel.llama import LlamaStage
+
+    stage = LlamaStage(model_fixture(), stage_index, 2)
+    forward = Mock(side_effect=AssertionError("forward during input validation"))
+    monkeypatch.setattr(stage, "forward", forward)
+    example = torch.zeros(shape, dtype=dtype)
+    if accepted:
+        stage.validate_example_inputs(example)
+    else:
+        with pytest.raises(ValueError, match="stage requires"):
+            stage.validate_example_inputs(example)
+    forward.assert_not_called()
+
+
+def test_stage_example_rejects_out_of_vocabulary_token():
+    from parascale.parallel.llama import LlamaStage
+
+    stage = LlamaStage(model_fixture())
+    with pytest.raises(ValueError, match="input token"):
+        stage.validate_example_inputs(torch.tensor([[31, 1, 2]]))
+
+
 @pytest.mark.parametrize("attention", ["eager", "sdpa"])
 def test_causal_prefix_is_independent_of_future_tokens(attention):
     from parascale.parallel.llama import LlamaStage

@@ -23,6 +23,7 @@ from parascale.runtime import (
     build_runtime_context,
 )
 from parascale.runtime.profiles import BenchmarkProfileStore
+from parascale.runtime.stage_plan import build_stage_training_plan, is_native_parallel
 from parascale.strategy import (
     RuntimeProfile,
     build_strategy_plan,
@@ -63,6 +64,28 @@ def section(data: Dict[str, Any], name: str) -> Dict[str, Any]:
 
 
 def build_plan_payload(config_data: Dict[str, Any]) -> Dict[str, Any]:
+    if is_native_parallel(config_data):
+        stage = build_stage_training_plan(config_data)
+        native_plan = stage.to_dict()
+        return {
+            "mode": "plan",
+            "runtime_status": "plan_only",
+            "selected_backend": "native_parallel",
+            "native_stage_plan": native_plan,
+            "world_size": native_plan["world_size"],
+            "global_batch_size": native_plan["global_batch_size"],
+            "launch_plan": {
+                "launcher": "torchrun",
+                "nnodes": 1,
+                "nproc_per_node": stage.topology.world_size,
+                "world_size": stage.topology.world_size,
+            },
+            "explain": {
+                "selected_backend": "native_parallel",
+                "strategy_type": "explicit",
+                "summary": "Explicit single-node CUDA stage topology; no automatic strategy selection.",
+            },
+        }
     resolved_config = resolve_config(config_data, dry_run=True)
     context = build_runtime_context(config_data, mode="plan")
     parascale_config = context.config
@@ -166,6 +189,22 @@ def build_plan_explain(strategy_plan: Any, tuning: Any = None) -> Dict[str, Any]
 
 
 def format_plan_summary(payload: Dict[str, Any]) -> str:
+    if "native_stage_plan" in payload:
+        stage = payload["native_stage_plan"]
+        topology = stage["topology"]
+        return "\n".join(
+            [
+                "ParaScale plan",
+                "- backend: native_parallel (explicit)",
+                f"- precision: {stage['config']['precision']}",
+                f"- topology: DP={topology['dp_size']} PP={topology['pp_size']} TP={topology['tp_size']}",
+                f"- pipeline schedule: {topology['pipeline_schedule']}",
+                f"- launcher: torchrun (world_size={stage['world_size']}, single-node CUDA)",
+                f"- batch: microbatch_size={stage['workload']['batch_size']} microbatches={topology['microbatches']} global_batch_size={stage['global_batch_size']}",
+                "",
+                "Use --json for the full machine-readable plan.",
+            ]
+        )
     explain = section(payload, "explain")
     strategy = section(payload, "strategy_plan")
     dataloader = section(payload, "dataloader_plan")

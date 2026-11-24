@@ -6,6 +6,24 @@
 import pytest
 
 
+def test_token_metrics_count_accumulated_samples_and_dp_replicas():
+    from parascale.runtime.training.metrics import (
+        RuntimeMetrics,
+        merge_accumulated_batches,
+    )
+
+    batch = merge_accumulated_batches([
+        {"tokens": 6, "batch_size": 2}, {"tokens": 9, "batch_size": 3}
+    ])
+    reporter = RuntimeMetrics(world_size=4)
+    metrics = reporter.with_throughput_metrics({}, batch, elapsed_seconds=0.5)
+    reporter.add_end_to_end_metrics(metrics, batch, dataloader_wait_seconds=0.1)
+    assert metrics["tokens"] == 60
+    assert metrics["batch_size"] == 20
+    assert metrics["tokens_per_second"] == 120
+    assert metrics["end_to_end_tokens_per_second"] == 100
+
+
 def test_runtime_core_precision_memory_and_step_controllers_without_torch():
     from parascale.runtime.training import (
         PrecisionController,

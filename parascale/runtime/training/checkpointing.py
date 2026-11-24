@@ -11,6 +11,7 @@ from typing import Any, Dict, Optional
 
 from parascale.checkpoint.io import atomic_binary_writer
 
+from .coordination import coordinated_call
 from .random_state import capture_rng_state, restore_rng_state
 
 
@@ -30,8 +31,18 @@ class CheckpointController:
         if checkpoint_manager is None:
             return {"step": step if step is not None else self.engine.state.global_step}
 
+        policy = self._collective_call(
+            self._native_training_policy, identity=lambda value: value
+        )
         from parascale.checkpoint import CheckpointManifest
 
+        if scheduler is None:
+            scheduler = getattr(self.engine, "scheduler", None)
+        prepare_scheduler = getattr(self.engine, "prepare_scheduler", None)
+        if callable(prepare_scheduler):
+            scheduler = prepare_scheduler(
+                getattr(self.engine.training_backend, "optimizer", None), scheduler
+            )
         checkpoint_step = step if step is not None else self.engine.state.global_step
         rank = self._rank()
         world_size = self._world_size()
@@ -140,6 +151,9 @@ class CheckpointController:
                     "rank_count": world_size,
                     "runtime_state_version": 1 if runtime_files else None,
                     "optimizer": optimizer_metadata,
+                    "scheduler": dict(
+                        getattr(self.engine, "scheduler_metadata", {}) or {}
+                    ),
                     "distributed_backend": self._distributed_backend(),
                     "shard_count": (
                         world_size
@@ -160,6 +174,8 @@ class CheckpointController:
             objective = dict(getattr(self.engine, "objective_metadata", {}) or {})
             if objective:
                 manifest.metadata["objective"] = objective
+            if policy is not None:
+                manifest.metadata["native_training_policy"] = policy
             path = checkpoint_manager.write_manifest(manifest)
             if backend_name in {"native", "native_ddp"} and callable(
                 getattr(checkpoint_manager, "prune", None)
@@ -181,6 +197,9 @@ class CheckpointController:
         model: Any = None,
         optimizer: Any = None,
         scheduler: Any = None,
+        dataloader: Any = None,
+        optimizer_builder: Any = None,
+        scheduler_builder: Any = None,
     ) -> Any:
         from parascale.runtime.backends import create_runtime_training_backend
 
@@ -193,18 +212,61 @@ class CheckpointController:
                     "checkpoint training objective does not match the current teacher/configuration"
                 )
             self._validate_optimizer_metadata(manifest, optimizer)
-            return manifest, self._read_runtime_state(checkpoint_manager, manifest)
+            schedule_identity = dict(getattr(self.engine, "scheduler_metadata", {}) or {})
+            if manifest.metadata.get("scheduler", {}) != schedule_identity:
+                raise ValueError("checkpoint scheduler configuration mismatch")
+            requested = (
+                scheduler is not None
+                or scheduler_builder is not None
+                or getattr(self.engine, "scheduler", None) is not None
+            )
+            if bool(manifest.metadata.get("scheduler_state_written", False)) != requested:
+                raise ValueError("checkpoint scheduler presence mismatch")
+            policy = self._native_training_policy()
+            saved_policy = manifest.metadata.get("native_training_policy")
+            if policy is not None and saved_policy is None:
+                raise ValueError(
+                    "checkpoint is missing native training policy; strict resume "
+                    "requires a checkpoint written by this runtime. Load model "
+                    "weights explicitly to start a new training run instead."
+                )
+            if saved_policy != policy:
+                raise ValueError(
+                    "native training policy mismatch: "
+                    f"checkpoint={saved_policy!r}, requested={policy!r}"
+                )
+            runtime_state = self._read_runtime_state(checkpoint_manager, manifest)
+            if dataloader is not None:
+                data_state = (runtime_state or {}).get("data_state", manifest.data_state)
+                self.engine.data_resume.validate_resume(dataloader, data_state)
+            return manifest, runtime_state
 
         manifest, runtime_state = self._collective_call(validate_runtime)
         backend_state_loaded = False
         if model is not None or optimizer is not None:
+            backend_name = getattr(self.engine.config, "training_backend", "native")
+            if optimizer_builder is not None and backend_name == "deepspeed":
+                optimizer = optimizer_builder(model)
             self.engine.training_backend = create_runtime_training_backend(
                 model=model,
                 optimizer=optimizer,
                 config=self.engine.config,
                 local_rank=self.engine._local_rank(),
             )
-            self.engine.training_backend.setup()
+            model, optimizer = self.engine.training_backend.setup()
+            if optimizer_builder is not None and backend_name != "deepspeed":
+                optimizer = optimizer_builder(model)
+                self.engine.training_backend.optimizer = (
+                    self.engine.training_backend.setup_optimizer(optimizer)
+                )
+
+        prepare_scheduler = getattr(self.engine, "prepare_scheduler", None)
+        if callable(prepare_scheduler):
+            scheduler = prepare_scheduler(
+                getattr(self.engine.training_backend, "optimizer", None),
+                scheduler,
+                scheduler_builder,
+            )
 
         backend_name = getattr(self.engine.training_backend, "name", manifest.backend)
         backend_specific_entry = self._find_backend_specific_entry(
@@ -275,6 +337,37 @@ class CheckpointController:
                     getattr(self.engine.training_backend, "optimizer_state_error")
                 )
         return manifest
+
+    def _native_training_policy(self) -> dict[str, Any] | None:
+        from parascale.runtime.backends.native import (
+            NativeDdpTrainingBackend,
+            NativeTrainingBackend,
+        )
+
+        active = self.engine.training_backend
+        active_name = getattr(active, "name", None)
+        backend_name = getattr(self.engine.config, "training_backend", active_name)
+        native_classes = {
+            "native": NativeTrainingBackend,
+            "native_ddp": NativeDdpTrainingBackend,
+        }
+        if (
+            active_name is not None
+            and active_name != backend_name
+            and (active_name in native_classes or backend_name in native_classes)
+        ):
+            raise ValueError("native training policy mismatch: configured backend changed")
+        backend_cls = native_classes.get(backend_name)
+        requested = (
+            backend_cls(config=self.engine.config).checkpoint_policy()
+            if backend_cls is not None
+            else None
+        )
+        describe = getattr(active, "checkpoint_policy", None)
+        if backend_cls is not None and callable(describe):
+            if describe() != requested:
+                raise ValueError("native training policy mismatch: engine/backend configuration differs")
+        return requested
 
     @staticmethod
     def _validate_optimizer_metadata(manifest: Any, optimizer: Any) -> None:
@@ -637,30 +730,14 @@ class CheckpointController:
                 return 0
         return 0
 
-    def _collective_call(self, operation: Any) -> Any:
+    def _collective_call(self, operation: Any, *, identity: Any = None) -> Any:
         """Finish a local I/O phase on every rank before propagating errors."""
-        result = None
-        error = None
-        try:
-            result = operation()
-        except Exception as exc:
-            error = exc
-        try:
-            import torch.distributed as dist
-        except ImportError:
-            dist = None
-        if dist is not None and dist.is_available() and dist.is_initialized():
-            errors = [None] * dist.get_world_size()
-            dist.all_gather_object(errors, str(error) if error is not None else None)
-            if error is not None:
-                raise error
-            if any(item is not None for item in errors):
-                raise RuntimeError(f"Checkpoint phase failed on another rank: {errors}")
-        else:
-            self._barrier()
-        if error is not None:
-            raise error
-        return result
+        return coordinated_call(
+            operation,
+            phase="Checkpoint",
+            identity=identity,
+            fallback_barrier=self._barrier,
+        )
 
     def _world_size(self) -> int:
         world_size_fn = getattr(self.engine, "_distributed_world_size", None)

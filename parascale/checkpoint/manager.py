@@ -152,6 +152,8 @@ class CheckpointManager:
                 candidates.append((manifest.step, manifest, folder))
             except (OSError, ValueError, KeyError, TypeError):
                 continue
+        if len(candidates) <= keep_last:
+            return []
         protected = []
         removed = []
         for step, manifest, folder in sorted(candidates, reverse=True):

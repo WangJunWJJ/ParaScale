@@ -5,6 +5,8 @@
 
 """Numerical training contracts shared by native and accumulating backends."""
 
+import weakref
+
 import pytest
 
 torch = pytest.importorskip("torch")
@@ -25,6 +27,70 @@ class ScalarModel(torch.nn.Module):
 
 def mse(output, batch):
     return (output - batch["labels"]).square().mean()
+
+
+@pytest.mark.parametrize("accumulation", [1, 2])
+@pytest.mark.parametrize("retain_output", [False, True])
+def test_training_releases_unused_output_before_backward(
+    monkeypatch, accumulation, retain_output
+):
+    references = []
+    retained = []
+
+    class Output:
+        def __init__(self, prediction):
+            self.prediction = prediction
+            self.auxiliary = torch.ones(1024)
+
+    class OutputModel(ScalarModel):
+        def forward(self, x, **kwargs):
+            if not retain_output:
+                assert all(ref() is None for ref in references)
+            output = Output(super().forward(x))
+            references.extend([weakref.ref(output), weakref.ref(output.auxiliary)])
+            if retain_output:
+                retained.append(output)
+            return output
+
+    model = OutputModel()
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+    engine = TrainEngine(ParaScaleConfig(gradient_accumulation_steps=accumulation))
+    backward = engine.backward
+    backward_calls = []
+
+    def checked_backward(loss):
+        assert all((ref() is not None) == retain_output for ref in references)
+        backward_calls.append(True)
+        backward(loss)
+
+    monkeypatch.setattr(engine, "backward", checked_backward)
+    engine.fit(
+        [{"x": torch.ones(1), "labels": torch.ones(1)}] * accumulation,
+        max_steps=1,
+        model=model,
+        optimizer=optimizer,
+        loss_fn=lambda output, batch: mse(output.prediction, batch),
+    )
+    assert len(backward_calls) == accumulation
+    assert model.weight.item() == pytest.approx(0.2)
+    assert len(retained) == (accumulation if retain_output else 0)
+    for output in retained:
+        assert output.auxiliary.shape == (1024,)
+        assert output.prediction.requires_grad
+
+
+@pytest.mark.parametrize("accumulation", [1, 2])
+def test_training_preserves_output_used_directly_as_loss(accumulation):
+    model = ScalarModel()
+    optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+    TrainEngine(ParaScaleConfig(gradient_accumulation_steps=accumulation)).fit(
+        [{"x": torch.ones(())}] * accumulation,
+        max_steps=1,
+        model=model,
+        optimizer=optimizer,
+        loss_fn=lambda output, batch: output,
+    )
+    assert model.weight.item() == pytest.approx(-0.1)
 
 
 def test_global_normalization_keeps_denominator_on_device(monkeypatch):

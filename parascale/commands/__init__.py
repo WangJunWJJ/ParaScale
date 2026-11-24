@@ -15,6 +15,7 @@ from .quantization import register_quantization_parser
 from .run import register_run_parsers
 from .smoke import register_smoke_parser
 from .stability import register_stability_parser
+from .text import register_text_parser
 from .vision import register_vision_profile_parser
 
 
@@ -29,6 +30,7 @@ def register_command_parsers(subparsers) -> None:
     register_vision_profile_parser(subparsers)
     register_checkpoint_parser(subparsers)
     register_quantization_parser(subparsers)
+    register_text_parser(subparsers)
 
 
 __all__ = [

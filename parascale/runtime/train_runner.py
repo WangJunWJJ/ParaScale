@@ -14,6 +14,7 @@ from typing import Any, Dict
 
 from parascale.checkpoint import CheckpointManager, CheckpointManifest
 from parascale.configuration import normalize_execution_config
+from parascale.optimizers.schedule import SchedulerSpec
 from parascale.optimizers.spec import OptimizerSpec
 from parascale.runtime.distillation import (
     build_detection_distillation_components,
@@ -24,16 +25,19 @@ from parascale.runtime.evidence import attach_runtime_evidence
 from parascale.runtime.lifecycle import (
     distributed_rank,
     initialize_distributed_for_backend,
-    is_distributed_launch,
     model_device,
     validate_distributed_topology,
+    validate_launcher_context,
 )
 from parascale.runtime.runner_common import (
     _apply_strategy_plan_to_config,
     _section,
     _write_runtime_config_artifacts,
 )
+from parascale.runtime.stage_plan import is_native_parallel
 from parascale.runtime.training import TrainEngine
+from parascale.runtime.training.coordination import coordinated_call
+from parascale.runtime.training.identity import collect_execution_identity
 from parascale.strategy import build_strategy_plan
 from parascale.workloads import build_optimizer_for_model, build_training_components
 from parascale.workloads.capability import capability_level_for_scope, describe_workload
@@ -79,7 +83,17 @@ def run_train_from_config(
     *,
     resume_latest: bool = False,
 ) -> Dict[str, Any]:
+    if is_native_parallel(config_data):
+        from parascale.runtime.stage_train_runner import run_stage_train_from_config
+
+        return run_stage_train_from_config(
+            config_data, resume_step=resume_step, resume_latest=resume_latest
+        )
     config_data, parascale_config = normalize_execution_config(config_data)
+    launch_world_size = coordinated_call(
+        validate_launcher_context, phase="execution topology", identity=lambda size: size
+    )
+    distributed_launch = (launch_world_size or 1) > 1
     training = _section(config_data, "training")
     if resume_step is None and training.get("resume_step") is not None:
         resume_step = int(training["resume_step"])
@@ -97,7 +111,7 @@ def run_train_from_config(
             raise ValueError(
                 "Use the quantize command for PTQ; train requires mode=qat."
             )
-        if requested_backend != "native" or is_distributed_launch():
+        if requested_backend != "native" or distributed_launch:
             raise ValueError("QAT currently requires a single-process native backend.")
         if parascale_config.precision != "fp32":
             raise ValueError("QAT currently requires precision=fp32.")
@@ -114,12 +128,24 @@ def run_train_from_config(
         "ascend_native",
     }:
         raise ValueError(f"unsupported CLI training backend: {requested_backend}")
+    if distributed_launch:
+        if requested_backend in {"native", "ascend_native"}:
+            raise ValueError("Multi-rank training requires native_ddp, fsdp or deepspeed")
+        initialize_distributed_for_backend(requested_backend)
+        coordinated_call(
+            lambda: validate_distributed_topology(config_data), phase="launcher topology"
+        )
     if requested_backend == "auto":
-        if is_distributed_launch():
-            strategy_plan = build_strategy_plan(
-                _section(config_data, "model_profile"),
-                _section(config_data, "hardware_profile"),
-                parascale_config,
+        if distributed_launch:
+            strategy_plan = coordinated_call(
+                lambda: build_strategy_plan(
+                    _section(config_data, "model_profile"),
+                    _section(config_data, "hardware_profile"),
+                    parascale_config,
+                    world_size=launch_world_size,
+                ),
+                phase="auto strategy",
+                identity=lambda plan: plan.to_dict(),
             )
             _apply_strategy_plan_to_config(parascale_config, strategy_plan)
         else:
@@ -134,16 +160,12 @@ def run_train_from_config(
         "native_ddp",
     }:
         raise ValueError("resume_latest requires the native or native_ddp backend")
-    if distributed_requested and not is_distributed_launch():
+    if distributed_requested and not distributed_launch:
         raise ValueError(
             f"CLI backend '{parascale_config.training_backend}' requires a "
             "distributed launcher. Use torchrun/deepspeed launcher, or set "
             "parascale.training_backend=native for local smoke."
         )
-    if distributed_requested:
-        validate_distributed_topology(config_data)
-        initialize_distributed_for_backend(parascale_config.training_backend)
-
     if requested_backend == "auto":
         from parascale.config import flat_config_fields_by_section
 
@@ -162,6 +184,17 @@ def run_train_from_config(
     optimizer_spec.validate_backend(
         parascale_config.training_backend,
         zero_stage=int(parascale_config.zero_stage or 0),
+    )
+    def parse_scheduler():
+        spec = SchedulerSpec.from_config(config_data)
+        if spec is not None:
+            spec.validate_backend(parascale_config.training_backend)
+        return spec
+
+    scheduler_spec = coordinated_call(
+        parse_scheduler,
+        phase="scheduler configuration",
+        identity=lambda spec: spec.to_metadata() if spec is not None else None,
     )
 
     config_artifacts = _write_runtime_config_artifacts(
@@ -197,9 +230,11 @@ def run_train_from_config(
             raise ValueError(
                 "student_output must not overwrite a source model or teacher checkpoint"
             )
+    checkpoint_interval = training.get(
+        "checkpoint_interval", parascale_config.checkpoint_save_interval
+    )
     checkpoint_interval = int(
-        training.get("checkpoint_interval", parascale_config.checkpoint_save_interval)
-        or max_steps
+        max_steps if checkpoint_interval is None else checkpoint_interval
     )
     manager = CheckpointManager(checkpoint_dir)
     checkpoint_recovery = None
@@ -235,6 +270,7 @@ def run_train_from_config(
 
         quantizer = QuantizationAwareTraining(model, parascale_config.quantization)
         model = quantizer.prepare()
+    workload_objective = dict(getattr(loss_fn, "objective_metadata", {}) or {})
     objective_metadata = {}
     if distillation.enabled:
         if distillation.task == "detection":
@@ -247,6 +283,8 @@ def run_train_from_config(
             loss_fn, objective_metadata = build_distillation_objective(
                 model, distillation, teacher_spec
             )
+    if workload_objective:
+        objective_metadata["workload"] = workload_objective
     optimizer = build_optimizer_for_model(model, config_data)
     runtime_status = "synthetic" if flags["synthetic"] else "real_local"
     engine = TrainEngine(
@@ -254,31 +292,43 @@ def run_train_from_config(
         model_profile=_section(config_data, "model_profile"),
         hardware_profile=_section(config_data, "hardware_profile"),
         objective_metadata=objective_metadata,
+        scheduler_metadata=(
+            {**scheduler_spec.to_metadata(), "base_learning_rate": optimizer_spec.lr}
+            if scheduler_spec is not None else {}
+        ),
     )
+    optimizer_builder = (
+        (lambda wrapped_model: build_optimizer_for_model(wrapped_model, config_data))
+        if distributed_requested else None
+    )
+    scheduler_builder = scheduler_spec.build if scheduler_spec is not None else None
     resumed_from = None
     if resume_step is not None:
         manifest = engine.load_checkpoint(
-            manager, int(resume_step), model=model, optimizer=optimizer
+            manager,
+            int(resume_step),
+            model=model,
+            optimizer=optimizer,
+            dataloader=dataloader,
+            optimizer_builder=optimizer_builder,
+            scheduler_builder=scheduler_builder,
         )
         resumed_from = manifest.to_dict()
 
     start = time.perf_counter()
-    optimizer_builder = (
-        (lambda wrapped_model: build_optimizer_for_model(wrapped_model, config_data))
-        if distributed_requested
-        else None
-    )
     state = engine.fit(
         dataloader,
         max_steps=max_steps,
         model=model,
         optimizer=optimizer,
         optimizer_builder=optimizer_builder,
+        scheduler_builder=scheduler_builder if resume_step is None else None,
         loss_fn=loss_fn,
         checkpoint_manager=manager,
         checkpoint_interval=checkpoint_interval,
     )
     elapsed = max(time.perf_counter() - start, 1e-9)
+    execution_identity = collect_execution_identity(engine)
     if bool(training.get("skip_final_checkpoint", False)):
         final_manifest_path = None
         checkpoint_validation = {
@@ -330,9 +380,18 @@ def run_train_from_config(
             "data_type": data_type,
             "backend": parascale_config.training_backend,
             "optimizer": dict(
-                getattr(optimizer, "_parascale_optimizer_metadata", {}) or {}
+                getattr(engine.training_backend.optimizer, "_parascale_optimizer_metadata", {}) or {}
             ),
+            "execution": execution_identity,
             "global_step": state.global_step,
+            "scheduler": (
+                {
+                    **engine.scheduler_metadata,
+                    "last_epoch": engine.scheduler.last_epoch,
+                    "next_learning_rates": engine.scheduler.get_last_lr(),
+                }
+                if engine.scheduler is not None else None
+            ),
             "last_metrics": dict(state.last_metrics),
             "metrics_history": list(state.metrics_history),
             "metrics_history_dropped": state.metrics_history_dropped,

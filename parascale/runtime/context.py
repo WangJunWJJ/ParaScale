@@ -141,8 +141,12 @@ def build_runtime_context(
     ):
         config.batching_strategy = "token_budget"
 
-    inferred_world_size = world_size or _infer_world_size(hardware_profile, topology)
-    strategy_plan = build_strategy_plan(model_profile, hardware_profile, config)
+    inferred_world_size = (
+        world_size if world_size is not None else _infer_world_size(hardware_profile, topology)
+    )
+    strategy_plan = build_strategy_plan(
+        model_profile, hardware_profile, config, world_size=inferred_world_size
+    )
     return RuntimeContext(
         config=config,
         workload=workload,
@@ -180,7 +184,7 @@ def _infer_world_size(
     return max(
         1,
         int(
-            hardware_profile.get("num_gpus", hardware_profile.get("world_size", 1)) or 1
+            hardware_profile.get("world_size", hardware_profile.get("num_gpus", 1)) or 1
         ),
     )
 

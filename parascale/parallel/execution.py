@@ -144,6 +144,9 @@ class DistributedTrainer:
                 tensor_plan,
                 precision,
             )
+            validate_example = getattr(module, "validate_example_inputs", None)
+            if validate_example is not None:
+                validate_example(example_input)
             from .checkpoint_context import canonical_checkpoint_context
 
             context = (
@@ -350,11 +353,15 @@ class DistributedTrainer:
                     with autocast_context(self.precision, self.device):
                         prediction = self.execution_module(batch)
                         loss = self._microbatch_loss(prediction, target)
+                    if not return_outputs:
+                        # Autograd owns required tensors; avoid retaining extra logits.
+                        del prediction
                     loss.backward()
                 losses.append(loss.detach())
                 if return_outputs:
                     outputs.append(prediction.detach())
-                del prediction, loss
+                    del prediction
+                del loss
             output = torch.cat(outputs) if return_outputs else None
         elif self.pp_rank == 0:
             self.schedule.step(inputs, return_outputs=return_outputs)
@@ -453,14 +460,18 @@ class DistributedTrainer:
         # DDP/FSDP2 average gradients across DP, but not across TP or PP.
         self._loss_scale = self.config.dp_size / self._normalization_count
 
-    def save_checkpoint(self, directory: Any, optimizer: Any, *, step: int) -> None:
+    def save_checkpoint(
+        self, directory: Any, optimizer: Any, *, step: int, runtime: Any = None
+    ) -> None:
         """Save a new, same-topology checkpoint; all ranks must participate."""
         from .distributed_checkpoint import save_checkpoint
 
-        save_checkpoint(self, directory, optimizer, step=step)
+        save_checkpoint(self, directory, optimizer, step=step, runtime=runtime)
 
-    def load_checkpoint(self, directory: Any, optimizer: Any) -> int:
+    def load_checkpoint(
+        self, directory: Any, optimizer: Any, *, runtime: Any = None
+    ) -> int:
         """Load a trusted local checkpoint; topology changes are rejected."""
         from .distributed_checkpoint import load_checkpoint
 
-        return load_checkpoint(self, directory, optimizer)
+        return load_checkpoint(self, directory, optimizer, runtime=runtime)

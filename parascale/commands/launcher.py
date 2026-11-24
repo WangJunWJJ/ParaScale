@@ -229,6 +229,7 @@ def run_matrix_command_until_checkpoint(
 
     log_path.parent.mkdir(parents=True, exist_ok=True)
     deadline = time.monotonic() + max(0.1, float(timeout_seconds))
+    checkpoint_invalid = False
     with log_path.open("w", encoding="utf-8", errors="replace") as log_file:
         process = subprocess.Popen(
             command,
@@ -240,12 +241,13 @@ def run_matrix_command_until_checkpoint(
         while True:
             if _checkpoint_is_complete(checkpoint_root, checkpoint_step):
                 _kill_process_group(process)
-                process.wait(timeout=30)
+                returncode = process.wait(timeout=30)
                 checkpoint_ok = _checkpoint_is_valid(
                     checkpoint_root,
                     checkpoint_step,
                 )
                 if not checkpoint_ok:
+                    checkpoint_invalid = True
                     break
                 if error_path.exists():
                     error_path.unlink()
@@ -276,7 +278,9 @@ def run_matrix_command_until_checkpoint(
         log_tail,
         returncode=int(returncode or 1),
     )
-    if time.monotonic() >= deadline:
+    if checkpoint_invalid:
+        failure_details["failure_type"] = "checkpoint_failure"
+    elif time.monotonic() >= deadline:
         failure_details["failure_type"] = "checkpoint_wait_timeout"
     payload = {
         "backend": backend,
@@ -287,7 +291,9 @@ def run_matrix_command_until_checkpoint(
         "checkpoint_step": int(checkpoint_step),
         "checkpoint_ok": False,
         "log_tail": log_tail,
-        "error": "launcher exited before a valid checkpoint was available",
+        "error": "checkpoint validation failed after launcher interruption"
+        if checkpoint_invalid
+        else "launcher exited before a valid checkpoint was available",
         **failure_details,
     }
     error_path.write_text(
@@ -399,7 +405,6 @@ def text_indicates_oom(text: str) -> bool:
         "cuda oom",
         "cublas_status_alloc_failed",
         "cuda error: out of memory",
-        "ncclunhandledcudaerror",
         "hip out of memory",
         "deepspeed oom",
     ]

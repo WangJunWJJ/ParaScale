@@ -1,5 +1,20 @@
 # Fused INT8 and INT4 inference
 
+## Product Causal-LM Entry Point
+
+[Example 013](../examples/gpu/example_013_causal_lm_inference/README.md) uses
+`parascale infer` for single-device local Llama generation with floating weights
+or product-exported PTQ/QAT artifacts. Loading, bounded prompt/response streams,
+actual generated-token accounting and explicit cache/compile policy share the
+normal inference runtime. This is offline generation, not concurrent serving.
+
+Artifacts now use the stable `CausalLmModel` identity with a tokenizer-bound
+signature. Regenerate historical nested-wrapper or bare-HF benchmark artifacts;
+they are not interchangeable with product artifacts. Reference inference is a
+correctness path, not a speed baseline. A product wrapper change requires fresh
+CUDA quality/performance qualification even when the underlying kernels have
+passed earlier tests. Do not infer a production SLA from the smoke examples.
+
 ## Experimental INT8 path
 
 **Experimental: layer correctness is not production or model-quality
@@ -60,6 +75,15 @@ explicit `fp32_scale=True` to retain FP32 scales. Packed kernel tensors are
 registered, but standalone GemLite checkpoint loading is not a supported
 deployment artifact contract. Keep canonical source artifacts and reconstruct
 the runtime representation instead.
+
+The INT8 adapter owns its packed tensors as registered buffers and calls the
+pinned functional operator directly. Each invocation reads the current buffers;
+shape, layout, dtype and device checks reject unsupported replacements before
+dispatch. Compilation guards remain enabled. Runtime `state_dict` copies are
+supported only between adapters with the same layout: the former `kernel.*`
+keys are not compatible with the flat buffer layout. Canonical PTQ/QAT artifact
+formats are unchanged. This dispatch refactor does not by itself establish an
+end-to-end throughput improvement.
 
 CI resolves both inference extras with `--dry-run --ignore-installed`.
 Resolver success and `pip check` do not establish CUDA numerical correctness

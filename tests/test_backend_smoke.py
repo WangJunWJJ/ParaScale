@@ -319,6 +319,41 @@ def test_cli_native_synthetic_train_checkpoint_resume_and_serve(tmp_path):
     assert served["result"]["mode"] == "mock"
 
 
+@pytest.mark.parametrize(
+    ("interval", "skip_final", "expected_steps"),
+    [(0, True, []), (0, False, [3]), (2, True, [2]), (2, False, [2, 3])],
+)
+def test_cli_checkpoint_interval_and_final_save_are_independent(
+    tmp_path, monkeypatch, interval, skip_final, expected_steps
+):
+    saved_steps = []
+    original = TrainEngine.save_checkpoint
+
+    def observe(engine, *args, **kwargs):
+        saved_steps.append(engine.state.global_step)
+        return original(engine, *args, **kwargs)
+
+    monkeypatch.setattr(TrainEngine, "save_checkpoint", observe)
+    config = {
+        "parascale": {"training_backend": "native"},
+        "runtime": {"run_dir": str(tmp_path / "run")},
+        "training": {
+            "workload": "synthetic_regression",
+            "max_steps": 3,
+            "checkpoint_dir": str(tmp_path / "checkpoints"),
+            "checkpoint_interval": interval,
+            "skip_final_checkpoint": skip_final,
+        },
+    }
+    payload = run_benchmark_from_config(config)
+    assert payload["train"]["global_step"] == 3
+    assert saved_steps == expected_steps
+    assert sorted(path.name for path in (tmp_path / "checkpoints").glob("step-*")) == [
+        f"step-{step:08d}" for step in expected_steps
+    ]
+    assert payload["validation"]["checkpoint"]["skipped"] is skip_final
+
+
 def test_cli_synthetic_benchmark_outputs_metrics(tmp_path):
     config = {
         "parascale": {

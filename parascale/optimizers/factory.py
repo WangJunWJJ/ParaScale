@@ -13,7 +13,12 @@ from .spec import OptimizerSpec
 
 
 def build_optimizer(model: Any, config_data: Dict[str, Any]) -> Any:
-    """Build the configured optimizer over trainable model parameters."""
+    """Build over final trainable parameters, preserving their identity and order.
+
+    Mixed Tensor/DTensor AdamW parameters use scalar updates. Four-bit state
+    does not support DTensor parameters and is rejected before construction.
+    """
+    import torch.distributed as dist
     import torch.optim as optim
 
     from .four_bit import FourBitAdamW, FourBitSGD
@@ -22,6 +27,17 @@ def build_optimizer(model: Any, config_data: Dict[str, Any]) -> Any:
     params = [parameter for parameter in model.parameters() if parameter.requires_grad]
     if not params:
         raise RuntimeError("optimizer construction requires trainable parameters")
+    distributed_count = 0
+    if dist.is_available():
+        try:
+            from torch.distributed.tensor import DTensor
+        except ImportError:
+            from torch.distributed._tensor import DTensor
+
+        distributed_count = sum(isinstance(parameter, DTensor) for parameter in params)
+    if distributed_count and spec.is_four_bit:
+        raise ValueError("Four-bit optimizer state does not support DTensor; use adamw")
+    mixed_parameters = 0 < distributed_count < len(params)
     if spec.type == "adamw":
         optimizer = optim.AdamW(
             params,
@@ -29,6 +45,8 @@ def build_optimizer(model: Any, config_data: Dict[str, Any]) -> Any:
             betas=spec.betas,
             eps=spec.eps,
             weight_decay=spec.weight_decay,
+            foreach=False if mixed_parameters else None,
+            fused=False if mixed_parameters else None,
         )
     elif spec.type == "four_bit_adamw":
         optimizer = FourBitAdamW(

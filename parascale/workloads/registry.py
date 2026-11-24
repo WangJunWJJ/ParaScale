@@ -17,6 +17,7 @@ from parascale.workloads.specs.vision import VisionSyntheticSpec
 from parascale.workloads.specs.vlm_lora import VlmLoraSpec
 from parascale.workloads.specs.yolo import YoloDetectionSpec, YoloWorldSpec
 
+from .causal_lm import build_causal_lm_components
 from .clip import build_clip_contrastive_components
 from .common import _require_torch, _section
 from .ground_dino import build_ground_dino_components
@@ -38,6 +39,7 @@ def build_training_components(config_data: Dict[str, Any]):
 
 def default_workload_registry() -> WorkloadRegistry:
     registry = WorkloadRegistry()
+    registry.register("causal_lm", build_causal_lm_components)
     registry.register(
         "vision_synthetic",
         _build_vision_synthetic_from_config,

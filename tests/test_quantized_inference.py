@@ -165,7 +165,7 @@ def test_int8_tail_dimensions_match_stored_weights_eager_and_compiled(
     source = nn.Linear(features, outputs).cuda().bfloat16().eval()
     config = InferenceQuantizationConfig(backend="gemlite_int8")
     model, _ = quantize_inference_model(source, config)
-    kernel = model.kernel
+    kernel = model
     weight = (kernel.W_q.t().float() * kernel.scales.reshape(-1, 1)).bfloat16()
     with torch.inference_mode():
         for rows in (1, 4, 32, 65, 128):

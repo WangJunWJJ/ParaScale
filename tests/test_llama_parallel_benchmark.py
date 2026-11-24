@@ -5,6 +5,9 @@
 
 """Portable argument and measurement contracts for real Llama TP benchmarks."""
 
+import copy
+import weakref
+
 import pytest
 
 torch = pytest.importorskip("torch")
@@ -122,3 +125,49 @@ def test_throughput_uses_total_measured_time_not_median_only():
     assert result["tokens_per_second"] == 2.5
     assert result["scored_tokens_per_second"] == 2.0
     assert result["median_step_tokens_per_second"] == 5.0
+
+
+@pytest.mark.parametrize("precision", ["fp32", "bf16"])
+@pytest.mark.parametrize("microbatch_size", [2, 4])
+def test_native_backward_releases_outputs_and_preserves_gradients(
+    monkeypatch, precision, microbatch_size
+):
+    from tests.benchmarks.scripts.benchmark_llama_parallel import (
+        native_forward_backward,
+        summed_loss,
+    )
+
+    torch.manual_seed(37)
+    model = torch.nn.Sequential(torch.nn.Embedding(7, 8), torch.nn.Linear(8, 7))
+    reference = copy.deepcopy(model)
+    batch = torch.tensor([[1, 2, 3], [2, 4, 5], [6, 1, 2], [3, 5, 1]])
+    expected_loss = torch.zeros(())
+    for part in batch.split(microbatch_size):
+        with torch.autocast("cpu", dtype=torch.bfloat16, enabled=precision == "bf16"):
+            prediction = reference(part)
+            loss = summed_loss(prediction, part) / 8
+        loss.backward()
+        expected_loss += loss.detach()
+
+    outputs = []
+    original_backward = torch.Tensor.backward
+
+    def forward(part):
+        prediction = model(part)
+        outputs.append(weakref.ref(prediction))
+        return prediction
+
+    def check_backward(tensor, *args, **kwargs):
+        assert outputs[-1]() is None
+        return original_backward(tensor, *args, **kwargs)
+
+    monkeypatch.setattr(torch.Tensor, "backward", check_backward)
+    actual_loss = native_forward_backward(
+        forward, batch, microbatch_size=microbatch_size, precision=precision
+    )
+    assert len(outputs) == 4 // microbatch_size
+    assert all(output() is None for output in outputs)
+    assert not actual_loss.requires_grad
+    torch.testing.assert_close(actual_loss, expected_loss, rtol=0, atol=0)
+    for actual, expected in zip(model.parameters(), reference.parameters()):
+        torch.testing.assert_close(actual.grad, expected.grad, rtol=0, atol=0)
