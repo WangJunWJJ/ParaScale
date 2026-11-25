@@ -3,7 +3,7 @@
 # @Author : Wang Jun
 # @Email: wj_xd@foxmail.com
 
-"""Matched Llama TP throughput and validation NLL; not production acceptance."""
+"""Matched Llama DP or TP throughput and held-out NLL; not production acceptance."""
 
 import argparse
 import hashlib
@@ -13,6 +13,7 @@ import os
 import statistics
 import time
 from collections.abc import Callable
+from contextlib import nullcontext
 from datetime import timedelta
 from pathlib import Path
 
@@ -53,6 +54,7 @@ def native_forward_backward(
     *,
     microbatch_size: int,
     precision: str,
+    ddp_model: torch.nn.parallel.DistributedDataParallel | None = None,
 ) -> torch.Tensor:
     """Accumulate native gradients and return detached, globally normalized loss.
 
@@ -61,26 +63,38 @@ def native_forward_backward(
         batch: Packed token IDs for one complete update, replicated across TP.
         microbatch_size: Microbatch size validated by the benchmark argument parser.
         precision: Validated fp32 or bf16 compute policy; parameters remain FP32.
+        ddp_model: Optional native wrapper; synchronize only the final microbatch.
+            Equal local batch sizes are required for DDP's mean reduction.
 
     Returns:
         Detached scalar tensor; the caller owns synchronization and optimizer step.
     """
     loss_sum = torch.zeros((), device=batch.device)
-    for microbatch in batch.split(microbatch_size):
-        with torch.autocast(
-            batch.device.type,
-            dtype=torch.bfloat16,
-            enabled=precision == "bf16",
-            cache_enabled=False,
-        ):
-            prediction = forward(microbatch)
-            loss = summed_loss(prediction, microbatch) * (
-                1 / (batch.shape[0] * (batch.shape[1] - 1))
-            )
-        del prediction
-        loss.backward()
+    for index, microbatch in enumerate(batch.split(microbatch_size)):
+        accumulating = (index + 1) * microbatch_size < batch.shape[0]
+        context = (
+            ddp_model.no_sync()
+            if ddp_model is not None and accumulating
+            else nullcontext()
+        )
+        with context:
+            with torch.autocast(
+                batch.device.type,
+                dtype=torch.bfloat16,
+                enabled=precision == "bf16",
+                cache_enabled=False,
+            ):
+                prediction = forward(microbatch)
+                loss = summed_loss(prediction, microbatch) * (
+                    1 / (batch.shape[0] * (batch.shape[1] - 1))
+                )
+            del prediction
+            loss.backward()
         loss_sum += loss.detach()
         del loss
+    if ddp_model is not None:
+        dist.all_reduce(loss_sum, group=ddp_model.process_group)
+        loss_sum.div_(dist.get_world_size(ddp_model.process_group))
     return loss_sum
 
 
@@ -121,6 +135,10 @@ def parse_args(argv=None):
     parser.add_argument("--sequence-length", type=int, default=256)
     parser.add_argument("--validation-tokens", type=int, default=8192)
     parser.add_argument("--tp", type=int, choices=(1, 2), default=1)
+    parser.add_argument("--dp", type=int, choices=(1, 2, 4), default=1)
+    parser.add_argument(
+        "--adam-implementation", choices=("single", "auto", "fused"), default="single"
+    )
     parser.add_argument("--precision", choices=("fp32", "bf16"), default="fp32")
     parser.add_argument(
         "--native-plan", choices=("shared", "layerwise"), default="shared"
@@ -132,9 +150,13 @@ def parse_args(argv=None):
     if (
         args.microbatch <= 0
         or args.global_batch <= 0
-        or args.global_batch % args.microbatch
+        or args.global_batch % (args.dp * args.microbatch)
     ):
-        parser.error("global-batch must be a positive multiple of microbatch")
+        parser.error("global-batch must be a positive multiple of dp * microbatch")
+    if args.dp > 1 and args.tp > 1:
+        parser.error("This reference measures pure DP or TP, not their combination")
+    if args.tp > 1 and args.adam_implementation != "single":
+        parser.error("TP reference requires single-tensor AdamW")
     if (
         args.sequence_length < 2
         or args.validation_tokens <= 0
@@ -149,6 +171,8 @@ def parse_args(argv=None):
         parser.error("CPU affinity indices must be nonnegative")
     if args.driver == "parascale" and args.native_plan != "shared":
         parser.error("native-plan only selects the native baseline")
+    if args.output.exists():
+        parser.error("output already exists; select a fresh result path")
     return args
 
 
@@ -170,10 +194,10 @@ def main():
     ):
         raise RuntimeError("Benchmark requires torch==2.9.1 and transformers==4.51.3")
     if (
-        int(os.environ["WORLD_SIZE"]) != args.tp
-        or int(os.environ["LOCAL_WORLD_SIZE"]) != args.tp
+        int(os.environ["WORLD_SIZE"]) != args.tp * args.dp
+        or int(os.environ["LOCAL_WORLD_SIZE"]) != args.tp * args.dp
     ):
-        raise ValueError("This benchmark requires a single node with exactly tp ranks")
+        raise ValueError("This benchmark requires one node with exactly dp * tp ranks")
     local_rank = int(os.environ["LOCAL_RANK"])
     torch.cuda.set_device(local_rank)
     if args.cpu_affinity is not None:
@@ -238,18 +262,21 @@ def main():
             else {}
         )
         trainer = None
+        ddp_model = None
         plan = {}
         if args.driver == "parascale":
             from parascale.parallel import CausalLMLoss, DistributedParallelConfig
             from parascale.parallel.execution import DistributedTrainer
             from parascale.parallel.llama import LlamaStage
 
-            model = LlamaStage(model, tp_size=world)
+            model = LlamaStage(model, tp_size=args.tp)
             plan = model.tensor_parallel_plan()
             trainer = DistributedTrainer(
                 model,
                 DistributedParallelConfig(
-                    tp_size=world, microbatches=args.global_batch // args.microbatch
+                    dp_size=args.dp,
+                    tp_size=args.tp,
+                    microbatches=args.global_batch // args.dp // args.microbatch,
                 ),
                 torch.zeros(
                     args.microbatch,
@@ -261,14 +288,22 @@ def main():
                 tensor_plan=plan or None,
                 precision=args.precision,
             )
-        elif world > 1:
+        elif args.tp > 1:
             mesh = init_device_mesh("cuda", (world,), mesh_dim_names=("tp",))
             plan = native_tensor_plan(
                 model.config.num_hidden_layers, shared=args.native_plan == "shared"
             )
             parallelize_module(model, mesh, plan)
+        elif args.dp > 1:
+            ddp_model = torch.nn.parallel.DistributedDataParallel(
+                model, device_ids=[local_rank]
+            )
         optimizer = torch.optim.AdamW(
-            model.parameters(), lr=1e-5, eps=args.adam_eps, foreach=False
+            model.parameters(),
+            lr=1e-5,
+            eps=args.adam_eps,
+            foreach=False if args.adam_implementation == "single" else None,
+            fused=True if args.adam_implementation == "fused" else None,
         )
 
         def forward(batch):
@@ -298,6 +333,10 @@ def main():
             ), losses
 
         initial_nll, initial_blocks = evaluate()
+        local_batch = args.global_batch // args.dp
+        dp_rank = rank // args.tp
+        train = train[:, dp_rank * local_batch : (dp_rank + 1) * local_batch]
+        local_input_hash = hashlib.sha256(train.contiguous().numpy().tobytes()).hexdigest()
         torch.cuda.reset_peak_memory_stats(device)
         durations, training_losses = [], []
         for step, batch in enumerate(train):
@@ -307,13 +346,18 @@ def main():
             start = time.perf_counter()
             optimizer.zero_grad(set_to_none=True)
             if trainer is not None:
-                loss_value = trainer.forward_backward(batch, batch).loss
+                loss_value = trainer.forward_backward(
+                    batch, batch, return_outputs=False
+                ).loss
             else:
                 loss_value = native_forward_backward(
-                    forward,
+                    (lambda part: ddp_model(part, use_cache=False).logits)
+                    if ddp_model is not None
+                    else forward,
                     batch,
                     microbatch_size=args.microbatch,
                     precision=args.precision,
+                    ddp_model=ddp_model,
                 ).item()
             optimizer.step()
             torch.cuda.synchronize()
@@ -352,6 +396,7 @@ def main():
                 "initial_block_sums": initial_blocks,
                 "final_block_sums": final_blocks,
                 "losses": training_losses,
+                "local_training_input_sha256": local_input_hash,
                 "gpu_uuid": str(torch.cuda.get_device_properties(device).uuid),
                 "cpu_affinity": sorted(os.sched_getaffinity(0))
                 if hasattr(os, "sched_getaffinity")
@@ -393,6 +438,9 @@ def main():
                 "torch_num_threads": torch.get_num_threads(),
                 "torch_num_interop_threads": torch.get_num_interop_threads(),
                 "world": world,
+                "dp": args.dp,
+                "tp": args.tp,
+                "accumulation_steps": args.global_batch // args.dp // args.microbatch,
                 "precision": args.precision,
                 "parameter_dtype": "float32",
                 "optimizer_state_dtype": "float32",
@@ -410,12 +458,11 @@ def main():
                 ),
                 "peak_allocated_bytes": peak.item(),
                 "records": records,
-                "scope": "Short fixed-shape training with FP32 master parameters and held-out WikiText validation; timings exclude preprocessing, H2D and evaluation; not convergence or production qualification",
+                "scope": "Stage executor vs native HF/Torch; synchronized forward/backward and optimizer with FP32 parameters and held-out WikiText validation; excludes setup, preprocessing, H2D, checkpoint, evaluation and complete CLI orchestration; not convergence or production qualification",
             }
             args.output.parent.mkdir(parents=True, exist_ok=True)
-            args.output.write_text(
-                json.dumps(result, indent=2, allow_nan=False), encoding="utf-8"
-            )
+            with args.output.open("x", encoding="utf-8") as stream:
+                json.dump(result, stream, indent=2, allow_nan=False)
             print(
                 json.dumps(
                     {

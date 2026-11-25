@@ -34,7 +34,7 @@ Provide these assets before training; ParaScale does not download them:
   to `prepare-text`. Obtain assets separately under their applicable licenses.
 - Writable `/data/checkpoints` and `/data/runs`, outside the source tree.
 
-Both YAML files use portable example paths, not environment-variable expansion.
+The YAML configurations use portable example paths, not environment-variable expansion.
 Edit the model, corpus, checkpoint, and run paths to match your machine. Keep the
 same model/tokenizer and immutable prepared corpus accessible to every rank.
 Trusted model-file symlinks, including HF cache blob links, are allowed; targets
@@ -266,6 +266,63 @@ than silently ignored when saved optimizer hyperparameters are restored. Keep
 data seed, batching, accumulation, topology, and implementation unchanged for
 same-run recovery. No scheduler is configured here; when adding one, keep its
 full-run horizon stable across resumed invocations.
+
+## Native PyTorch DDP Reference
+
+For an executor-level comparison, run the repository benchmark against the
+original Hugging Face model under native PyTorch DDP and the ParaScale stage
+executor. This is a diagnostic companion to the training CLI, not a replacement
+production training entry point. It writes measurements, not training checkpoints.
+
+Provide `/data/wikitext/train.txt` and `/data/wikitext/validation.txt` as UTF-8
+text from distinct dataset splits. This benchmark tokenizes each complete file
+without added special tokens; it does not consume the EOS-per-document corpus
+above. Keep this benchmark's results separate from that differently packed data.
+It evaluates a fixed validation window, not the entire split or final test set.
+
+From the repository root, with the same pinned environment and model assets:
+
+```bash
+set -euo pipefail
+export CUDA_VISIBLE_DEVICES=0,1,2,3
+export OMP_NUM_THREADS=1
+export TOKENIZERS_PARALLELISM=false
+RUN=/data/runs/native-ddp-reference-r0
+mkdir -p "$RUN"
+for driver in native parascale; do
+  torchrun --nnodes=1 --nproc_per_node=4 \
+    --master_addr=127.0.0.1 --master_port=29500 \
+    -m tests.benchmarks.scripts.benchmark_llama_parallel \
+    --model /models/tinyllama --data /data/wikitext \
+    --driver "$driver" --dp 4 --tp 1 \
+    --global-batch 64 --microbatch 4 --sequence-length 256 \
+    --steps 16 --warmup 4 --validation-tokens 32768 \
+    --precision bf16 --adam-implementation auto \
+    --output "$RUN/$driver.json"
+done
+```
+
+Select the actual GPU IDs for your node. For one or two GPUs, change both the
+visible GPU list and `--nproc_per_node`/`--dp`, keeping the other budgets fixed.
+Accumulation is 16, 8 or 4 for DP1, DP2 or DP4. Native DDP uses `no_sync()` for
+all but the last microbatch; both implementations use the same AdamW settings.
+The reference intentionally rejects combined DP/TP; that restriction does not
+remove the product's separately validated combined topologies.
+
+The outputs are diagnostic records, not an automatic paired acceptance verdict.
+Check model/source/global-token identities, corresponding per-rank token hashes,
+every step loss, and initial/final validation NLL before interpreting speed.
+Validation is replicated across DP ranks: do not multiply its scored-token count
+by GPU count. Use new output files for each fresh run; repeat at least three pairs
+on an otherwise idle node and alternate driver order.
+
+`scored_tokens_per_second` uses synchronized forward/backward and optimizer time,
+including loss communication and executor checks, and the slowest rank per step.
+It excludes setup, preprocessing, H2D, evaluation, checkpoint I/O and the full CLI
+orchestration loop. Peak allocated memory includes warmup; throughput excludes
+the first four updates in this command. Matching short-run NLL is not a long-run
+convergence guarantee, and a smaller model or lower precision is not a fair
+same-workload acceleration baseline.
 
 ## Measurement and Qualification
 

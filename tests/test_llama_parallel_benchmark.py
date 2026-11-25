@@ -7,11 +7,74 @@
 
 import copy
 import weakref
+from contextlib import contextmanager
+from datetime import timedelta
+from pathlib import Path
 
 import pytest
 
 torch = pytest.importorskip("torch")
 pytest.importorskip("transformers")
+
+
+def _parse_native(output, *arguments):
+    from tests.benchmarks.scripts.benchmark_llama_parallel import parse_args
+
+    return parse_args(
+        [
+            "--model",
+            "model",
+            "--data",
+            "data",
+            "--output",
+            str(output),
+            "--driver",
+            "native",
+            *arguments,
+        ]
+    )
+
+
+@pytest.mark.parametrize("dp,adam", [(1, "single"), (2, "auto"), (4, "fused")])
+def test_native_dp_and_adam_choices(tmp_path, dp, adam):
+    args = _parse_native(
+        tmp_path / "new.json",
+        "--dp",
+        str(dp),
+        "--adam-implementation",
+        adam,
+        "--global-batch",
+        "24",
+        "--microbatch",
+        "3",
+    )
+    assert args.dp == dp
+    assert args.adam_implementation == adam
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ("--dp", "3"),
+        ("--dp", "2", "--tp", "2"),
+        ("--dp", "4", "--global-batch", "12", "--microbatch", "2"),
+        ("--adam-implementation", "unknown"),
+        ("--adam-implementation", "fused", "--tp", "2"),
+    ],
+)
+def test_invalid_parallel_or_adam_settings_rejected(tmp_path, arguments):
+    with pytest.raises(SystemExit) as error:
+        _parse_native(tmp_path / "new.json", *arguments)
+    assert error.value.code == 2
+
+
+def test_existing_output_is_rejected_without_modification(tmp_path):
+    output = tmp_path / "existing.json"
+    output.write_text("existing", encoding="utf-8")
+    with pytest.raises(SystemExit) as error:
+        _parse_native(output)
+    assert error.value.code == 2
+    assert output.read_text(encoding="utf-8") == "existing"
 
 
 @pytest.mark.parametrize(
@@ -70,6 +133,8 @@ def test_defaults_do_not_pin_machine_specific_devices_or_cpus():
     assert args.native_plan == "shared"
     assert args.adam_eps == 1e-8
     assert args.tp == 1
+    assert args.dp == 1
+    assert args.adam_implementation == "single"
     assert args.precision == "fp32"
 
 
@@ -171,3 +236,146 @@ def test_native_backward_releases_outputs_and_preserves_gradients(
     torch.testing.assert_close(actual_loss, expected_loss, rtol=0, atol=0)
     for actual, expected in zip(model.parameters(), reference.parameters()):
         torch.testing.assert_close(actual.grad, expected.grad, rtol=0, atol=0)
+
+
+def test_native_ddp_no_sync_covers_forward_and_backward(monkeypatch):
+    from tests.benchmarks.scripts.benchmark_llama_parallel import (
+        native_forward_backward,
+    )
+
+    events = []
+    active = False
+
+    class SpyDDP:
+        class process_group:
+            @staticmethod
+            def size():
+                return 1
+
+        @contextmanager
+        def no_sync(self):
+            nonlocal active
+            assert not active
+            events.append("enter")
+            active = True
+            try:
+                yield
+            finally:
+                active = False
+                events.append("exit")
+
+    def forward(part):
+        events.append(("forward", active))
+        logits = torch.zeros((*part.shape, 7), requires_grad=True)
+        logits.register_hook(lambda grad: events.append(("backward", active)))
+        return logits
+
+    ddp = SpyDDP()
+
+    def check_group(group):
+        assert group is ddp.process_group
+        return 1
+
+    monkeypatch.setattr(torch.distributed, "get_world_size", check_group)
+    monkeypatch.setattr(
+        torch.distributed,
+        "all_reduce",
+        lambda tensor, op=None, group=None: check_group(group),
+    )
+    native_forward_backward(
+        forward,
+        torch.ones(6, 3, dtype=torch.long),
+        microbatch_size=2,
+        precision="fp32",
+        ddp_model=ddp,
+    )
+    assert events == [
+        "enter",
+        ("forward", True),
+        ("backward", True),
+        "exit",
+        "enter",
+        ("forward", True),
+        ("backward", True),
+        "exit",
+        ("forward", False),
+        ("backward", False),
+    ]
+
+
+def _native_dp_worker(rank, rendezvous):
+    from tests.benchmarks.scripts.benchmark_llama_parallel import (
+        native_forward_backward,
+        summed_loss,
+    )
+
+    dist = torch.distributed
+    dist.init_process_group(
+        "gloo",
+        init_method=rendezvous,
+        rank=rank,
+        world_size=2,
+        timeout=timedelta(seconds=30),
+    )
+    try:
+        torch.set_num_threads(1)
+        torch.manual_seed(37)
+        model = torch.nn.Sequential(torch.nn.Embedding(7, 8), torch.nn.Linear(8, 7))
+        reference = copy.deepcopy(model)
+        group = dist.new_group(backend="gloo")
+        ddp = torch.nn.parallel.DistributedDataParallel(model, process_group=group)
+        optimizer = torch.optim.SGD(model.parameters(), lr=0.1)
+        reference_optimizer = torch.optim.SGD(reference.parameters(), lr=0.1)
+        batch = torch.tensor(
+            [
+                [1, 2, 3],
+                [2, 4, 5],
+                [6, 1, 2],
+                [3, 5, 1],
+                [1, 3, 6],
+                [0, 4, 1],
+                [5, 1, 0],
+                [3, 0, 2],
+            ]
+        )
+        local = batch.chunk(2)[rank].contiguous()
+        expected = summed_loss(reference(batch), batch) / (batch.numel() - len(batch))
+        expected.backward()
+
+        actual = native_forward_backward(
+            ddp,
+            local,
+            microbatch_size=2,
+            precision="fp32",
+            ddp_model=ddp,
+        )
+        assert not actual.requires_grad
+        torch.testing.assert_close(actual, expected.detach(), rtol=1e-6, atol=1e-7)
+        for parameter, reference_parameter in zip(
+            model.parameters(), reference.parameters()
+        ):
+            torch.testing.assert_close(
+                parameter.grad, reference_parameter.grad, rtol=1e-6, atol=1e-7
+            )
+        optimizer.step()
+        reference_optimizer.step()
+        for parameter, reference_parameter in zip(
+            model.parameters(), reference.parameters()
+        ):
+            torch.testing.assert_close(
+                parameter, reference_parameter, rtol=1e-6, atol=1e-7
+            )
+    finally:
+        dist.destroy_process_group()
+
+
+def test_native_dp_matches_unsplit_global_batch(tmp_path):
+    if (
+        not torch.distributed.is_available()
+        or not torch.distributed.is_gloo_available()
+    ):
+        pytest.skip("Gloo unavailable")
+    rendezvous = (Path(tmp_path) / "rendezvous").as_uri()
+    torch.multiprocessing.spawn(
+        _native_dp_worker, args=(rendezvous,), nprocs=2, join=True
+    )
