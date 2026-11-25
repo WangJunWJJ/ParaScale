@@ -492,3 +492,87 @@ def test_dp4_fresh_ddp_resume_is_exact_across_rank_and_dcp(tmp_path, backend):
     ):
         pytest.skip("Four CUDA devices and NCCL required")
     mp.spawn(_fresh_format_worker, args=(str(tmp_path), backend), nprocs=4, join=True)
+
+
+def _save_fault_worker(rank, folder):
+    import torch.distributed.checkpoint as dcp
+    from torch.distributed.checkpoint.api import CheckpointException
+
+    from parascale.parallel import checkpoint_dcp
+
+    root = Path(folder)
+    dist.init_process_group(
+        "gloo",
+        init_method=(root / "rendezvous").as_uri(),
+        rank=rank,
+        world_size=2,
+        timeout=timedelta(seconds=30),
+    )
+    try:
+        torch.set_num_threads(1)
+        torch.manual_seed(42)
+        model = VersionedLinear(4, 4)
+        optimizer = torch.optim.AdamW(model.parameters())
+        trainer = SimpleNamespace(
+            module=model,
+            config=DistributedParallelConfig(dp_size=2),
+            rank=rank,
+            device=torch.device("cpu"),
+            checkpoint_context={
+                "model": {"kind": "linear"},
+                "loss": "sum",
+                "data": "fixed",
+                "tokenizer": "none",
+                "precision": "fp32",
+            },
+        )
+        for fault, owner, method, phase in (
+            ("writer", dcp, "FileSystemWriter", "DCP state preparation"),
+            ("write", dcp.FileSystemWriter, "write_data", "DCP serialization"),
+            ("fsync", checkpoint_dcp, "_fsync_directory", "DCP rank state"),
+            ("hash", checkpoint_dcp, "_digest", "DCP checksums"),
+        ):
+            path = root / fault
+            message = f"injected {fault} failure on rank 1"
+            calls = 0
+
+            def fail(*args, **kwargs):
+                nonlocal calls
+                calls += 1
+                raise OSError(message)
+
+            with pytest.MonkeyPatch.context() as patch:
+                if rank == 1:
+                    patch.setattr(owner, method, fail)
+                with pytest.raises(
+                    RuntimeError, match=rf"Checkpoint {phase} failed"
+                ) as error:
+                    checkpoint.save_checkpoint(
+                        trainer, path, optimizer, step=0, checkpoint_format="dcp"
+                    )
+
+            assert calls == (1 if rank == 1 else 0)
+            assert message in str(error.value)
+            if fault == "write":
+                converted = error.value.__cause__
+                assert isinstance(converted, RuntimeError)
+                assert isinstance(converted.__cause__, CheckpointException)
+                assert set(converted.__cause__.failures) == {1}
+            else:
+                assert f"rank 1: OSError: {message}" in str(error.value)
+            assert not (path / "manifest.json").exists()
+            if fault in ("fsync", "hash"):
+                assert (path / "shared" / ".metadata").is_file()
+            if fault == "hash":
+                assert all(
+                    (path / f"rank-{peer:05d}.pt").is_file() for peer in range(2)
+                )
+            dist.barrier()
+    finally:
+        dist.destroy_process_group()
+
+
+def test_dcp_save_faults_are_coordinated_before_publication(tmp_path):
+    if not dist.is_available() or not dist.is_gloo_available():
+        pytest.skip("Gloo unavailable")
+    mp.spawn(_save_fault_worker, args=(str(tmp_path),), nprocs=2, join=True)
