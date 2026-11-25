@@ -321,7 +321,15 @@ def test_cli_native_synthetic_train_checkpoint_resume_and_serve(tmp_path):
 
 @pytest.mark.parametrize(
     ("interval", "skip_final", "expected_steps"),
-    [(0, True, []), (0, False, [3]), (2, True, [2]), (2, False, [2, 3])],
+    [
+        (0, True, []),
+        (0, False, [3]),
+        (2, True, [2]),
+        (2, False, [2, 3]),
+        (3, False, [3]),
+        (1, False, [1, 2, 3]),
+        (3, True, [3]),
+    ],
 )
 def test_cli_checkpoint_interval_and_final_save_are_independent(
     tmp_path, monkeypatch, interval, skip_final, expected_steps

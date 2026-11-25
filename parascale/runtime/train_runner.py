@@ -326,6 +326,7 @@ def run_train_from_config(
         loss_fn=loss_fn,
         checkpoint_manager=manager,
         checkpoint_interval=checkpoint_interval,
+        checkpoint_on_last_step=bool(training.get("skip_final_checkpoint", False)),
     )
     elapsed = max(time.perf_counter() - start, 1e-9)
     execution_identity = collect_execution_identity(engine)

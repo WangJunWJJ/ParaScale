@@ -39,6 +39,7 @@ class FitLoopRunner:
         step_fn: Any = None,
         checkpoint_manager: Any = None,
         checkpoint_interval: Optional[int] = None,
+        checkpoint_on_last_step: bool = True,
     ) -> Any:
         max_steps = None if max_steps is None else max(0, int(max_steps))
         self._validate_dataloader_window(dataloader, max_steps=max_steps)
@@ -97,7 +98,9 @@ class FitLoopRunner:
                     float(rate) for rate in scheduler.get_last_lr()
                 ]
             self.engine.record_step(metrics)
-            if checkpoint_manager is not None and checkpoint_interval:
+            # A caller that publishes a final checkpoint owns the last update.
+            periodic_save = checkpoint_on_last_step or max_steps != index + 1
+            if checkpoint_manager is not None and checkpoint_interval and periodic_save:
                 if self.engine.state.global_step % int(checkpoint_interval) == 0:
                     self.engine.save_checkpoint(
                         checkpoint_manager,
