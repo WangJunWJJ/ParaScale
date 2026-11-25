@@ -7,7 +7,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -128,7 +127,10 @@ def build_causal_lm_stage_components(
 
 def build_causal_lm_components(config: dict[str, Any]):
     from parascale.optimizers import build_optimizer
-    from parascale.workloads.causal_lm_model import CausalLmModel
+    from parascale.workloads.causal_lm_model import (
+        CausalLmModel,
+        causal_lm_config_identity,
+    )
 
     spec = CausalLmSpec.from_config(config)
     hf_model, batches = _load_source(
@@ -146,13 +148,10 @@ def build_causal_lm_components(config: dict[str, Any]):
         return output.loss
 
     loss_fn.normalization_weight = lambda batch: batch["tokens"]
-    effective_config = hf_model.config.to_dict()
-    effective_config.pop("_name_or_path", None)
     loss_fn.objective_metadata = {
         "type": "causal_next_token_v1",
-        "model_config_sha256": hashlib.sha256(
-            json.dumps(effective_config, sort_keys=True).encode("utf-8")
-        ).hexdigest(),
+        "model_config_sha256": causal_lm_config_identity(hf_model.config),
+        "tokenizer_identity": model.tokenizer_identity,
         "attention_backend": spec.attention_backend,
         "packing": batches.corpus.manifest["document_policy"],
     }

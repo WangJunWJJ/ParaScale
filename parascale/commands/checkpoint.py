@@ -17,9 +17,7 @@ from parascale.commands.errors import EXIT_CHECKPOINT, checkpoint_failure
 
 
 def register_checkpoint_parser(subparsers: argparse._SubParsersAction) -> None:
-    parser = subparsers.add_parser(
-        "checkpoint", help="Checkpoint utility commands."
-    )
+    parser = subparsers.add_parser("checkpoint", help="Checkpoint utility commands.")
     checkpoint_subparsers = parser.add_subparsers(
         dest="checkpoint_command", required=True
     )
@@ -35,6 +33,20 @@ def register_checkpoint_parser(subparsers: argparse._SubParsersAction) -> None:
         "--output", help="Optional path to write the validation JSON."
     )
     validate_parser.set_defaults(func=cmd_checkpoint_validate)
+    export_parser = checkpoint_subparsers.add_parser(
+        "export-causal-lm",
+        help="Export a verified full causal-LM student for inference.",
+    )
+    export_parser.add_argument(
+        "--checkpoint", required=True, help="Native checkpoint path."
+    )
+    export_parser.add_argument(
+        "--model", required=True, help="Matching local config/tokenizer directory."
+    )
+    export_parser.add_argument(
+        "--output", required=True, help="New standalone model directory."
+    )
+    export_parser.set_defaults(func=cmd_checkpoint_export_causal_lm)
 
 
 def checkpoint_manager_for_path(checkpoint: str | Path) -> CheckpointManager:
@@ -68,3 +80,17 @@ def cmd_checkpoint_validate(args: argparse.Namespace) -> int:
         ) from exc
     emit_json(payload, args.output)
     return 0 if payload["validation"]["ok"] else EXIT_CHECKPOINT
+
+
+def cmd_checkpoint_export_causal_lm(args: argparse.Namespace) -> int:
+    """Publish a student release; failures use the checkpoint CLI error contract."""
+    from parascale.checkpoint.causal_lm_export import export_causal_lm_checkpoint
+
+    try:
+        payload = export_causal_lm_checkpoint(args.checkpoint, args.model, args.output)
+    except Exception as exc:
+        raise checkpoint_failure(
+            str(exc), checkpoint=str(args.checkpoint), exception=type(exc).__name__
+        ) from exc
+    emit_json(payload)
+    return 0

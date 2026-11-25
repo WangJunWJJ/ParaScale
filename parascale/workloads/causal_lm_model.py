@@ -5,6 +5,8 @@
 
 """Stable causal-LM model identity shared by training and artifact reloads."""
 
+import hashlib
+import json
 from pathlib import Path
 
 import torch
@@ -12,6 +14,16 @@ from torch import nn
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 from parascale.data.text import tokenizer_fingerprint
+
+
+def causal_lm_config_identity(config) -> str:
+    """Bind model semantics/version; tensor dtype is checked against actual state."""
+    effective = config.to_dict()
+    for field in ("_name_or_path", "torch_dtype", "dtype"):
+        effective.pop(field, None)
+    return hashlib.sha256(
+        json.dumps(effective, sort_keys=True, allow_nan=False).encode("utf-8")
+    ).hexdigest()
 
 
 class CausalLmModel(nn.Module):
