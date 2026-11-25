@@ -70,6 +70,8 @@ def parse_args():
     )
     parser.add_argument("--sequence-length", type=int, default=32)
     parser.add_argument("--validate-catalog", action="store_true")
+    parser.add_argument("--checkpoint-format", choices=("rank", "dcp"), default="rank")
+    parser.add_argument("--checkpoint-state-probe", action="store_true")
     return parser.parse_args()
 
 
@@ -186,6 +188,22 @@ def main():
             scheduler_spec=spec,
         )
         initial_model = state_fingerprint(dict(stage.named_parameters()))
+
+        def inspect_saved_state():
+            if not args.checkpoint_state_probe:
+                return
+            value = training_fingerprint(
+                stage, optimizer, steps=2, initial=initial_model
+            )
+            args.output_dir.mkdir(parents=True, exist_ok=True)
+            reference = args.output_dir / f"rank-{rank:05d}-checkpoint-baseline.json"
+            target = args.output_dir / f"rank-{rank:05d}-checkpoint-{args.mode}.json"
+            target.write_text(json.dumps(value, sort_keys=True), encoding="utf-8")
+            if args.mode == "resume" and json.loads(reference.read_text()) != value:
+                raise AssertionError(
+                    "Loaded model/optimizer differs before the next update"
+                )
+
         seed = (812 if args.mode == "baseline" else 9999) + rank
         random.seed(seed)
         np.random.seed(seed)
@@ -205,6 +223,7 @@ def main():
             restored = trainer.load_checkpoint(source, optimizer, runtime=runtime)
             if restored != 2:
                 raise AssertionError("Expected update2 checkpoint")
+            coordinated_call(inspect_saved_state, phase="loaded state fingerprint")
         iterator = engine.data_resume.prepare_iterator(cursor)
         if args.mode == "baseline" and args.validate_catalog:
             trainer.save_checkpoint(
@@ -212,6 +231,7 @@ def main():
                 optimizer,
                 step=0,
                 runtime=runtime,
+                checkpoint_format=args.checkpoint_format,
             )
         ahead = None
         updates = []
@@ -256,7 +276,9 @@ def main():
                     optimizer,
                     step=2,
                     runtime=runtime,
+                    checkpoint_format=args.checkpoint_format,
                 )
+                coordinated_call(inspect_saved_state, phase="saved state fingerprint")
                 if args.validate_catalog:
 
                     def prune_and_check():
@@ -289,6 +311,7 @@ def main():
                     optimizer,
                     step=1,
                     runtime=runtime,
+                    checkpoint_format=args.checkpoint_format,
                 )
 
         def digest_tensor(value):
@@ -327,9 +350,17 @@ def main():
         error = None
         if args.mode == "resume":
             try:
+                (args.output_dir / f"rank-{rank:05d}-resume.json").write_text(
+                    serialized, encoding="utf-8"
+                )
                 if reference.read_text(encoding="utf-8") != serialized:
+                    expected = json.loads(reference.read_text(encoding="utf-8"))
+                    observed = json.loads(serialized)
+                    changed = [
+                        key for key in observed if observed[key] != expected.get(key)
+                    ]
                     raise AssertionError(
-                        "Resumed update/state differs from uninterrupted reference"
+                        f"Resumed update/state differs from uninterrupted reference: {changed}"
                     )
             except Exception as exc:
                 error = f"rank {rank}: {exc}"
@@ -349,6 +380,7 @@ def main():
                         "tp": args.tp,
                         "pp": args.pp,
                         "pipeline_schedule": args.pipeline_schedule,
+                        "checkpoint_format": args.checkpoint_format,
                         "precision": "bf16",
                         "updates": updates,
                         "scope": "exact fresh-process update3 recovery"

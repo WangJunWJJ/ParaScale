@@ -461,12 +461,25 @@ class DistributedTrainer:
         self._loss_scale = self.config.dp_size / self._normalization_count
 
     def save_checkpoint(
-        self, directory: Any, optimizer: Any, *, step: int, runtime: Any = None
+        self,
+        directory: Any,
+        optimizer: Any,
+        *,
+        step: int,
+        runtime: Any = None,
+        checkpoint_format: str = "rank",
     ) -> None:
         """Save a new, same-topology checkpoint; all ranks must participate."""
         from .distributed_checkpoint import save_checkpoint
 
-        save_checkpoint(self, directory, optimizer, step=step, runtime=runtime)
+        save_checkpoint(
+            self,
+            directory,
+            optimizer,
+            step=step,
+            runtime=runtime,
+            checkpoint_format=checkpoint_format,
+        )
 
     def load_checkpoint(
         self, directory: Any, optimizer: Any, *, runtime: Any = None

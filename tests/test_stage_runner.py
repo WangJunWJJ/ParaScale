@@ -139,8 +139,9 @@ def test_recovery_rejects_newer_snapshot_beyond_update_window(tmp_path):
         _validate_save_targets(plan, initial_step=2)
 
 
+@pytest.mark.parametrize("checkpoint_format", ["rank", "dcp"])
 def test_runner_wires_real_cursor_optimizer_and_runtime_checkpoint(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, checkpoint_format
 ):
     import torch
 
@@ -155,7 +156,10 @@ def test_runner_wires_real_cursor_optimizer_and_runtime_checkpoint(
     config["parascale"]["training"] = {
         "checkpoint_save_path": str(tmp_path / "snapshots"),
         "checkpoint_save_interval": 2,
+        "checkpoint_format": checkpoint_format,
     }
+    world_size = 2 if checkpoint_format == "dcp" else 1
+    config["parascale"]["parallel"] = {"data_parallel_size": world_size}
     stage = torch.nn.Linear(4, 1)
     stage.stage_index = 0
     stage.tensor_parallel_plan = lambda: {}
@@ -166,7 +170,7 @@ def test_runner_wires_real_cursor_optimizer_and_runtime_checkpoint(
         "dist",
         SimpleNamespace(
             get_rank=lambda: 0,
-            get_world_size=lambda: 1,
+            get_world_size=lambda: world_size,
             broadcast_object_list=lambda *args, **kwargs: None,
             all_reduce=lambda *args, **kwargs: None,
             ReduceOp=SimpleNamespace(MAX="max"),
@@ -184,6 +188,7 @@ def test_runner_wires_real_cursor_optimizer_and_runtime_checkpoint(
     monkeypatch.setattr(torch.cuda, "reset_peak_memory_stats", lambda _: None)
     monkeypatch.setattr(torch.cuda, "max_memory_allocated", lambda _: 0)
     captured = []
+    expected_format = checkpoint_format
 
     class CpuExecutor:
         def __init__(self, module, *args, **kwargs):
@@ -194,7 +199,8 @@ def test_runner_wires_real_cursor_optimizer_and_runtime_checkpoint(
             value.backward()
             return SimpleNamespace(loss=value.item(), normalization_count=12)
 
-        def save_checkpoint(self, path, optimizer, *, step, runtime):
+        def save_checkpoint(self, path, optimizer, *, step, runtime, checkpoint_format):
+            assert checkpoint_format == expected_format
             snapshot = runtime.capture()
             runtime.validate(
                 snapshot, step=step, optimizer_state=optimizer.state_dict()
@@ -204,9 +210,10 @@ def test_runner_wires_real_cursor_optimizer_and_runtime_checkpoint(
     monkeypatch.setattr(runner, "DistributedTrainer", CpuExecutor)
     result = runner.run_stage_train_from_config(config)
     assert result["global_step"] == 2
-    assert result["samples"] == 8
-    assert result["tokens"] == 32
+    assert result["samples"] == 8 * world_size
+    assert result["tokens"] == 32 * world_size
     assert len(captured) == 1
     assert captured[0]["data_state"]["state"]["position"] == 4
     assert captured[0]["consumed_samples"] == 8
     assert result["checkpoint"]["step"] == 2
+    assert result["checkpoint"]["format"] == expected_format

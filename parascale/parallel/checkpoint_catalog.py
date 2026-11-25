@@ -57,8 +57,12 @@ def _read_metadata(directory: Path) -> dict[str, Any]:
         manifest.read_text(encoding="utf-8"), object_pairs_hook=unique_json_object
     )
     validate_manifest_structure(metadata)
-    if metadata["schema_version"] != 5:
-        raise ValueError("Stage catalog requires schema5 complete runtime checkpoints")
+    if metadata["schema_version"] == 6 and manifest.stat().st_nlink != 1:
+        raise ValueError("Checkpoint manifest must not have hard links")
+    if metadata["schema_version"] not in (5, 6) or metadata["runtime"] is None:
+        raise ValueError(
+            "Stage catalog requires schema5/6 complete runtime checkpoints"
+        )
     if metadata["step"] != step:
         raise ValueError("Checkpoint directory step does not match manifest step")
     return metadata
@@ -69,6 +73,12 @@ def _check_payloads(directory: Path, metadata: dict[str, Any]) -> None:
         path = _safe_path(directory / entry["path"])
         if not path.is_file():
             raise ValueError(f"Checkpoint payload must be a regular file: {path}")
+        if metadata["schema_version"] == 6:
+            info = path.stat()
+            if info.st_nlink != 1:
+                raise ValueError(f"Checkpoint payload must not have hard links: {path}")
+            if info.st_size != entry["size_bytes"]:
+                raise ValueError(f"Checkpoint size mismatch: {path.name}")
         if _digest(path) != entry["sha256"]:
             raise ValueError(f"Checkpoint checksum mismatch: {path.name}")
 
@@ -83,7 +93,7 @@ def _check_payloads(directory: Path, metadata: dict[str, Any]) -> None:
 
 
 def inspect_stage_checkpoint(directory: str | Path) -> dict[str, Any]:
-    """Return schema5 metadata after validating local paths and all SHA256 hashes.
+    """Return complete schema5/6 metadata after validating local payload integrity.
 
     Does not import Torch or deserialize payloads. Raises ValueError for invalid
     metadata, links or checksum mismatches, and OSError for filesystem failures.
@@ -134,7 +144,10 @@ def latest_stage_checkpoint(root: str | Path) -> tuple[Path, list[dict[str, Any]
 
 def _family(metadata: dict[str, Any]) -> str:
     return json.dumps(
-        {key: metadata[key] for key in ("topology", "context", "runtime")},
+        {
+            key: metadata.get(key)
+            for key in ("schema_version", "topology", "context", "runtime", "storage")
+        },
         sort_keys=True,
         allow_nan=False,
     )
@@ -145,16 +158,32 @@ def _remove_snapshot(directory: Path, metadata: dict[str, Any], root: Path) -> b
     directory = _safe_path(directory)
     if directory.parent != root or _read_metadata(directory) != metadata:
         raise ValueError("Checkpoint changed before retention")
-    names = {"manifest.json", *(entry["path"] for entry in metadata["files"])}
+    payloads = [Path(entry["path"]) for entry in metadata["files"]]
+    names = {"manifest.json", *(path.parts[0] for path in payloads)}
     if {path.name for path in directory.iterdir()} != names:
         return False
-    paths = [_safe_path(directory / name) for name in sorted(names)]
-    if any(not path.is_file() or path.parent != directory for path in paths):
+    shared = None
+    if metadata["schema_version"] == 6:
+        shared = _safe_path(directory / "shared")
+        if not shared.is_dir():
+            raise ValueError("Checkpoint shared path must be a directory")
+        if {path.name for path in shared.iterdir()} != {
+            path.name for path in payloads if path.parts[0] == "shared"
+        }:
+            return False
+    paths = [
+        _safe_path(directory / name) for name in [Path("manifest.json"), *payloads]
+    ]
+    if any(not path.is_file() for path in paths):
         raise ValueError("Checkpoint contains unsafe retention paths")
     (directory / "manifest.json").unlink()
     _fsync_directory(directory)
-    for entry in metadata["files"]:
-        (directory / entry["path"]).unlink()
+    for path in paths[1:]:
+        path.unlink()
+    if shared is not None:
+        _fsync_directory(shared)
+        shared.rmdir()
+        _fsync_directory(directory)
     directory.rmdir()
     _fsync_directory(root)
     return True

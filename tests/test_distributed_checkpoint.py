@@ -48,6 +48,44 @@ class RuntimeParticipant:
         self.restored = True
 
 
+@pytest.mark.parametrize("target", ["manifest.json", "shared/__0_0.distcp"])
+def test_dcp_direct_load_rejects_hard_links(tmp_path, target):
+    directory = tmp_path / "snapshot"
+    (directory / "shared").mkdir(parents=True)
+    (directory / "manifest.json").write_text("{}")
+    (directory / "shared/__0_0.distcp").write_bytes(b"data")
+    (tmp_path / "external").hardlink_to(directory / target)
+    with pytest.raises(ValueError, match="hard link"):
+        checkpoint._validate_dcp_paths(
+            directory, {"files": [{"path": "shared/__0_0.distcp"}]}
+        )
+
+
+def test_dcp_direct_load_rejects_unresolved_parent_traversal(tmp_path):
+    (tmp_path / "child").mkdir()
+    with pytest.raises(ValueError, match="traversal"):
+        checkpoint._validate_dcp_paths(tmp_path / "child/..", {"files": []})
+
+
+@pytest.mark.parametrize("target", ["manifest.json", "shared", "snapshot"])
+def test_dcp_direct_load_rejects_symbolic_links(tmp_path, target):
+    directory = tmp_path / "snapshot"
+    (directory / "shared").mkdir(parents=True)
+    (directory / "manifest.json").write_text("{}")
+    (directory / "shared/__0_0.distcp").write_bytes(b"data")
+    source = directory if target == "snapshot" else directory / target
+    moved = tmp_path / "original"
+    source.rename(moved)
+    try:
+        source.symlink_to(moved, target_is_directory=moved.is_dir())
+    except OSError:
+        pytest.skip("Symbolic link permission unavailable")
+    with pytest.raises(ValueError, match="link/reparse"):
+        checkpoint._validate_dcp_paths(
+            directory, {"files": [{"path": "shared/__0_0.distcp"}]}
+        )
+
+
 def test_runtime_checkpoint_roundtrip_and_rng_application_order(
     tmp_path, runtime, monkeypatch
 ):

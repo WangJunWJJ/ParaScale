@@ -59,6 +59,7 @@ class StageTrainingPlan:
             "max_steps": self.max_steps,
             "checkpoint_dir": str(self.checkpoint_dir),
             "checkpoint_interval": self.checkpoint_interval,
+            "checkpoint_format": self.config.checkpoint_format,
             "keep_last": self.keep_last,
             "metrics_history_limit": self.metrics_history_limit,
             "timeout_seconds": self.timeout_seconds,

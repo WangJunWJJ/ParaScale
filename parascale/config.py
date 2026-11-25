@@ -129,6 +129,7 @@ class TrainingRunConfig:
     checkpoint_save_path: str = "./checkpoints"
     checkpoint_save_interval: int = 1000
     checkpoint_keep_last: int = 3
+    checkpoint_format: Literal["rank", "dcp"] = "rank"
     metrics_history_limit: int = 1000
     max_resume_replay_batches: int = 10000
     adapter_only_checkpoint: bool = False
@@ -448,6 +449,21 @@ class ParaScaleConfig:
             )
         if self.checkpoint_keep_last < 2:
             raise ValueError("checkpoint_keep_last must be >= 2")
+        if self.checkpoint_format not in ("rank", "dcp"):
+            raise ValueError("checkpoint_format must be rank or dcp")
+        if self.checkpoint_format == "dcp":
+            if self.training_backend != "native_parallel":
+                raise ValueError(
+                    "checkpoint_format=dcp requires training_backend=native_parallel"
+                )
+            if self.data_parallel_size < 2:
+                raise ValueError(
+                    "checkpoint_format=dcp requires data_parallel_size >= 2"
+                )
+            if self.tensor_parallel_size != 1:
+                raise ValueError(
+                    "checkpoint_format=dcp requires tensor_parallel_size == 1"
+                )
         history_minimum = 0 if self.training_backend == "native_parallel" else 1
         if self.metrics_history_limit < history_minimum or self.max_resume_replay_batches < 0:
             raise ValueError(

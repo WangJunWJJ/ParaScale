@@ -62,6 +62,7 @@ def test_supported_layouts(dp, tp, pp):
     assert plan.topology.world_size == dp * tp * pp
     assert payload["world_size"] == dp * tp * pp
     assert payload["global_batch_size"] == 8 * dp
+    assert plan.config.checkpoint_format == payload["checkpoint_format"] == "rank"
     assert plan.workload.batch_size == plan.config.batch_size == 2
     assert plan.timeout_seconds == 180
     assert plan.config.pipeline_schedule == "gpipe"
@@ -70,6 +71,21 @@ def test_supported_layouts(dp, tp, pp):
     assert data["training"] == original["training"]
     with pytest.raises(dataclasses.FrozenInstanceError):
         plan.max_steps = 10
+
+
+@pytest.mark.parametrize("dp,pp", [(2, 1), (4, 1), (2, 2)])
+def test_dcp_checkpoint_format_in_resolved_plan(dp, pp):
+    data = settings()
+    data["parascale"]["parallel"] = {
+        "data_parallel_size": dp,
+        "pipeline_parallel_size": pp,
+    }
+    data["training"]["checkpoint_format"] = "dcp"
+
+    plan = build(data)
+
+    assert plan.config.checkpoint_format == plan.to_dict()["checkpoint_format"] == "dcp"
+    assert build(plan.config_data).to_dict() == plan.to_dict()
 
 
 @pytest.mark.parametrize(

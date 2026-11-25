@@ -58,6 +58,231 @@ def catalog():
     return checkpoint_catalog
 
 
+def dcp_checkpoint(root, step, *, version="2.6.0+cpu"):
+    directory = checkpoint(root, step, ranks=2)
+    manifest = directory / "manifest.json"
+    metadata = json.loads(manifest.read_text())
+    metadata.update(
+        schema_version=6, storage={"kind": "torch_dcp", "torch_version": version}
+    )
+    (directory / "shared").mkdir()
+    (directory / "shared/.metadata").write_bytes(b"metadata")
+    (directory / "shared/__1_0.distcp").touch()
+    for path in sorted(directory.glob("rank-*.pt")) + sorted(
+        (directory / "shared").iterdir()
+    ):
+        payload = path.read_bytes()
+        entry = {
+            "path": path.relative_to(directory).as_posix(),
+            "sha256": hashlib.sha256(payload).hexdigest(),
+            "size_bytes": len(payload),
+        }
+        if path.parent == directory:
+            metadata["files"][int(path.stem[5:])] = entry
+        else:
+            metadata["files"].append(entry)
+    manifest.write_text(json.dumps(metadata), encoding="utf-8")
+    return directory
+
+
+def test_schema6_valid_with_sparse_empty_data_shard(tmp_path):
+    directory = dcp_checkpoint(tmp_path, 1)
+    assert catalog().inspect_stage_checkpoint(directory)["schema_version"] == 6
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda m: m.update(extra=True),
+        lambda m: m.pop("storage"),
+        lambda m: m["storage"].update(kind="other"),
+        lambda m: m["storage"].update(torch_version="../2.6"),
+        lambda m: m["storage"].update(torch_version=""),
+        lambda m: m["runtime"].clear(),
+        lambda m: m["topology"].update(dp_size=1),
+        lambda m: m["topology"].update(tp_size=2),
+        lambda m: m["files"].pop(0),
+        lambda m: m["files"].pop(2),
+        lambda m: m["files"].pop(),
+        lambda m: m["files"].append(m["files"][-1]),
+        lambda m: m["files"].reverse(),
+        lambda m: m["files"][0].update(size_bytes=False),
+        lambda m: m["files"][0].update(size_bytes=0),
+        lambda m: m["files"][2].update(size_bytes=0),
+        lambda m: m["files"][-1].update(size_bytes=-1),
+        lambda m: m["files"][-1].update(path="shared/__2_0.distcp"),
+        lambda m: m["files"][-1].update(path="shared/__01_0.distcp"),
+        lambda m: m["files"][-1].update(path="shared\\__1_0.distcp"),
+        lambda m: m["files"][-1].update(path="shared/../__1_0.distcp"),
+        lambda m: m["files"][-1].update(sha256="x" * 64),
+        lambda m: m["files"][-1].update(extra=True),
+    ],
+)
+def test_schema6_rejects_malformed_structure(tmp_path, mutate):
+    from parascale.parallel.checkpoint_manifest import validate_manifest_structure
+
+    directory = dcp_checkpoint(tmp_path, 1)
+    metadata = json.loads((directory / "manifest.json").read_text())
+    with pytest.raises(ValueError):
+        mutate(metadata)
+        validate_manifest_structure(metadata)
+
+
+def test_schema6_null_runtime_is_structural_only(tmp_path):
+    from parascale.parallel.checkpoint_manifest import validate_manifest_structure
+
+    directory = dcp_checkpoint(tmp_path, 1)
+    manifest = directory / "manifest.json"
+    metadata = json.loads(manifest.read_text())
+    metadata["runtime"] = None
+    validate_manifest_structure(metadata)
+    manifest.write_text(json.dumps(metadata), encoding="utf-8")
+    with pytest.raises(ValueError, match="runtime"):
+        catalog().inspect_stage_checkpoint(directory)
+
+
+@pytest.mark.parametrize(
+    ("payload", "error"), [(b"x", "size"), (b"METADATA", "checksum")]
+)
+def test_schema6_corrupt_payload_preserved(tmp_path, payload, error):
+    old = dcp_checkpoint(tmp_path, 1)
+    target = old / "shared/.metadata"
+    target.write_bytes(payload)
+    dcp_checkpoint(tmp_path, 2)
+    dcp_checkpoint(tmp_path, 3)
+    anchor = dcp_checkpoint(tmp_path, 4)
+    with pytest.raises(ValueError, match=error):
+        catalog().inspect_stage_checkpoint(old)
+    report = catalog().prune_stage_checkpoints(anchor, keep_last=2)
+    assert report["protected"] == [4, 3]
+    assert report["removed"] == [2]
+    assert target.read_bytes() == payload
+
+
+def test_schema6_retention_separates_formats_and_storage_versions(tmp_path):
+    legacy = checkpoint(tmp_path, 6, ranks=2)
+    other_version = dcp_checkpoint(tmp_path, 5, version="2.7.0")
+    old = dcp_checkpoint(tmp_path, 1)
+    dcp_checkpoint(tmp_path, 2)
+    anchor = dcp_checkpoint(tmp_path, 3)
+    report = catalog().prune_stage_checkpoints(anchor, keep_last=2)
+    assert report["removed"] == [1]
+    assert report["protected"] == [3, 2]
+    assert not old.exists()
+    assert legacy.is_dir() and other_version.is_dir()
+
+
+@pytest.mark.parametrize("name", ["manifest.json", "shared/.metadata"])
+def test_schema6_rejects_hardlinked_files(tmp_path, name):
+    directory = dcp_checkpoint(tmp_path, 1)
+    outside = tmp_path / "outside"
+    outside.hardlink_to(directory / name)
+    with pytest.raises(ValueError, match="hard links"):
+        catalog().inspect_stage_checkpoint(directory)
+
+
+@pytest.mark.parametrize(
+    "failure", [None, "manifest_sync", "shared_sync", "shared_rmdir"]
+)
+def test_schema6_retention_sync_order_and_interruptions(tmp_path, monkeypatch, failure):
+    old = dcp_checkpoint(tmp_path, 1)
+    dcp_checkpoint(tmp_path, 2)
+    anchor = dcp_checkpoint(tmp_path, 3)
+    shared = old / "shared"
+    module = catalog()
+    inventory = module.inspect_stage_checkpoint(old)["files"]
+    events = []
+    original_unlink, original_rmdir = Path.unlink, Path.rmdir
+
+    def record(action, path):
+        events.append((action, path.relative_to(tmp_path).as_posix()))
+
+    def unlink(path, *args, **kwargs):
+        record("unlink", path)
+        return original_unlink(path, *args, **kwargs)
+
+    def fsync(path):
+        record("sync", path)
+        if (path == old and failure == "manifest_sync") or (
+            path == shared and failure == "shared_sync"
+        ):
+            raise OSError("injected directory sync failure")
+
+    def rmdir(path):
+        record("rmdir", path)
+        if path == shared and failure == "shared_rmdir":
+            raise OSError("injected shared removal failure")
+        return original_rmdir(path)
+
+    expected = [("unlink", f"{old.name}/manifest.json"), ("sync", old.name)]
+    if failure != "manifest_sync":
+        expected += [("unlink", f"{old.name}/{entry['path']}") for entry in inventory]
+        expected.append(("sync", f"{old.name}/shared"))
+        if failure != "shared_sync":
+            expected.append(("rmdir", f"{old.name}/shared"))
+    if failure is None:
+        expected += [("sync", old.name), ("rmdir", old.name), ("sync", ".")]
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "unlink", unlink)
+        patch.setattr(Path, "rmdir", rmdir)
+        patch.setattr(module, "_fsync_directory", fsync)
+        if failure is None:
+            assert module.prune_stage_checkpoints(anchor, keep_last=2)["removed"] == [1]
+        else:
+            with pytest.raises(OSError, match="injected"):
+                module.prune_stage_checkpoints(anchor, keep_last=2)
+
+    assert events == expected
+    assert not (old / "manifest.json").exists()
+    if failure is None:
+        assert not old.exists()
+        return
+    assert shared.is_dir()
+    if failure == "manifest_sync":
+        assert all((old / entry["path"]).is_file() for entry in inventory)
+    else:
+        assert not list(shared.iterdir())
+    anchor = dcp_checkpoint(tmp_path, 4)
+    report = module.prune_stage_checkpoints(anchor, keep_last=2)
+    assert report["removed"] == [2]
+    assert report["protected"] == [4, 3]
+    assert report["skipped"] == [
+        {"step": 1, "path": str(old), "reason": "Uncommitted/orphan directory"}
+    ]
+    assert shared.is_dir() and not (old / "manifest.json").exists()
+
+
+@pytest.mark.parametrize(
+    "kind", ["extra_root", "extra_shared", "shared_link", "file_link"]
+)
+def test_schema6_retention_preserves_extra_content_and_links(tmp_path, kind):
+    old = dcp_checkpoint(tmp_path, 1)
+    dcp_checkpoint(tmp_path, 2)
+    anchor = dcp_checkpoint(tmp_path, 3)
+    shared = old / "shared"
+    outside = tmp_path / "outside"
+    if kind == "extra_root":
+        (old / "extra").mkdir()
+    elif kind == "extra_shared":
+        (shared / "extra").mkdir()
+    else:
+        path = shared if kind == "shared_link" else shared / ".metadata"
+        path.rename(outside)
+        try:
+            path.symlink_to(outside, target_is_directory=kind == "shared_link")
+        except OSError:
+            pytest.skip("Symlink creation unavailable")
+        with pytest.raises(ValueError, match="link"):
+            catalog().inspect_stage_checkpoint(old)
+    report = catalog().prune_stage_checkpoints(anchor, keep_last=2)
+    assert report["removed"] == []
+    assert report["skipped"][0]["step"] == 1
+    assert (old / "manifest.json").is_file()
+    if kind.endswith("_link"):
+        assert outside.exists()
+
+
 def test_inspection_and_latest_without_loading_torch_payload(tmp_path):
     old = checkpoint(tmp_path, 1)
     latest = checkpoint(tmp_path, 2)

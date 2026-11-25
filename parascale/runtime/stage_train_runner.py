@@ -261,12 +261,23 @@ def run_stage_train_from_config(
 
     def save(step):
         path = root / f"step-{step:08d}"
-        trainer.save_checkpoint(path, optimizer, step=step, runtime=recovery)
+        trainer.save_checkpoint(
+            path,
+            optimizer,
+            step=step,
+            runtime=recovery,
+            checkpoint_format=plan.config.checkpoint_format,
+        )
         retention = _rank_zero(
             lambda: prune_stage_checkpoints(path, keep_last=plan.keep_last),
             phase="checkpoint retention",
         )
-        last_checkpoint.update(path=str(path), step=step, retention=retention)
+        last_checkpoint.update(
+            path=str(path),
+            step=step,
+            retention=retention,
+            format=plan.config.checkpoint_format,
+        )
 
     torch.cuda.reset_peak_memory_stats(device)
     result = StageUpdateLoop(
