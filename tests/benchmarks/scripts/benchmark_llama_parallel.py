@@ -22,7 +22,7 @@ import torch.distributed as dist
 import torch.nn.functional as functional
 import transformers
 from torch.distributed.device_mesh import init_device_mesh
-from torch.distributed.tensor import Replicate
+from torch.distributed.tensor import DTensor, Replicate
 from torch.distributed.tensor.parallel import (
     ColwiseParallel,
     PrepareModuleInput,
@@ -38,6 +38,47 @@ def file_digest(path):
         for block in iter(lambda: stream.read(4 * 1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def parameter_fingerprint(parameters):
+    """Hash ordered dtype/shape headers and raw bytes, using local TP shards."""
+    digest = hashlib.sha256()
+    for parameter in parameters:
+        tensor = parameter.detach()
+        if isinstance(tensor, DTensor):
+            tensor = tensor.to_local()
+        header = json.dumps(
+            [str(tensor.dtype), list(tensor.shape)], separators=(",", ":")
+        )
+        digest.update(header.encode("ascii") + b"\n")
+        raw = tensor.cpu().contiguous().reshape(-1).view(torch.uint8)
+        digest.update(memoryview(raw.numpy()))
+    return digest.hexdigest()
+
+
+def _initial_parameter_fingerprint(parameters, *, world, dp):
+    error, fingerprint = None, None
+    try:
+        fingerprint = parameter_fingerprint(parameters)
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
+    record = (error, fingerprint)
+    records = [record] if world == 1 else [None] * world
+    if world > 1:
+        dist.all_gather_object(records, record)
+    failures = [
+        f"rank {rank}: {message}"
+        for rank, (message, _) in enumerate(records)
+        if message is not None
+    ]
+    if failures:
+        raise RuntimeError(
+            f"Initial parameter fingerprint failed: {'; '.join(failures)}"
+        )
+    fingerprints = [value for _, value in records]
+    if dp > 1 and any(value != fingerprints[0] for value in fingerprints):
+        raise ValueError(f"Initial parameters differ across DP ranks: {fingerprints}")
+    return fingerprint
 
 
 def summed_loss(prediction, labels):
@@ -98,6 +139,49 @@ def native_forward_backward(
     return loss_sum
 
 
+def register_benchmark_ddp_hook(model, name):
+    """Register the selected Torch hook on the wrapper's own process group."""
+    if name == "none":
+        return
+    if name != "bf16_compress":
+        raise ValueError(f"unsupported benchmark DDP communication hook: {name}")
+    from torch.distributed.algorithms.ddp_comm_hooks.default_hooks import (
+        bf16_compress_hook,
+    )
+
+    group = model.process_group
+    if group is None:
+        raise ValueError("BF16 compression requires an explicit DDP process group")
+    model.register_comm_hook(state=group, hook=bf16_compress_hook)
+
+
+def _setup_benchmark_ddp_hook(model, name, device):
+    if name == "none":
+        return
+    error = None
+    try:
+        if not isinstance(model, torch.nn.parallel.DistributedDataParallel):
+            raise ValueError(
+                "DDP compression requires a DistributedDataParallel wrapper"
+            )
+        if device.type != "cuda" or not torch.cuda.is_bf16_supported(
+            including_emulation=False
+        ):
+            raise ValueError("BF16 compression requires native CUDA BF16 support")
+        if dist.get_backend(
+            model.process_group
+        ) != "nccl" or torch.cuda.nccl.version() <= (2, 9, 6):
+            raise ValueError("BF16 compression requires NCCL newer than 2.9.6")
+        register_benchmark_ddp_hook(model, name)
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
+    errors = [None] * dist.get_world_size()
+    dist.all_gather_object(errors, error)
+    failures = [f"rank {rank}: {error}" for rank, error in enumerate(errors) if error]
+    if failures:
+        raise RuntimeError(f"Benchmark DDP hook setup failed: {'; '.join(failures)}")
+
+
 def native_tensor_plan(layers, *, shared=True):
     """Build the native HF reference plan independently of ParaScale adapters."""
     plan = {}
@@ -137,6 +221,9 @@ def parse_args(argv=None):
     parser.add_argument("--tp", type=int, choices=(1, 2), default=1)
     parser.add_argument("--dp", type=int, choices=(1, 2, 4), default=1)
     parser.add_argument(
+        "--ddp-comm-hook", choices=("none", "bf16_compress"), default="none"
+    )
+    parser.add_argument(
         "--adam-implementation", choices=("single", "auto", "fused"), default="single"
     )
     parser.add_argument("--precision", choices=("fp32", "bf16"), default="fp32")
@@ -155,6 +242,8 @@ def parse_args(argv=None):
         parser.error("global-batch must be a positive multiple of dp * microbatch")
     if args.dp > 1 and args.tp > 1:
         parser.error("This reference measures pure DP or TP, not their combination")
+    if args.ddp_comm_hook != "none" and (args.dp == 1 or args.tp > 1):
+        parser.error("ddp-comm-hook compression requires dp >= 2 and tp = 1")
     if args.tp > 1 and args.adam_implementation != "single":
         parser.error("TP reference requires single-tensor AdamW")
     if (
@@ -208,8 +297,10 @@ def main():
             raise ValueError("Requested CPU affinity is outside the allowed set")
         os.sched_setaffinity(0, requested)
     device = torch.device("cuda", local_rank)
-    if args.precision == "bf16" and not torch.cuda.is_bf16_supported(
-        including_emulation=False
+    if (
+        args.ddp_comm_hook == "none"
+        and args.precision == "bf16"
+        and not torch.cuda.is_bf16_supported(including_emulation=False)
     ):
         raise ValueError("BF16 benchmark requires native CUDA BF16 support")
     dist.init_process_group("nccl", device_id=device, timeout=timedelta(seconds=180))
@@ -298,6 +389,14 @@ def main():
             ddp_model = torch.nn.parallel.DistributedDataParallel(
                 model, device_ids=[local_rank]
             )
+        _setup_benchmark_ddp_hook(
+            trainer.execution_module if trainer is not None else ddp_model,
+            args.ddp_comm_hook,
+            device,
+        )
+        initial_parameter_sha256 = _initial_parameter_fingerprint(
+            model.parameters(), world=world, dp=args.dp
+        )
         optimizer = torch.optim.AdamW(
             model.parameters(),
             lr=1e-5,
@@ -336,7 +435,9 @@ def main():
         local_batch = args.global_batch // args.dp
         dp_rank = rank // args.tp
         train = train[:, dp_rank * local_batch : (dp_rank + 1) * local_batch]
-        local_input_hash = hashlib.sha256(train.contiguous().numpy().tobytes()).hexdigest()
+        local_input_hash = hashlib.sha256(
+            train.contiguous().numpy().tobytes()
+        ).hexdigest()
         torch.cuda.reset_peak_memory_stats(device)
         durations, training_losses = [], []
         for step, batch in enumerate(train):
@@ -392,6 +493,7 @@ def main():
             {
                 "rank": rank,
                 "initial_nll": initial_nll,
+                "initial_parameter_sha256": initial_parameter_sha256,
                 "final_nll": final_nll,
                 "initial_block_sums": initial_blocks,
                 "final_block_sums": final_blocks,
@@ -440,6 +542,7 @@ def main():
                 "world": world,
                 "dp": args.dp,
                 "tp": args.tp,
+                "ddp_comm_hook": args.ddp_comm_hook,
                 "accumulation_steps": args.global_batch // args.dp // args.microbatch,
                 "precision": args.precision,
                 "parameter_dtype": "float32",

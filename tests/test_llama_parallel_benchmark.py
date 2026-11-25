@@ -10,6 +10,7 @@ import weakref
 from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -32,6 +33,182 @@ def _parse_native(output, *arguments):
             "native",
             *arguments,
         ]
+    )
+
+
+def test_parameter_fingerprint_uses_ordered_values_not_parameter_names():
+    from tests.benchmarks.scripts.benchmark_llama_parallel import parameter_fingerprint
+
+    model = torch.nn.Sequential(torch.nn.Linear(3, 2), torch.nn.Linear(2, 1))
+    clone = copy.deepcopy(model)
+    renamed = torch.nn.Sequential(
+        torch.nn.ModuleDict({"first": clone[0], "second": clone[1]})
+    )
+    expected = parameter_fingerprint(model.parameters())
+    assert parameter_fingerprint(renamed.parameters()) == expected
+    assert parameter_fingerprint(reversed(list(clone.parameters()))) != expected
+    with torch.no_grad():
+        clone[0].weight[0, 0].add_(1)
+    assert parameter_fingerprint(clone.parameters()) != expected
+
+
+def test_parameter_fingerprint_distinguishes_equal_bytes_with_different_metadata():
+    from tests.benchmarks.scripts.benchmark_llama_parallel import parameter_fingerprint
+
+    tensor = torch.zeros(2, 3, dtype=torch.float32)
+    expected = parameter_fingerprint([tensor])
+    assert parameter_fingerprint([tensor.view(torch.int32)]) != expected
+    assert parameter_fingerprint([tensor.reshape(3, 2)]) != expected
+    assert parameter_fingerprint([tensor.T]) == parameter_fingerprint(
+        [tensor.T.contiguous()]
+    )
+
+
+@pytest.mark.parametrize(
+    "dp,local_failure,peer_record,expected_error",
+    [
+        (2, True, (None, "peer"), "rank 0:.*local copy failed"),
+        (1, False, ("peer copy failed", None), "rank 1:.*peer copy failed"),
+        (2, False, (None, "peer"), "Initial parameters differ"),
+        (1, False, (None, "peer"), None),
+    ],
+)
+def test_initial_fingerprint_coordinates_errors_and_compares_only_dp(
+    monkeypatch, dp, local_failure, peer_record, expected_error
+):
+    from tests.benchmarks.scripts import benchmark_llama_parallel as benchmark
+
+    def fingerprint(parameters):
+        if local_failure:
+            raise OSError("local copy failed")
+        return "local"
+
+    def gather(records, local_record):
+        assert local_record == (
+            ("OSError: local copy failed", None) if local_failure else (None, "local")
+        )
+        records[:] = [local_record, peer_record]
+
+    monkeypatch.setattr(benchmark, "parameter_fingerprint", fingerprint)
+    monkeypatch.setattr(torch.distributed, "all_gather_object", gather)
+    if expected_error:
+        with pytest.raises((ValueError, RuntimeError), match=expected_error):
+            benchmark._initial_parameter_fingerprint([], world=2, dp=dp)
+    else:
+        assert benchmark._initial_parameter_fingerprint([], world=2, dp=dp) == "local"
+
+
+def test_benchmark_bf16_hook_requires_pure_dp(tmp_path):
+    args = _parse_native(
+        tmp_path / "new.json",
+        "--dp",
+        "4",
+        "--microbatch",
+        "4",
+        "--ddp-comm-hook",
+        "bf16_compress",
+    )
+    assert args.ddp_comm_hook == "bf16_compress"
+    for topology in ((), ("--tp", "2"), ("--dp", "2", "--tp", "2")):
+        with pytest.raises(SystemExit) as error:
+            _parse_native(
+                tmp_path / "new.json", *topology, "--ddp-comm-hook", "bf16_compress"
+            )
+        assert error.value.code == 2
+    with pytest.raises(SystemExit) as error:
+        _parse_native(
+            tmp_path / "new.json", "--dp", "2", "--ddp-comm-hook", "fp16_compress"
+        )
+    assert error.value.code == 2
+
+
+def test_benchmark_hook_registers_official_hook_with_explicit_group():
+    from torch.distributed.algorithms.ddp_comm_hooks.default_hooks import (
+        bf16_compress_hook,
+    )
+
+    from tests.benchmarks.scripts.benchmark_llama_parallel import (
+        register_benchmark_ddp_hook,
+    )
+
+    calls = []
+    group = object()
+    model = SimpleNamespace(
+        process_group=group, register_comm_hook=lambda **kwargs: calls.append(kwargs)
+    )
+    register_benchmark_ddp_hook(None, "none")
+    register_benchmark_ddp_hook(model, "bf16_compress")
+    assert calls == [{"state": group, "hook": bf16_compress_hook}]
+    with pytest.raises(ValueError, match="unsupported"):
+        register_benchmark_ddp_hook(model, "fp16_compress")
+    model.process_group = None
+    with pytest.raises(ValueError, match="process group"):
+        register_benchmark_ddp_hook(model, "bf16_compress")
+    assert len(calls) == 1
+
+
+def test_benchmark_default_hook_setup_does_not_touch_cuda_or_collectives(monkeypatch):
+    from tests.benchmarks.scripts.benchmark_llama_parallel import (
+        _setup_benchmark_ddp_hook,
+    )
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("uncompressed setup must not check capability or communicate")
+
+    monkeypatch.setattr(torch.cuda, "is_bf16_supported", unexpected)
+    monkeypatch.setattr(torch.distributed, "all_gather_object", unexpected)
+    _setup_benchmark_ddp_hook(None, "none", torch.device("cpu"))
+
+
+@pytest.mark.parametrize(
+    "failure", ["wrapper", "device", "version", "registration", "peer"]
+)
+def test_benchmark_candidate_coordinates_setup_errors(monkeypatch, failure):
+    from tests.benchmarks.scripts import benchmark_llama_parallel as benchmark
+
+    ddp_type = type("DDP", (), {})
+    model = ddp_type() if failure != "wrapper" else object()
+    if isinstance(model, ddp_type):
+        model.process_group = object()
+    monkeypatch.setattr(torch.nn.parallel, "DistributedDataParallel", ddp_type)
+    monkeypatch.setattr(
+        torch.cuda, "is_bf16_supported", lambda **kwargs: failure != "device"
+    )
+    monkeypatch.setattr(
+        torch.cuda.nccl,
+        "version",
+        lambda: (2, 9, 6) if failure == "version" else (2, 10, 0),
+    )
+    monkeypatch.setattr(torch.distributed, "get_backend", lambda group: "nccl")
+    monkeypatch.setattr(torch.distributed, "get_world_size", lambda: 2)
+    registrations = []
+
+    def register(wrapper, name):
+        registrations.append((wrapper, name))
+        if failure == "registration":
+            raise RuntimeError("injected registration failure")
+
+    monkeypatch.setattr(
+        benchmark, "register_benchmark_ddp_hook", register, raising=False
+    )
+    gathered = []
+
+    def gather(errors, local_error):
+        gathered.append(local_error)
+        errors[:] = [
+            local_error,
+            "injected peer failure" if failure == "peer" else None,
+        ]
+
+    monkeypatch.setattr(torch.distributed, "all_gather_object", gather)
+    with pytest.raises(RuntimeError, match="rank 1" if failure == "peer" else "rank 0"):
+        benchmark._setup_benchmark_ddp_hook(
+            model, "bf16_compress", torch.device("cuda:0")
+        )
+    assert len(gathered) == 1
+    assert bool(gathered[0]) == (failure != "peer")
+    assert registrations == (
+        [(model, "bf16_compress")] if failure in {"registration", "peer"} else []
     )
 
 
@@ -135,6 +312,7 @@ def test_defaults_do_not_pin_machine_specific_devices_or_cpus():
     assert args.tp == 1
     assert args.dp == 1
     assert args.adam_implementation == "single"
+    assert args.ddp_comm_hook == "none"
     assert args.precision == "fp32"
 
 

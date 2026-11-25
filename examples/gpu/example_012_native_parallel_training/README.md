@@ -324,6 +324,21 @@ the first four updates in this command. Matching short-run NLL is not a long-run
 convergence guarantee, and a smaller model or lower precision is not a fair
 same-workload acceleration baseline.
 
+For an explicit communication experiment, keep an uncompressed ParaScale run
+(`--driver parascale --ddp-comm-hook none`) and repeat with
+`--driver parascale --ddp-comm-hook bf16_compress` and
+`--driver native --ddp-comm-hook bf16_compress`, using a fresh output path for
+each arm. This diagnostic option requires pure DP with at least two GPUs,
+native CUDA BF16 support and NCCL newer than 2.9.6. It uses PyTorch's official
+BF16 gradient hook on the wrapper's own process group; FP32 parameters and
+optimizer state are unchanged. It is not a `native_parallel` training-config
+option or an automatic recommendation. Define loss/NLL tolerances before testing:
+lossy gradient communication need not reproduce uncompressed updates exactly.
+Compare the two compressed implementations separately from compression versus
+no compression. Initial parameter fingerprints are recorded before the first
+forward, outside timing; matching source filenames alone is insufficient.
+This benchmark does not qualify checkpoint recovery with compression enabled.
+
 ## Measurement and Qualification
 
 FP32 masters, gradients, and AdamW state still consume substantial memory even
