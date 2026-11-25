@@ -60,3 +60,33 @@ Use at least three paired repeats with fixed prompts/seeds and no other GPU
 jobs. Reduced diffusion steps or a new scheduler are different algorithm/quality
 experiments, not pure execution speedups. Production acceptance additionally
 requires pinned pretrained weights and independent image-quality evaluation.
+
+### Four-Way Benchmark
+
+From a source checkout with the environment above, run isolated native Diffusers
+and ParaScale workers in both eager and compiled modes:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python tests/benchmarks/scripts/benchmark_diffusion_inference.py \
+  --model "$PARASCALE_MODEL" --prompts "$PARASCALE_PROMPTS" \
+  --output /data/runs/diffusion-comparison-01 \
+  --repeats 3 --requests 8 --height 512 --width 512 --steps 30 --batch-size 1
+```
+
+The output directory must not exist. Each repeat rotates execution order and
+records model/input hashes, seeds, settings, dependency versions, GPU model,
+compile-cache presence, timing and image manifests. Cache directories are
+separate per mode. Preserve the complete output outside the source checkout.
+
+Every four-mode repeat is checked before another repeat starts. Native/product
+eager images must be identical; compiled images must meet PSNR >= 35 dB and
+mean absolute error <= 1.5 in 8-bit pixel units, with unchanged safety flags.
+A fidelity failure stops further repeats and retains the evidence. These
+thresholds check execution fidelity, not semantic image quality.
+
+`comparison.json` reports paired median speed ratios, including the optimized
+native control. Initial performance gates require compiled/eager >= 1.10 and
+ParaScale/native >= 0.95 for each execution mode. Negative results remain in
+the report. Smaller budgets are labelled `smoke_only` and cannot establish a
+production speedup; image fidelity still must pass. Compilation warmup and
+subprocess wall time remain separate from steady prediction throughput.
