@@ -130,6 +130,55 @@ This bounded stage path does not enable activation checkpointing, FP16,
 quantization, four-bit optimizer state, ZeRO/FSDP/DeepSpeed, or multi-node runs.
 Do not copy unrelated backend knobs into these YAML files.
 
+## Matched Single-GPU and PP2 Comparison
+
+`matched_single.yaml` and `matched_pp2.yaml` provide a separate controlled pair:
+global batch 64, physical microbatch 4, accumulation 16, sequence length 256,
+BF16 compute with FP32 master parameters/AdamW state, and 16 updates. Only
+pipeline topology/schedule and output directories differ. Both use the same
+model and immutable token corpus paths described above. The original introductory
+configurations remain unchanged and have different global batches.
+
+Use a corpus with at least 262,144 prepared tokens (1,024 complete blocks), and
+fresh run/checkpoint directories. Shuffle and repetition are disabled to compare
+the same global input prefix; this is a measurement recipe, not a recommended
+long-run data-order policy. Keep the two jobs sequential on an otherwise idle
+node. If paths differ from your machine, edit both configurations consistently.
+
+```bash
+EXAMPLE=examples/gpu/example_012_native_parallel_training
+CUDA_VISIBLE_DEVICES=0 torchrun --nnodes=1 --nproc_per_node=1 \
+  --master_addr=127.0.0.1 --master_port=29500 \
+  -m parascale.cli train --config "$EXAMPLE/matched_single.yaml" \
+  --output /data/runs/matched-single-summary.json
+CUDA_VISIBLE_DEVICES=0,1 torchrun --nnodes=1 --nproc_per_node=2 \
+  --master_addr=127.0.0.1 --master_port=29500 \
+  -m parascale.cli train --config "$EXAMPLE/matched_pp2.yaml" \
+  --output /data/runs/matched-pp2-summary.json
+```
+
+The explicit loopback rendezvous avoids relying on container hostname resolution;
+it is for one node only. Ensure the port is unused. Provision persistent storage
+for real checkpoints, including retained snapshots when resuming. An ephemeral
+container memory filesystem is suitable only for disposable timing experiments,
+not a substitute for durable recovery.
+
+For steady training-span throughput, exclude the first four `metrics_history`
+entries and divide the remaining `scored_tokens` sum by the corresponding
+`training_seconds` sum: 195,840 scored tokens over 12 measured updates. This
+span includes gradient validation, coordination and the optimizer, not data
+transfer or checkpoint writes. Separately report `elapsed_seconds`,
+`checkpoint_seconds`, peak memory, and externally measured process wall time.
+Do not call this training-span number complete-job throughput. The final
+checkpoint is genuinely written and can dominate a short 16-update job.
+
+This recipe was exercised with pretrained TinyLlama on RTX A6000; results depend
+on hardware, interconnect and software versions. PP2 is a useful candidate, not
+a universal winner over DDP or mixed parallelism. Short training losses do not
+establish held-out quality, convergence equivalence, or LLaMA-7B qualification.
+For repeated measurements, use new output roots rather than resuming the previous
+weights. Compare only matching input/model hashes and timing scopes.
+
 ## Checkpoint and Resume
 
 Use the canonical `parascale.checkpoint_save_path`, `checkpoint_save_interval`,
@@ -147,7 +196,8 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node=4 \
   -m parascale.cli train --config "$EXAMPLE/dp2_pp2.yaml" --resume-step 20
 ```
 
-`training.max_steps: 20` means **20 additional updates per invocation**, including
+In the introductory configurations, `training.max_steps: 20` means
+**20 additional updates per invocation**, including
 resume: resuming step 20 finishes at step 40. It is not a target absolute step.
 Canonical checkpoint directories are `step-00000010`, `step-00000020`, etc.
 Latest discovery checks complete checkpoints and reports skipped invalid
@@ -174,8 +224,9 @@ full-run horizon stable across resumed invocations.
 FP32 masters, gradients, and AdamW state still consume substantial memory even
 with BF16 computation; PP partitions layers but DP replicates their states.
 Reported valid prediction tokens use `batch * (sequence_length - 1)` per
-microbatch and count DP replicas, not duplicate TP/PP work. Global batch is
-`4 * 4 * DP`, not multiplied by TP or PP.
+microbatch and count DP replicas, not duplicate TP/PP work. The introductory
+configurations use global batch `4 * 4 * DP`; the matched pair uses `4 * 16 = 64`.
+Neither is multiplied by TP or PP.
 
 End-to-end update-loop timing includes data/transfer and checkpoint I/O; inspect
 the separate timing fields before comparing compute speed. Startup model loading

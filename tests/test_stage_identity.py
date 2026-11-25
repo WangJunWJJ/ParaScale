@@ -396,6 +396,62 @@ def test_native_parallel_example_configuration(filename, dp, pp):
     assert plan.workload.data_path == "/data/wikitext-tokens"
 
 
+def test_matched_parallel_examples_keep_the_same_training_budget():
+    from copy import deepcopy
+    from pathlib import Path
+
+    from parascale.commands.common import load_config_file
+    from parascale.runtime.stage_plan import build_stage_training_plan
+
+    root = Path(__file__).resolve().parents[1]
+    folder = root / "examples/gpu/example_012_native_parallel_training"
+    canonical = []
+    for name, pp, schedule in (
+        ("matched_single.yaml", 1, "gpipe"),
+        ("matched_pp2.yaml", 2, "1f1b"),
+    ):
+        settings = load_config_file(folder / name)
+        plan = build_stage_training_plan(settings)
+        assert (plan.topology.dp_size, plan.topology.tp_size, plan.topology.pp_size) == (
+            1,
+            1,
+            pp,
+        )
+        assert plan.topology.global_batch_size(plan.workload.batch_size) == 64
+        assert plan.topology.microbatches == 16
+        assert plan.topology.pipeline_schedule == schedule
+        assert plan.workload.batch_size == 4
+        assert plan.workload.sequence_length == 256
+        assert plan.config.precision == "bf16"
+        assert plan.max_steps == plan.checkpoint_interval == 16
+        assert plan.metrics_history_limit == 16
+        assert settings["data"]["shuffle"] is False
+        assert settings["data"]["repeat"] is False
+        assert settings["training"]["seed"] == settings["data"]["seed"] == 42
+        assert settings["optimizer"] == {
+            "type": "adamw",
+            "lr": 0.00001,
+            "betas": [0.9, 0.999],
+            "eps": 0.00000001,
+            "weight_decay": 0.01,
+        }
+        assert settings["model"] == {
+            "pretrained_model_name_or_path": "/models/tinyllama",
+            "attention_backend": "sdpa",
+        }
+        assert settings["data"]["path"] == "/data/wikitext-tokens"
+        shared = deepcopy(settings)
+        for key in (
+            "pipeline_parallel_size",
+            "pipeline_schedule",
+            "checkpoint_save_path",
+        ):
+            del shared["parascale"][key]
+        del shared["runtime"]["run_dir"]
+        canonical.append(shared)
+    assert canonical[0] == canonical[1]
+
+
 def test_shared_assets_config_only_needs_no_float_weights(tmp_path):
     import hashlib
 
