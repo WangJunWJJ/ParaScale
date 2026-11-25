@@ -412,7 +412,11 @@ def test_matched_parallel_examples_keep_the_same_training_budget():
     ):
         settings = load_config_file(folder / name)
         plan = build_stage_training_plan(settings)
-        assert (plan.topology.dp_size, plan.topology.tp_size, plan.topology.pp_size) == (
+        assert (
+            plan.topology.dp_size,
+            plan.topology.tp_size,
+            plan.topology.pp_size,
+        ) == (
             1,
             1,
             pp,
@@ -450,6 +454,32 @@ def test_matched_parallel_examples_keep_the_same_training_budget():
         del shared["runtime"]["run_dir"]
         canonical.append(shared)
     assert canonical[0] == canonical[1]
+
+
+def test_dcp_example_preserves_the_matched_global_budget():
+    from pathlib import Path
+
+    from parascale.commands.common import load_config_file
+    from parascale.runtime.stage_plan import build_stage_training_plan
+
+    folder = (
+        Path(__file__).resolve().parents[1]
+        / "examples/gpu/example_012_native_parallel_training"
+    )
+    settings = load_config_file(folder / "matched_dp2_dcp.yaml")
+    expected = load_config_file(folder / "matched_single.yaml")
+    expected["parascale"].update(
+        data_parallel_size=2,
+        checkpoint_format="dcp",
+        checkpoint_save_path="/data/checkpoints/tinyllama-matched-dp2-dcp",
+    )
+    expected["training"]["gradient_accumulation_steps"] = 8
+    expected["runtime"]["run_dir"] = "/data/runs/tinyllama-matched-dp2-dcp"
+    assert settings == expected
+    plan = build_stage_training_plan(settings)
+    assert plan.config.checkpoint_format == plan.to_dict()["checkpoint_format"] == "dcp"
+    assert plan.topology.world_size == 2
+    assert plan.topology.global_batch_size(plan.workload.batch_size) == 64
 
 
 def test_shared_assets_config_only_needs_no_float_weights(tmp_path):

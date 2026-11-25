@@ -179,6 +179,54 @@ establish held-out quality, convergence equivalence, or LLaMA-7B qualification.
 For repeated measurements, use new output roots rather than resuming the previous
 weights. Compare only matching input/model hashes and timing scopes.
 
+## Deduplicated DP Checkpoints
+
+`matched_dp2_dcp.yaml` uses two DP replicas, microbatch 4 and accumulation 8,
+keeping global batch 64, sequence length 256 and 16 updates from the matched
+recipes above. It opts into `parascale.checkpoint_format: dcp`; the default
+`rank` format and the existing examples remain unchanged.
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1 torchrun --nnodes=1 --nproc_per_node=2 \
+  --master_addr=127.0.0.1 --master_port=29500 \
+  -m parascale.cli train --config "$EXAMPLE/matched_dp2_dcp.yaml" \
+  --output /data/runs/matched-dp2-dcp-summary.json
+```
+
+Edit asset/output paths as above before running. For a matched storage baseline,
+copy this configuration, set `checkpoint_format: rank`, and use separate fresh
+checkpoint/run/output paths. Do not compare against a different GPU count or
+change the training budget. Compare `checkpoint_seconds` and complete invocation
+time separately from training-span throughput; this option optimizes checkpoint
+I/O, not the model's forward/backward computation. Repeat sequentially with
+alternating order on an otherwise idle node. Keep real checkpoint writes and
+their independent integrity verification in both measurements.
+
+DCP stores one copy of shared model/AdamW state across DP replicas while retaining
+each rank's RNG, optimizer binding and training progress. It checks replica bytes
+before deduplication. This is lossless storage deduplication, not model quantization
+or optimizer-state sharding. It currently requires `native_parallel`, DP >= 2,
+TP = 1 and a supported topology; single-GPU/TP paths use `rank`. Plain CPU/CUDA
+tensors and standard containers are supported; custom tensor subclasses and
+tensor-valued module metadata are rejected rather than silently discarded.
+
+Use trusted checkpoints in a dedicated, shared filesystem without links or
+concurrent mutations. Schema6 checks sizes and SHA256 hashes before loading into
+temporary CPU targets, and requires the exact saved Torch version and topology.
+Allow host memory for these targets and storage for retained and pending snapshots.
+Loading dispatches by the manifest; `checkpoint_format` controls subsequent saves.
+Retention never deletes snapshots from a different format/version family, so a
+format switch can retain more snapshots than `checkpoint_keep_last` alone suggests.
+
+Storage restoration and subsequent execution determinism are different contracts.
+Loaded state must match exactly. With four DP ranks, fresh DDP and warmed DDP can
+use different gradient buckets: tests reproduced post-update bit differences with
+both `rank` and `dcp`, while cross-format restored executions matched. Do not claim
+universal bitwise continuation or infer quality equivalence from matching loss.
+This example does not change DDP settings to hide that boundary. Two-rank exact
+recovery and four-rank cross-format equivalence do not replace held-out quality
+or long-run production qualification.
+
 ## Checkpoint and Resume
 
 Use the canonical `parascale.checkpoint_save_path`, `checkpoint_save_interval`,
