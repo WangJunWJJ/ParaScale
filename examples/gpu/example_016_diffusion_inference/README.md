@@ -43,6 +43,34 @@ or advancing their seeds. Grouping can still change floating-point numerics.
 
 ## Matched Optimization Comparison
 
+### Batched Offline Generation
+
+`batched.json` changes only `batch_size` from 1 to 8 and keeps eager execution.
+Use a fresh output directory with the same model and prompts:
+
+```bash
+export PARASCALE_RUN_DIR=/data/runs/diffusion-batch8-01
+CUDA_VISIBLE_DEVICES=0 python -m parascale.cli infer \
+  --config examples/gpu/example_016_diffusion_inference/batched.json \
+  --output "$PARASCALE_RUN_DIR/summary.json"
+```
+
+This is an offline throughput configuration, not a lower per-request latency
+guarantee. Tune batch size against available VRAM and your model/resolution;
+the runtime does not silently retry an OOM with a different batch budget.
+Compare against direct Diffusers using the same batch size, precision and
+sampling settings. Batching gains are also available to the native framework.
+Do not expect bitwise-identical images across different batch sizes, even with
+the same request seeds. Use within-batch native parity and separate quality
+evaluation instead of interpreting cross-batch pixel changes as framework bugs.
+
+### UNet Compilation
+
+Compilation is an experimental, opt-in candidate. Passing small-component tests
+does not establish pretrained-model fidelity. Floating-point changes can grow
+over denoising steps; qualify images and safety decisions on your workload
+before enabling it in production. Keep eager execution for strict reproduction.
+
 Run `compiled.json` with a different `PARASCALE_RUN_DIR`, leaving all other
 inputs unchanged. Only the UNet is compiled with `fullgraph=True`; failures
 propagate instead of silently falling back. Scheduler, resolution, guidance,

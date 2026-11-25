@@ -118,3 +118,21 @@ def test_cpu_only_allows_eager_fp32(tmp_path, precision, compile_mode):
     data["runtime"]["device"] = "cpu"
     with pytest.raises(ValueError, match="CPU"):
         DiffusionInferenceSpec.from_config(data)
+
+
+# Batched execution must preserve the same model and sampling budget.
+def test_batched_example_changes_only_batch_size():
+    import json
+    from pathlib import Path
+
+    from parascale.workloads.specs.diffusion import DiffusionInferenceSpec
+
+    root = (
+        Path(__file__).resolve().parents[1]
+        / "examples/gpu/example_016_diffusion_inference"
+    )
+    eager = json.loads((root / "eager.json").read_text(encoding="utf-8"))
+    batched = json.loads((root / "batched.json").read_text(encoding="utf-8"))
+    assert DiffusionInferenceSpec.from_config(batched).batch_size == 8
+    batched["inference"]["batch_size"] = eager["inference"]["batch_size"]
+    assert batched == eager
