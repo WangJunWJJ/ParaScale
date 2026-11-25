@@ -307,6 +307,8 @@ def test_export_rejects_model_not_supported_by_product_inference(
 
 
 def _ddp_export_worker(rank, root, model_path, corpus):
+    from parascale.runtime.training import TrainEngine
+
     torch.set_num_threads(1)
     torch.cuda.set_device(rank)
     os.environ.update(RANK=str(rank), WORLD_SIZE="2", LOCAL_RANK=str(rank))
@@ -318,14 +320,37 @@ def _ddp_export_worker(rank, root, model_path, corpus):
         world_size=2,
         timeout=timedelta(seconds=60),
     )
+    original_save = TrainEngine.save_checkpoint
+    saved_steps = []
+
+    def observe(engine, *args, **kwargs):
+        saved_steps.append(engine.state.global_step)
+        return original_save(engine, *args, **kwargs)
+
+    TrainEngine.save_checkpoint = observe
     try:
         config = configuration(model_path, corpus, root / "ddp-checkpoint")
+        config["training"]["checkpoint_interval"] = 1
         config["parascale"]["training_backend"] = "native_ddp"
         config["hardware_profile"] = {"world_size": 2, "gpus_per_node": 2}
         result = run_train_from_config(config)
         assert result["train_device"] == f"cuda:{rank}"
         assert result["strategy_plan"]["dp_size"] == 2
+        assert saved_steps == [1, 2]
+        saved_steps.clear()
+        resumed = run_train_from_config(config, resume_step=2)
+        assert resumed["global_step"] == 4
+        assert saved_steps == [3, 4]
+        saved_steps.clear()
+        config["training"].update(
+            max_steps=4, checkpoint_dir=str(root / "ddp-continuous")
+        )
+        config["runtime"]["run_dir"] = str(root / "continuous-runtime")
+        continuous = run_train_from_config(config)
+        assert continuous["global_step"] == 4
+        assert saved_steps == [1, 2, 3, 4]
     finally:
+        TrainEngine.save_checkpoint = original_save
         torch.distributed.destroy_process_group()
 
 
@@ -340,7 +365,7 @@ def test_two_gpu_ddp_checkpoint_exports_exact_student(tmp_path, model_path, caps
         )
         for rank in range(2)
     ]
-    deadline = time.monotonic() + 120
+    deadline = time.monotonic() + 180
     try:
         for process in processes:
             process.start()
@@ -355,11 +380,16 @@ def test_two_gpu_ddp_checkpoint_exports_exact_student(tmp_path, model_path, caps
     root = tmp_path / "ddp-checkpoint"
     report = export(root, model_path, tmp_path / "release")
     state = torch.load(
-        root / "step-00000002" / "backend_state.pt",
+        root / "step-00000004" / "backend_state.pt",
         map_location="cpu",
         weights_only=True,
     )
     model = transformers.AutoModelForCausalLM.from_pretrained(tmp_path / "release")
+    continuous = torch.load(
+        tmp_path / "ddp-continuous" / "step-00000004" / "backend_state.pt",
+        map_location="cpu",
+        weights_only=True,
+    )
     for key, value in model.state_dict().items():
         torch.testing.assert_close(
             value,
@@ -367,4 +397,10 @@ def test_two_gpu_ddp_checkpoint_exports_exact_student(tmp_path, model_path, caps
             rtol=0,
             atol=0,
         )
-    assert report["step"] == 2
+        torch.testing.assert_close(
+            value,
+            continuous["backend_state"]["model_state_dict"][f"module.model.{key}"],
+            rtol=0,
+            atol=0,
+        )
+    assert report["step"] == 4
