@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, Iterable, List, Tuple
 
 from parascale.runtime.inference.postprocess import (
     DetectionPostprocessConfig,
@@ -20,9 +20,13 @@ from parascale.runtime.inference.postprocess import (
 
 def build_inference_components(
     config_data: Dict[str, Any],
-) -> Tuple[Any, List[Any], str]:
+) -> Tuple[Any, Iterable[Any], str]:
     inference = _section(config_data, "inference")
     workload = str(inference.get("workload", "clip_synthetic"))
+    if workload == "causal_lm":
+        from .causal_lm_inference import build_causal_lm_inference_components
+
+        return build_causal_lm_inference_components(config_data)
     batch_size = int(inference.get("batch_size", 2) or 2)
     num_batches = int(inference.get("num_batches", 1) or 1)
     if workload in {"clip_synthetic", "clip", "clip_embedding"}:
@@ -165,12 +169,16 @@ class HFClipInferenceModel:
             images=batch.get("images", []),
             return_tensors="pt",
             padding=True,
+            truncation=True,
+            max_length=self._model.config.text_config.max_position_embeddings,
         )
         inputs = {key: value.to(self.device) for key, value in inputs.items()}
         with torch.no_grad():
             outputs = self._model(**inputs)
         logits = outputs.logits_per_image
         return {
+            "image_embeddings": outputs.image_embeds.detach().float().cpu().tolist(),
+            "text_embeddings": outputs.text_embeds.detach().float().cpu().tolist(),
             "image_embeddings_shape": list(outputs.image_embeds.shape),
             "text_embeddings_shape": list(outputs.text_embeds.shape),
             "logits_per_image_shape": list(logits.shape),

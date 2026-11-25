@@ -29,6 +29,8 @@ class RuntimeMetrics:
             if images is None and hasattr(batch.get("pixel_values"), "shape"):
                 images = int(batch["pixel_values"].shape[0])
             batch_size = pairs if pairs is not None else images
+            if batch_size is None:
+                batch_size = batch.get("batch_size")
             scale = max(1, int(self.world_size))
             if batch_size is not None:
                 metrics["batch_size"] = int(batch_size) * scale
@@ -149,6 +151,7 @@ def merge_accumulated_batches(batches: list[Any]) -> Any:
         return batches[0]
     merged: Dict[str, Any] = dict(batches[0])
     for key in [
+        "batch_size",
         "num_images",
         "num_pairs",
         "patch_tokens",

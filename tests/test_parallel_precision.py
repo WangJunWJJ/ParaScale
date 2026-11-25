@@ -6,6 +6,7 @@
 """Explicit autocast scope and FP32 optimizer-state contracts for stage training."""
 
 import copy
+import weakref
 from contextlib import nullcontext
 from types import SimpleNamespace
 
@@ -31,6 +32,53 @@ def trainer_fixture(precision):
     trainer._normalization_count = None
     trainer._prepare_step = lambda inputs, targets: None
     return trainer
+
+
+@pytest.mark.parametrize("precision", ["fp32", "bf16"])
+@pytest.mark.parametrize("return_outputs", [False, True])
+def test_unused_stage_outputs_are_released_before_backward(
+    monkeypatch, precision, return_outputs
+):
+    trainer = trainer_fixture(precision)
+    reference = copy.deepcopy(trainer.module)
+    inputs, targets = torch.randn(4, 4), torch.randn(4, 4)
+
+    def loss(output, target):
+        return (output.double() - target.double()).square().mean()
+
+    trainer.loss_fn = loss
+    with torch.autocast("cpu", dtype=torch.bfloat16, enabled=precision == "bf16"):
+        expected_outputs = [reference(batch) for batch in inputs.chunk(2)]
+        expected_losses = [
+            loss(output, target) / 2
+            for output, target in zip(expected_outputs, targets.chunk(2))
+        ]
+    for value in expected_losses:
+        value.backward()
+    references = []
+    trainer.module.register_forward_hook(
+        lambda module, args, output: references.append(weakref.ref(output))
+    )
+    backward = torch.Tensor.backward
+    calls = []
+
+    def checked_backward(value, *args, **kwargs):
+        if not return_outputs:
+            assert all(reference() is None for reference in references)
+        calls.append(True)
+        return backward(value, *args, **kwargs)
+
+    monkeypatch.setattr(torch.Tensor, "backward", checked_backward)
+    result = trainer.forward_backward(inputs, targets, return_outputs=return_outputs)
+    assert len(calls) == 2
+    assert (result.output is not None) == return_outputs
+    if return_outputs:
+        torch.testing.assert_close(
+            result.output, torch.cat(expected_outputs), rtol=0, atol=0
+        )
+        assert not result.output.requires_grad
+    for parameter, expected in zip(trainer.parameters(), reference.parameters()):
+        torch.testing.assert_close(parameter.grad, expected.grad, rtol=0, atol=0)
 
 
 @pytest.mark.parametrize("precision", ["fp32", "bf16"])
@@ -242,6 +290,45 @@ def test_precision_agreement_precedes_mesh_creation(monkeypatch, mismatch):
             torch.nn.MSELoss(),
             checkpoint_context=context,
         )
+    mesh.assert_not_called()
+
+
+@pytest.mark.parametrize("rank", [0, 1])
+def test_stage_example_validation_is_coordinated_before_mesh(monkeypatch, rank):
+    from unittest.mock import Mock
+
+    from parascale.parallel import DistributedParallelConfig, execution
+
+    monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+    monkeypatch.setattr(torch.distributed, "get_world_size", lambda: 2)
+    monkeypatch.setattr(torch.distributed, "get_rank", lambda: rank)
+    monkeypatch.setattr(execution, "_validate_constructor", lambda *args: None)
+    mesh = Mock(side_effect=AssertionError("mesh created before input validation"))
+    monkeypatch.setattr(torch.distributed.device_mesh, "init_device_mesh", mesh)
+    module = torch.nn.Linear(2, 2)
+    example = torch.zeros(1, 2)
+    validator = Mock(side_effect=ValueError("invalid stage example") if rank else None)
+    module.validate_example_inputs = validator
+    module.forward = Mock(side_effect=AssertionError("forward during preflight"))
+
+    def gather(records, record):
+        if rank:
+            assert record[0] == "invalid stage example"
+            records[:] = [(None, None), record]
+        else:
+            assert record[0] is None
+            records[:] = [record, ("invalid stage example", None)]
+
+    monkeypatch.setattr(torch.distributed, "all_gather_object", gather)
+    with pytest.raises(ValueError, match="rank 1: invalid stage example"):
+        execution.DistributedTrainer(
+            module,
+            DistributedParallelConfig(pp_size=2),
+            example,
+            torch.nn.MSELoss(),
+        )
+    validator.assert_called_once_with(example)
+    module.forward.assert_not_called()
     mesh.assert_not_called()
 
 

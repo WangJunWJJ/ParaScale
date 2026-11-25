@@ -22,6 +22,34 @@ from .devices import (
 class NativeTrainingBackend(TrainingBackend):
     name = "native"
 
+    def setup(self) -> tuple[Any, Any]:
+        policy = self.checkpoint_policy()
+        result = super().setup()
+        if self._configured_checkpoint_policy() != policy:
+            raise ValueError("native training policy changed during backend setup")
+        self._active_checkpoint_policy = deepcopy(policy)
+        return result
+
+    def checkpoint_policy(self) -> dict[str, Any]:
+        """Describe numerical training settings required by strict resume."""
+        requested = self._configured_checkpoint_policy()
+        active = getattr(self, "_active_checkpoint_policy", requested)
+        if requested != active:
+            raise ValueError("native training policy changed after backend setup")
+        return deepcopy(active)
+
+    def _configured_checkpoint_policy(self) -> dict[str, Any]:
+        return {
+            "version": 1,
+            "backend": self.name,
+            "precision": str(getattr(self.config, "precision", "fp32")),
+            "gradient_accumulation_steps": max(
+                1, int(getattr(self.config, "gradient_accumulation_steps", 1) or 1)
+            ),
+            "grad_clip_norm": getattr(self.config, "grad_clip_norm", None),
+            "zero_stage": int(getattr(self.config, "zero_stage", 0) or 0),
+        }
+
     def prepare_checkpoint(self) -> None:
         consolidate = getattr(self.optimizer, "consolidate_state_dict", None)
         if callable(consolidate):
@@ -94,6 +122,15 @@ class NativeTrainingBackend(TrainingBackend):
 
 class NativeDdpTrainingBackend(NativeTrainingBackend):
     name = "native_ddp"
+
+    def _configured_checkpoint_policy(self) -> dict[str, Any]:
+        return {
+            **super()._configured_checkpoint_policy(),
+            "ddp": {
+                **self._ddp_common_kwargs(),
+                "comm_hook": self._resolved_comm_hook_name(),
+            },
+        }
 
     def setup_model(self, model: Any) -> Any:
         if model is None:
@@ -168,7 +205,7 @@ class NativeDdpTrainingBackend(NativeTrainingBackend):
             and int(getattr(self.config, "gradient_accumulation_steps", 1) or 1) <= 1
         )
 
-    def _register_comm_hook(self, model: Any) -> None:
+    def _resolved_comm_hook_name(self) -> str:
         hook_name = str(getattr(self.config, "ddp_comm_hook", "none") or "none")
         if hook_name == "auto":
             from parascale.communication import recommend_ddp_hook
@@ -178,6 +215,14 @@ class NativeDdpTrainingBackend(NativeTrainingBackend):
                 task_type=str(getattr(self.config, "task_type", "")),
                 model_family=str(getattr(self.config, "model_family", "")),
             ).hook
+        return hook_name
+
+    def _register_comm_hook(self, model: Any) -> None:
+        hook_name = self._resolved_comm_hook_name()
+        self._active_checkpoint_policy = deepcopy(
+            self._configured_checkpoint_policy()
+        )
+        self._active_checkpoint_policy["ddp"]["comm_hook"] = hook_name
         if hook_name == "none":
             return
         try:

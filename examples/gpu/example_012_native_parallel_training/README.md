@@ -1,0 +1,185 @@
+# Native Parallel TinyLlama Training
+
+Run genuine pretrained TinyLlama 1.1B on WikiText training text through the unified
+`causal_lm` CLI with `training_backend: native_parallel`. This example is not a
+synthetic model, a benchmark training loop, or an acceleration claim. It targets
+one Linux CUDA/NCCL node with 1, 2, or 4 GPUs, one torchrun process per GPU.
+
+## Environment and Local Assets
+
+From the repository root, install the existing parallel extra and the separately
+pinned stage-model dependency in a dedicated environment:
+
+```bash
+python -m pip install -e '.[parallel]' 'transformers==4.51.3' sentencepiece
+python -c 'import torch, transformers; print(torch.__version__, transformers.__version__); assert torch.__version__.split("+")[0] == "2.9.1"; assert transformers.__version__ == "4.51.3"'
+```
+
+The `parallel` extra pins Torch 2.9.1 and torchvision 0.24.1; it does not pin
+Transformers, hence the explicit 4.51.3 requirement above. Use a CUDA-enabled
+Torch build compatible with the host driver. BF16 requires hardware support.
+CPU planning does not qualify CUDA execution or establish available GPU memory.
+
+Provide these assets before training; ParaScale does not download them:
+
+- `/models/tinyllama`: a complete local copy of the genuine pretrained
+  `TinyLlama/TinyLlama-1.1B-intermediate-step-1431k-3T` checkpoint, including
+  `config.json`, matching tokenizer assets, and all original safetensors or
+  PyTorch `.bin` weights. If sharded, include the weight index and every named
+  shard. Do not substitute a random tiny fixture or adapter-only checkpoint.
+- `/data/wikitext/train.txt`: actual WikiText training-split text exported as
+  UTF-8, one document per line. For example use the `wikitext-2-raw-v1` training
+  split, retaining each nonempty text record as a line. Do not use validation or
+  test data as training input; do not feed dataset JSON, CSV, or parquet directly
+  to `prepare-text`. Obtain assets separately under their applicable licenses.
+- Writable `/data/checkpoints` and `/data/runs`, outside the source tree.
+
+Both YAML files use portable example paths, not environment-variable expansion.
+Edit the model, corpus, checkpoint, and run paths to match your machine. Keep the
+same model/tokenizer and immutable prepared corpus accessible to every rank.
+Trusted model-file symlinks, including HF cache blob links, are allowed; targets
+must not change while loading or hashing. Each rank initially loads the full
+model on CPU before keeping its stage, so budget host RAM as well as GPU RAM.
+
+## Prepare the Token Corpus
+
+```bash
+python -m parascale.cli prepare-text \
+  --input /data/wikitext/train.txt \
+  --tokenizer /models/tinyllama \
+  --output /data/wikitext-tokens
+```
+
+The output directory must not already exist. The tokenizer must be loadable
+locally with `use_fast=True`, `trust_remote_code=False`, and a valid EOS token.
+Use the exact tokenizer shipped with the model. The preparation command strips
+each line, skips empty lines, tokenizes without automatic special tokens, and
+appends one EOS per document. It rejects lines over 1 MiB by default; the actual
+parser provides `--max-line-bytes` to change that bound explicitly.
+
+Preparation writes an immutable token payload and manifest with tokenizer,
+source, payload, and packing identity. Training validates the tokenizer identity
+and vocabulary range. This packing differs from tokenizing an entire file as one
+string. Comparisons must reuse the same token corpus and prediction-token count.
+Do not edit the manifest or tokens in place; prepare a fresh directory for changed
+data or tokenizers. Use enough tokens for complete fixed-size DP microbatches.
+Reads are memory-mapped with no DataLoader workers. Shuffle is window-bounded,
+not a full-corpus permutation; incomplete global batches are dropped equally.
+
+## Plan, Dry Run, and Train
+
+The two supplied configurations use BF16 computation with FP32 master parameters,
+AdamW, SDPA attention, microbatch size 4, sequence length 256, and accumulation 4.
+They perform 20 optimizer updates and checkpoint every 10 updates. These are
+conservative starting settings, not a memory guarantee or measured optimum.
+Reduce batch size or sequence length in a fresh configuration if necessary.
+
+```bash
+EXAMPLE=examples/gpu/example_012_native_parallel_training
+python -m parascale.cli plan --config "$EXAMPLE/single_gpu.yaml" --json
+python -m parascale.cli train --config "$EXAMPLE/single_gpu.yaml" --dry-run
+python -m parascale.cli plan --config "$EXAMPLE/dp2_pp2.yaml" --json
+python -m parascale.cli train --config "$EXAMPLE/dp2_pp2.yaml" --dry-run
+
+# One GPU: DP1 TP1 PP1, 16 distinct sequences per optimizer update.
+CUDA_VISIBLE_DEVICES=0 torchrun --standalone --nproc_per_node=1 \
+  -m parascale.cli train --config "$EXAMPLE/single_gpu.yaml"
+
+# Four GPUs: DP2 TP1 PP2, 32 distinct sequences per optimizer update.
+CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node=4 \
+  -m parascale.cli train --config "$EXAMPLE/dp2_pp2.yaml"
+```
+
+Planning and dry-run validate configuration, not asset availability, checkpoint
+compatibility, GPU memory, or throughput. Even the one-GPU native_parallel run
+must use torchrun. World size must equal DP * TP * PP. Do not use `native_ddp`
+launch wrappers for this backend.
+
+For a two-GPU run, copy `single_gpu.yaml` to a new file and edit these fields:
+
+```yaml
+# Fields to change in the copied file; this fragment is not a complete config.
+parascale:
+  data_parallel_size: 2
+  tensor_parallel_size: 1
+  pipeline_parallel_size: 1
+  checkpoint_save_path: /data/checkpoints/tinyllama-dp2-tp1-pp1
+runtime:
+  run_dir: /data/runs/tinyllama-dp2-tp1-pp1
+```
+
+```bash
+cp "$EXAMPLE/single_gpu.yaml" /data/tinyllama-dp2.yaml
+# Edit /data/tinyllama-dp2.yaml with the changes above before these commands.
+python -m parascale.cli plan --config /data/tinyllama-dp2.yaml --json
+python -m parascale.cli train --config /data/tinyllama-dp2.yaml --dry-run
+CUDA_VISIBLE_DEVICES=0,1 torchrun --standalone --nproc_per_node=2 \
+  -m parascale.cli train --config /data/tinyllama-dp2.yaml
+```
+
+Topology changes are file edits, not unsupported `--dp`, `--tp`, or `--pp` CLI
+overrides. Accepted (DP, TP, PP) layouts are `(1,1,1)`, `(2,1,1)`, `(4,1,1)`,
+`(1,2,1)`, `(1,1,2)`, `(2,2,1)`, `(2,1,2)`, and `(1,2,2)`. The product is at
+most four ranks. **DP2 TP2 PP2 is eight ranks and is not supported.** Use a new
+checkpoint and run directory for each topology. The single-GPU configuration
+uses GPipe; the four-GPU DP2/PP2 configuration selects `1f1b`. That schedule
+requires PP > 1 and at least as many accumulated microbatches as pipeline stages;
+the supplied accumulation of 4 satisfies PP2.
+
+This bounded stage path does not enable activation checkpointing, FP16,
+quantization, four-bit optimizer state, ZeRO/FSDP/DeepSpeed, or multi-node runs.
+Do not copy unrelated backend knobs into these YAML files.
+
+## Checkpoint and Resume
+
+Use the canonical `parascale.checkpoint_save_path`, `checkpoint_save_interval`,
+and `checkpoint_keep_last` fields. Retention is 2 (minimum 2); metric history is
+bounded to 20 entries. Do not replace the checkpoint path with the ordinary
+backend's `training.checkpoint_dir` alias. New training requires a fresh checkpoint
+root; resuming requires the same topology and compatible training identity.
+
+```bash
+CUDA_VISIBLE_DEVICES=0 torchrun --standalone --nproc_per_node=1 \
+  -m parascale.cli train --config "$EXAMPLE/single_gpu.yaml" --resume-latest
+
+# Alternative: select a retained complete step explicitly, not together with latest.
+CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node=4 \
+  -m parascale.cli train --config "$EXAMPLE/dp2_pp2.yaml" --resume-step 20
+```
+
+`training.max_steps: 20` means **20 additional updates per invocation**, including
+resume: resuming step 20 finishes at step 40. It is not a target absolute step.
+Canonical checkpoint directories are `step-00000010`, `step-00000020`, etc.
+Latest discovery checks complete checkpoints and reports skipped invalid
+candidates, but fallback selection is not automatic recovery. If newer snapshot
+directories remain above the selected checkpoint, CLI preflight rejects the run
+before training to avoid immutable checkpoint-name collisions and a stale
+retention anchor. Invalid snapshots are preserved, not overwritten or removed
+automatically. Explicitly relocate the conflicting snapshot directories outside
+the checkpoint root, preserving their contents for inspection, before retrying;
+alternatively start a new run with a fresh checkpoint root. Do not rename step
+numbers or edit checkpoint payloads. Retention preserves recovery candidates;
+keep independent backups for long-term archival.
+
+Resume identity covers effective model configuration and selected local weight
+hashes, tokenizer/corpus, precision, causal loss, requested optimizer settings,
+and execution versions/source hashes. Changing LR/betas/eps is rejected rather
+than silently ignored when saved optimizer hyperparameters are restored. Keep
+data seed, batching, accumulation, topology, and implementation unchanged for
+same-run recovery. No scheduler is configured here; when adding one, keep its
+full-run horizon stable across resumed invocations.
+
+## Measurement and Qualification
+
+FP32 masters, gradients, and AdamW state still consume substantial memory even
+with BF16 computation; PP partitions layers but DP replicates their states.
+Reported valid prediction tokens use `batch * (sequence_length - 1)` per
+microbatch and count DP replicas, not duplicate TP/PP work. Global batch is
+`4 * 4 * DP`, not multiplied by TP or PP.
+
+End-to-end update-loop timing includes data/transfer and checkpoint I/O; inspect
+the separate timing fields before comparing compute speed. Startup model loading
+and identity hashing are outside that update-loop measurement. No acceleration,
+quality, memory-fit, or GPU qualification claim follows from planning or these
+configurations. Real model training, resume parity, and the pinned real-stage
+identity integration test require separate verification on the target environment.

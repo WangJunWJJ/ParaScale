@@ -12,6 +12,7 @@ import math
 import os
 import statistics
 import time
+from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
 
@@ -44,6 +45,43 @@ def summed_loss(prediction, labels):
         labels[:, 1:].reshape(-1),
         reduction="sum",
     )
+
+
+def native_forward_backward(
+    forward: Callable[[torch.Tensor], torch.Tensor],
+    batch: torch.Tensor,
+    *,
+    microbatch_size: int,
+    precision: str,
+) -> torch.Tensor:
+    """Accumulate native gradients and return detached, globally normalized loss.
+
+    Args:
+        forward: Native model forward returning logits, without retaining outputs.
+        batch: Packed token IDs for one complete update, replicated across TP.
+        microbatch_size: Microbatch size validated by the benchmark argument parser.
+        precision: Validated fp32 or bf16 compute policy; parameters remain FP32.
+
+    Returns:
+        Detached scalar tensor; the caller owns synchronization and optimizer step.
+    """
+    loss_sum = torch.zeros((), device=batch.device)
+    for microbatch in batch.split(microbatch_size):
+        with torch.autocast(
+            batch.device.type,
+            dtype=torch.bfloat16,
+            enabled=precision == "bf16",
+            cache_enabled=False,
+        ):
+            prediction = forward(microbatch)
+            loss = summed_loss(prediction, microbatch) * (
+                1 / (batch.shape[0] * (batch.shape[1] - 1))
+            )
+        del prediction
+        loss.backward()
+        loss_sum += loss.detach()
+        del loss
+    return loss_sum
 
 
 def native_tensor_plan(layers, *, shared=True):
@@ -271,22 +309,12 @@ def main():
             if trainer is not None:
                 loss_value = trainer.forward_backward(batch, batch).loss
             else:
-                loss_sum = torch.zeros((), device=device)
-                for microbatch in batch.split(args.microbatch):
-                    with torch.autocast(
-                        "cuda",
-                        dtype=torch.bfloat16,
-                        enabled=args.precision == "bf16",
-                        cache_enabled=False,
-                    ):
-                        prediction = forward(microbatch)
-                        loss = summed_loss(prediction, microbatch) * (
-                            1 / (args.global_batch * (args.sequence_length - 1))
-                        )
-                    loss.backward()
-                    loss_sum += loss.detach()
-                    del prediction, loss
-                loss_value = loss_sum.item()
+                loss_value = native_forward_backward(
+                    forward,
+                    batch,
+                    microbatch_size=args.microbatch,
+                    precision=args.precision,
+                ).item()
             optimizer.step()
             torch.cuda.synchronize()
             duration = torch.tensor(time.perf_counter() - start, device=device)

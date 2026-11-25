@@ -14,6 +14,13 @@ from parascale.runtime.backends.devices import move_batch_to_device
 
 
 class CudaStreamPrefetchIterator:
+    """Deliver batches on the caller's current stream with allocator protection.
+
+    CUDA inputs must be ready on their device's current stream when yielded.
+    Consumers using another stream after next() must arrange their own handoff.
+    Storage protection does not permit concurrent in-place mutation by the source.
+    """
+
     def __init__(self, torch: Any, source: Iterator[Any], device: Any) -> None:
         self.torch = torch
         self.source = source
@@ -31,9 +38,12 @@ class CudaStreamPrefetchIterator:
         if not self.next_ready:
             raise StopIteration
         wait_start = time.perf_counter()
-        self.torch.cuda.current_stream(self.device).wait_stream(self.stream)
+        consumer = self.torch.cuda.current_stream(self.device)
+        consumer.wait_stream(self.stream)
         wait_ms = (time.perf_counter() - wait_start) * 1000.0
         batch = self.next_batch
+        for tensor in self._cuda_tensors(batch):
+            tensor.record_stream(consumer)
         h2d_ms = self.next_h2d_ms
         self._record_prefetch_profile(batch, h2d_ms=h2d_ms, wait_ms=wait_ms)
         self._preload()
@@ -48,6 +58,14 @@ class CudaStreamPrefetchIterator:
             self.next_h2d_ms = 0.0
             return
         start = time.perf_counter()
+        devices = set()
+        for tensor in self._cuda_tensors(batch):
+            device = str(tensor.device)
+            if device not in devices:
+                self.stream.wait_stream(self.torch.cuda.current_stream(tensor.device))
+                devices.add(device)
+            # Keep source storage live through asynchronous copies, including errors.
+            tensor.record_stream(self.stream)
         with self.torch.cuda.stream(self.stream):
             self.next_batch = self._move_to_device(batch)
         self.next_h2d_ms = (time.perf_counter() - start) * 1000.0
@@ -55,6 +73,23 @@ class CudaStreamPrefetchIterator:
 
     def _move_to_device(self, value: Any) -> Any:
         return move_batch_to_device(value, str(self.device))
+
+    @staticmethod
+    def _cuda_tensors(batch: Any) -> Iterator[Any]:
+        pending = [batch]
+        seen = set()
+        while pending:
+            value = pending.pop()
+            identity = id(value)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            if isinstance(value, dict):
+                pending.extend(value.values())
+            elif isinstance(value, (list, tuple)):
+                pending.extend(value)
+            elif getattr(value, "is_cuda", False):
+                yield value
 
     @staticmethod
     def _record_prefetch_profile(batch: Any, *, h2d_ms: float, wait_ms: float) -> None:

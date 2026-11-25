@@ -92,6 +92,8 @@ class AccumulationController:
                     if weight not in divisors:
                         divisors[weight] = denominator / (weight * replicas)
                     loss = loss_fn(output, batch) / divisors[weight]
+                    # Do not retain auxiliary outputs across backward/micro-batches.
+                    del output
                 # DeepSpeed divides backward losses by GAS itself.
                 backward_loss = loss / (1.0 / actual_steps) if managed else loss
                 self.engine.backward(backward_loss)

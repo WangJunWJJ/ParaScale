@@ -20,10 +20,12 @@ from parascale.core import (
 )
 from parascale.parallel.capabilities import validate_legacy_parallelism
 from parascale.runtime.backends import TrainingBackend, create_runtime_training_backend
+from parascale.runtime.lifecycle import execution_world_size
 from parascale.strategy import StrategyPlan, build_strategy_plan
 
 from .accumulation import AccumulationController
 from .checkpointing import CheckpointController
+from .coordination import coordinated_call
 from .data_state import DataResumeController
 from .fit_loop import FitLoopRunner
 from .memory import RuntimeMemoryTracker
@@ -70,6 +72,8 @@ class TrainEngine:
     fit_loop: Any = None
     data_resume: Any = None
     objective_metadata: Dict[str, Any] = field(default_factory=dict)
+    scheduler: Any = None
+    scheduler_metadata: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.precision is None:
@@ -83,14 +87,24 @@ class TrainEngine:
 
     def plan(self) -> StrategyPlan:
         validate_legacy_parallelism(self.config, self.strategy_plan)
+        world_size = execution_world_size() or 1
         if self.strategy_plan is None:
             self.strategy_plan = build_strategy_plan(
-                self.model_profile, self.hardware_profile, self.config
+                self.model_profile, self.hardware_profile, self.config,
+                world_size=world_size,
             )
+        if self.strategy_plan.dp_size != world_size:
+            raise ValueError("Cached strategy plan conflicts with execution world_size")
         return self.strategy_plan
 
+    def _validated_plan(self) -> StrategyPlan:
+        return coordinated_call(
+            self.plan, phase="runtime plan",
+            identity=lambda value: value.to_dict(),
+        )
+
     def initialize(self) -> "TrainEngine":
-        plan = self.plan()
+        plan = self._validated_plan()
         world_size = max(1, plan.dp_size * plan.tp_size * plan.pp_size)
         self.collective.init_process_group(
             world_size=world_size,
@@ -115,6 +129,7 @@ class TrainEngine:
         optimizer: Any = None,
         optimizer_builder: Any = None,
         scheduler: Any = None,
+        scheduler_builder: Any = None,
         loss_fn: Any = None,
         step_fn: Any = None,
         checkpoint_manager: Any = None,
@@ -153,6 +168,8 @@ class TrainEngine:
                     optimizer = self.training_backend.setup_optimizer(optimizer)
                     self.training_backend.optimizer = optimizer
 
+        self._bind_loss_data_parallel(loss_fn)
+        scheduler = self.prepare_scheduler(optimizer, scheduler, scheduler_builder)
         return self.fit_loop.run(
             dataloader,
             max_steps=max_steps,
@@ -164,6 +181,67 @@ class TrainEngine:
             checkpoint_manager=checkpoint_manager,
             checkpoint_interval=checkpoint_interval,
         )
+
+    def _bind_loss_data_parallel(self, loss_fn: Any) -> None:
+        """Bind opt-in objectives to this runtime's validated pure-DP group."""
+        bind = getattr(loss_fn, "bind_data_parallel", None)
+        if not callable(bind):
+            return
+        validate_legacy_parallelism(self.config, self.strategy_plan)
+        group = None
+        if getattr(self.training_backend, "name", "") in {"native_ddp", "fsdp", "deepspeed"}:
+            import torch.distributed as dist
+
+            if not dist.is_available() or not dist.is_initialized():
+                raise RuntimeError("distributed objective requires an initialized process group")
+            group = dist.group.WORLD
+        bind(group)
+
+    def prepare_scheduler(
+        self, optimizer: Any, scheduler: Any = None, scheduler_builder: Any = None
+    ) -> Any:
+        """Collectively bind and retain the scheduler for the final optimizer."""
+        prepared = coordinated_call(
+            lambda: self._prepare_scheduler(optimizer, scheduler, scheduler_builder),
+            phase="scheduler",
+            identity=lambda value: {
+                "configuration": self.scheduler_metadata,
+                "type": (
+                    f"{type(value).__module__}.{type(value).__qualname__}"
+                    if value is not None else None
+                ),
+                "state": value.state_dict() if value is not None else None,
+            },
+        )
+        self.scheduler = prepared
+        return prepared
+
+    def _prepare_scheduler(
+        self, optimizer: Any, scheduler: Any, scheduler_builder: Any
+    ) -> Any:
+        if scheduler_builder is not None:
+            if scheduler is not None or self.scheduler is not None:
+                raise ValueError("scheduler_builder cannot replace an existing scheduler")
+            scheduler = scheduler_builder(optimizer)
+        elif scheduler is None:
+            scheduler = self.scheduler
+        if scheduler is not None:
+            pending, visited = [scheduler], set()
+            while pending:
+                current = pending.pop()
+                if id(current) in visited:
+                    continue
+                visited.add(id(current))
+                if hasattr(current, "lr_lambdas") and not self.scheduler_metadata:
+                    raise ValueError(
+                        "Function-based scheduler requires explicit scheduler_metadata"
+                    )
+                pending.extend(getattr(current, "_schedulers", ()))
+            if getattr(scheduler, "optimizer", optimizer) is not optimizer:
+                raise ValueError("scheduler must be bound to the final backend optimizer")
+            if self.scheduler is not None and scheduler is not self.scheduler:
+                raise ValueError("cannot replace the active scheduler during training")
+        return scheduler
 
     def _run_accumulated_step(
         self,
@@ -368,13 +446,20 @@ class TrainEngine:
         model: Any = None,
         optimizer: Any = None,
         scheduler: Any = None,
+        dataloader: Any = None,
+        optimizer_builder: Any = None,
+        scheduler_builder: Any = None,
     ) -> Any:
+        self._validated_plan()
         return CheckpointController(self).load(
             checkpoint_manager,
             step,
             model=model,
             optimizer=optimizer,
             scheduler=scheduler,
+            dataloader=dataloader,
+            optimizer_builder=optimizer_builder,
+            scheduler_builder=scheduler_builder,
         )
 
     def record_step(self, metrics: Optional[Dict[str, Any]] = None) -> TrainState:
@@ -398,7 +483,7 @@ class TrainEngine:
 
     @staticmethod
     def _world_size() -> int:
-        return max(1, int(os.environ.get("WORLD_SIZE", "1") or 1))
+        return execution_world_size() or 1
 
     def _reset_peak_memory_stats(self) -> None:
         self.memory.reset_peak_memory_stats()

@@ -62,6 +62,7 @@ def capability_level_for_scope(base_level: str, config_data: Dict[str, Any]) -> 
 def workload_flags(workload: str) -> Dict[str, bool]:
     normalized = str(workload or "").strip().lower()
     return {
+        "causal_lm": normalized == "causal_lm",
         "synthetic": normalized
         in {"synthetic_regression", "torch_tiny", "torch_tiny_mlp", "tiny_torch"},
         "vision_synthetic": normalized
@@ -79,6 +80,8 @@ def workload_flags(workload: str) -> Dict[str, bool]:
 
 
 def _base_capability(flags: Dict[str, bool], data_type: str) -> str:
+    if flags["causal_lm"]:
+        return "local_native_causal_lm_token_corpus"
     if flags["synthetic"]:
         return "local_native_synthetic"
     if flags["vision_synthetic"]:

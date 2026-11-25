@@ -12,7 +12,7 @@ from typing import Dict, Iterable
 
 from .base import InferenceTaskAdapter
 from .multimodal import MultimodalInferenceTaskAdapter
-from .text import TextInferenceTaskAdapter
+from .text import CausalLMInferenceTaskAdapter, TextInferenceTaskAdapter
 from .vision import VisionInferenceTaskAdapter
 
 
@@ -56,6 +56,7 @@ def default_inference_task_registry() -> InferenceTaskRegistry:
     registry = InferenceTaskRegistry()
     registry.register(VisionInferenceTaskAdapter(), aliases=("vision_detection",))
     registry.register(TextInferenceTaskAdapter(), aliases=("text_generation",))
+    registry.register(CausalLMInferenceTaskAdapter())
     registry.register(
         MultimodalInferenceTaskAdapter(), aliases=("multimodal_embedding", "vlm")
     )

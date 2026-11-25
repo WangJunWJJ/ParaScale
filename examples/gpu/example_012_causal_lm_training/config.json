@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "parascale": {
+    "training_backend": "${PARASCALE_BACKEND}",
+    "precision": "${PARASCALE_PRECISION}",
+    "gradient_accumulation_steps": 4,
+    "device_prefetch": false
+  },
+  "model": {
+    "pretrained_model_name_or_path": "${PARASCALE_MODEL}",
+    "attention_backend": "sdpa",
+    "activation_checkpointing": false
+  },
+  "data": {
+    "type": "token_corpus",
+    "path": "${PARASCALE_TOKEN_CORPUS}",
+    "batch_size": 4,
+    "sequence_length": 512,
+    "seed": 42,
+    "shuffle": true,
+    "shuffle_window_blocks": 65536,
+    "repeat": true,
+    "num_workers": 0
+  },
+  "optimizer": {
+    "type": "adamw",
+    "lr": 0.00001,
+    "weight_decay": 0.01
+  },
+  "training": {
+    "workload": "causal_lm",
+    "seed": 42,
+    "max_steps": 100,
+    "scheduler": {
+      "type": "cosine",
+      "total_steps": 1000,
+      "warmup_steps": 50,
+      "min_lr_ratio": 0.1
+    },
+    "checkpoint_interval": 50,
+    "checkpoint_dir": "${PARASCALE_RUN_DIR}/checkpoints"
+  },
+  "runtime": {
+    "run_dir": "${PARASCALE_RUN_DIR}"
+  }
+}

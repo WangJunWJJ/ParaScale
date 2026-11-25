@@ -54,6 +54,8 @@ class StepRunner:
         with self.engine.precision.autocast_context():
             output = model(**batch) if isinstance(batch, dict) else model(batch)
             loss = loss_fn(output, batch)
+            # Autograd retains what loss needs; release unused model outputs.
+            del output
         if normalization_work is not None:
             normalization_work.wait()
         scale = denominator / (weight * replicas)

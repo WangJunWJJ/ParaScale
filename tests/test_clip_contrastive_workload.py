@@ -133,7 +133,8 @@ def test_clip_contrastive_factory_runs_one_forward_step():
     logits = model(**batch)
     loss = loss_fn(logits, batch)
 
-    assert logits.shape == (4, 4)
+    assert logits["image_features"].shape == (4, 16)
+    assert logits["text_features"].shape == (4, 16)
     assert batch["num_pairs"] == 4
     assert batch["tokens"] > 0
     assert loss.item() > 0
@@ -283,7 +284,8 @@ def test_clip_contrastive_streaming_wds_medium_model_runs(tmp_path):
     assert len(batches) == 2
     logits = model(**batches[0])
     loss = loss_fn(logits, batches[0])
-    assert logits.shape == (2, 2)
+    assert logits["image_features"].shape[0] == 2
+    assert logits["text_features"].shape == logits["image_features"].shape
     assert batches[0]["num_pairs"] == 2
     assert loss.item() > 0
 

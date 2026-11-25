@@ -13,18 +13,17 @@ from parascale.quantization.inference_artifact import _select_reference_layers
 
 
 def load_reference_artifact(artifact, model_path):
-    """Reconstruct from configuration and the artifact, not original float weights."""
-    from transformers import AutoConfig, AutoModelForCausalLM
+    """Validate the product wrapper before exposing its HF generation child.
 
-    config = AutoConfig.from_pretrained(
-        model_path, local_files_only=True, trust_remote_code=False
-    )
-    template = AutoModelForCausalLM.from_config(
-        config, torch_dtype=torch.float32, attn_implementation="sdpa"
-    )
+    Use the same tokenizer-bound template as product inference; no original
+    float weights or legacy bare-HF artifact signatures are accepted.
+    """
+    from parascale.workloads.causal_lm_model import load_causal_lm_model
+
+    template = load_causal_lm_model(model_path, from_config=True)
     model, quant_config, _ = load_quantized_model(artifact, template)
     _select_reference_layers(model)
-    return model, quant_config.to_dict()
+    return model.model, quant_config.to_dict()
 
 
 def materialize_reference_weights(model):

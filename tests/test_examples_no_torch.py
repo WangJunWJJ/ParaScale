@@ -15,6 +15,31 @@ from parascale.config import ParaScaleConfig
 EXAMPLE_ROOT = Path(__file__).resolve().parents[1] / "examples"
 
 
+def test_clip_quality_example_freezes_real_training_budget(monkeypatch):
+    from parascale.commands.common import load_config_file
+    from parascale.workloads.specs.clip import ClipContrastiveSpec
+
+    for key, value in {
+        "PARASCALE_MODEL": "/models/clip",
+        "PARASCALE_DATA": "/data/qualified",
+        "PARASCALE_RUN_DIR": "/runs/quality",
+    }.items():
+        monkeypatch.setenv(key, value)
+    path = EXAMPLE_ROOT / "gpu/example_015_clip_retrieval_quality/train.json"
+    config = load_config_file(path)
+    runtime = ParaScaleConfig.from_dict(config["parascale"])
+    spec = ClipContrastiveSpec.from_config(config)
+    assert runtime.training_backend == "native_ddp"
+    assert runtime.data_parallel_size == 4
+    assert runtime.precision == "fp32"
+    assert spec.batch_size * runtime.data_parallel_size == 128
+    assert spec.num_batches == 50
+    assert spec.lr == 1e-6
+    assert spec.data_dir == "/data/qualified/train"
+    assert config["training"]["workload"] == "clip_contrastive"
+    assert config["training"]["checkpoint_interval"] == 50
+
+
 def _load_example_config(path: str) -> dict:
     config_path = EXAMPLE_ROOT / path / "config.json"
     return json.loads(config_path.read_text(encoding="utf-8"))
@@ -67,7 +92,7 @@ def test_ascend_examples_use_unified_runtime_with_npu_hccl_hints():
 def test_every_example_config_has_a_thin_run_script():
     config_paths = sorted(EXAMPLE_ROOT.glob("*/*/config.json"))
 
-    assert len(config_paths) == 10
+    assert len(config_paths) == 11
     for config_path in config_paths:
         example_dir = config_path.parent
         script_path = example_dir / "run.sh"
@@ -95,3 +120,33 @@ def test_distributed_ascend_example_uses_torchrun():
 
     assert '"${TORCHRUN:-torchrun}"' in script
     assert '--nproc_per_node="${NPROC_PER_NODE:-2}"' in script
+
+
+def test_causal_lm_example_resolves_paths_and_uses_the_product_runtime(monkeypatch):
+    from parascale.commands.common import load_config_file
+    from parascale.workloads.specs.causal_lm import CausalLmSpec
+
+    values = {
+        "PARASCALE_BACKEND": "native_ddp",
+        "PARASCALE_PRECISION": "bf16",
+        "PARASCALE_MODEL": "/data/models/llama",
+        "PARASCALE_TOKEN_CORPUS": "/data/tokens/train",
+        "PARASCALE_RUN_DIR": "/data/runs/llama-ddp",
+    }
+    for name, value in values.items():
+        monkeypatch.setenv(name, value)
+    directory = EXAMPLE_ROOT / "gpu/example_012_causal_lm_training"
+    config = load_config_file(str(directory / "config.json"))
+    spec = CausalLmSpec.from_config(config)
+    runtime = ParaScaleConfig.from_dict(config["parascale"])
+    assert spec.model_path == values["PARASCALE_MODEL"]
+    assert spec.data_path == values["PARASCALE_TOKEN_CORPUS"]
+    assert spec.batch_size == 4
+    assert runtime.training_backend == "native_ddp"
+    assert runtime.precision == "bf16"
+    assert runtime.device_prefetch is False
+    assert config["training"]["workload"] == "causal_lm"
+    assert config["training"]["checkpoint_dir"] == "/data/runs/llama-ddp/checkpoints"
+    script = (directory / "run.sh").read_text(encoding="utf-8")
+    assert '-m torch.distributed.run --standalone --nproc_per_node="$NPROC"' in script
+    assert '2|4)' in script

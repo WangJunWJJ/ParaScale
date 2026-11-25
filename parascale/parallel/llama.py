@@ -115,6 +115,24 @@ class LlamaStage(nn.Module):
         if ((inputs < 0) | (inputs >= self.vocab_size)).any():
             raise ValueError("input token is outside the configured vocabulary")
 
+    def validate_example_inputs(self, inputs: torch.Tensor) -> None:
+        """Check local stage inputs before collective or forward initialization.
+
+        Args:
+            inputs: First-stage token IDs or a later-stage FP32 residual example.
+
+        Raises:
+            ValueError: Shape, dtype or embedding indices violate the stage contract.
+        """
+        if self.stage_index == 0:
+            self.validate_inputs(inputs)
+        elif (
+            inputs.ndim != 3
+            or inputs.dtype != torch.float32
+            or inputs.shape[-1] != self.hidden_size
+        ):
+            raise ValueError("later stage requires float32 [batch, sequence, hidden]")
+
     def tensor_parallel_plan(self) -> dict[str, Any]:
         """Shard projections and share input-gradient reductions within each block."""
         from torch.distributed.tensor import Replicate
@@ -152,14 +170,7 @@ class LlamaStage(nn.Module):
                 raise ValueError("first stage requires int64 [batch, sequence] tokens")
             hidden = self.model.embed_tokens(inputs)
         else:
-            if (
-                inputs.ndim != 3
-                or inputs.dtype != torch.float32
-                or inputs.shape[-1] != self.hidden_size
-            ):
-                raise ValueError(
-                    "later stage requires float32 [batch, sequence, hidden]"
-                )
+            self.validate_example_inputs(inputs)
             hidden = inputs
         length = hidden.shape[1]
         positions = torch.arange(length, device=hidden.device).unsqueeze(0)

@@ -26,13 +26,31 @@ def _requires_safe_gemm(features, outputs, rows):
     )
 
 
+def _int8_metadata(features, contiguous):
+    # Pinned GemLite 0.5.1 ABI: BF16=2, FP32=0; channelwise weight-only INT8.
+    return [0, 8, features, 255, 1, 2, 2, 0, 0, 0, 2, contiguous]
+
+
 class GemliteInt8Linear(nn.Module):
     """Inference-only Linear.forward adapter; functional weight access unsupported."""
 
     def __init__(self, kernel):
         super().__init__()
-        self.kernel = kernel.requires_grad_(False).eval()
+        metadata = kernel.get_meta_args()
+        if (
+            not isinstance(metadata, (list, tuple))
+            or len(metadata) != 12
+            or any(type(value) is not int for value in metadata)
+            or metadata[-1] not in (0, 1)
+            or list(metadata) != _int8_metadata(kernel.in_features, metadata[-1])
+        ):
+            raise ValueError("Unsupported GemLite INT8 execution metadata")
         self.in_features, self.out_features = kernel.in_features, kernel.out_features
+        self._data_contiguous = metadata[-1]
+        self._weight_stride = tuple(kernel.W_q.stride())
+        for name in ("W_q", "scales", "zeros", "bias"):
+            value = getattr(kernel, name)
+            self.register_buffer(name, value.detach() if value is not None else None)
         self._safe_forward = None
         if any(
             _requires_safe_gemm(self.in_features, self.out_features, rows)
@@ -50,14 +68,32 @@ class GemliteInt8Linear(nn.Module):
         )
 
     def forward(self, inputs):
-        if inputs.dtype != torch.bfloat16 or self.kernel.scales.dtype != torch.float32:
+        if inputs.dtype != torch.bfloat16 or self.scales.dtype != torch.float32:
             raise ValueError(
                 "INT8 requires BF16 inputs and FP32 scales; set dtype before conversion"
             )
-        if inputs.device != self.kernel.W_q.device:
+        if inputs.device != self.W_q.device:
             raise ValueError("INT8 inputs and weights must share a device")
         if inputs.ndim < 1 or inputs.shape[-1] != self.in_features:
             raise ValueError("INT8 input feature dimension mismatch")
+        if (
+            self.W_q.dtype != torch.int8
+            or self.W_q.shape != (self.in_features, self.out_features)
+            or self.W_q.stride() != self._weight_stride
+            or self.scales.shape != (1, self.out_features)
+            or self.scales.device != inputs.device
+            or self.zeros.numel() != 0
+            or self.zeros.device != inputs.device
+            or (
+                self.bias is not None
+                and (
+                    self.bias.shape != (self.out_features,)
+                    or self.bias.dtype != torch.bfloat16
+                    or self.bias.device != inputs.device
+                )
+            )
+        ):
+            raise ValueError("Invalid INT8 packed tensor state")
         if inputs.numel() == 0:
             return inputs.new_empty((*inputs.shape[:-1], self.out_features))
         if _requires_safe_gemm(
@@ -65,12 +101,17 @@ class GemliteInt8Linear(nn.Module):
         ):
             return self._safe_forward(
                 inputs,
-                self.kernel.W_q,
-                self.kernel.scales,
-                self.kernel.zeros,
-                self.kernel.bias,
+                self.W_q,
+                self.scales,
+                self.zeros,
+                self.bias,
             )
-        return self.kernel(inputs)
+        return torch.ops.gemlite.forward_functional.default(
+            inputs,
+            self.bias,
+            [self.W_q, self.scales, self.zeros],
+            _int8_metadata(self.in_features, self._data_contiguous),
+        )
 
 
 def _load_gemlite():

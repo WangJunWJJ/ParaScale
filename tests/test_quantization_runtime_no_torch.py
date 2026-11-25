@@ -120,4 +120,6 @@ def test_ptq_cli_exports_loadable_workload(tmp_path, workload):
     loaded, _, _ = load_quantized_model(str(output), model=template)
     batch = next(iter(batches))
     with torch.no_grad():
-        assert torch.isfinite(loaded(**batch)).all()
+        prediction = loaded(**batch)
+        values = prediction.values() if isinstance(prediction, dict) else [prediction]
+        assert all(torch.isfinite(value).all() for value in values)

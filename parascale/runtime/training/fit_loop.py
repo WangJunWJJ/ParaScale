@@ -17,7 +17,17 @@ class FitLoopRunner:
     def __init__(self, engine: Any) -> None:
         self.engine = engine
 
-    def run(
+    def run(self, dataloader: Any, **kwargs: Any) -> Any:
+        """Release source lookahead on limits, failures and normal exhaustion."""
+        try:
+            return self._run(dataloader, **kwargs)
+        finally:
+            data_resume = getattr(self.engine, "data_resume", None)
+            close = getattr(data_resume, "close_iterator", None)
+            if callable(close):
+                close()
+
+    def _run(
         self,
         dataloader: Any,
         *,
@@ -50,7 +60,9 @@ class FitLoopRunner:
                 batch = next(iterator)
             except StopIteration:
                 if max_steps is not None and index < max_steps:
-                    raise RuntimeError("Dataloader exhausted before requested optimizer updates completed")
+                    raise RuntimeError(
+                        "Dataloader exhausted before requested optimizer updates completed"
+                    )
                 break
             dataloader_wait_seconds = time.perf_counter() - wait_start
             if self.engine._gradient_accumulation_steps() > 1:
@@ -80,6 +92,10 @@ class FitLoopRunner:
                 data_resume.record_consumption(metrics)
             if not metrics.get("optimizer_updated", True):
                 continue
+            if scheduler is not None and hasattr(scheduler, "get_last_lr"):
+                metrics["next_learning_rates"] = [
+                    float(rate) for rate in scheduler.get_last_lr()
+                ]
             self.engine.record_step(metrics)
             if checkpoint_manager is not None and checkpoint_interval:
                 if self.engine.state.global_step % int(checkpoint_interval) == 0:

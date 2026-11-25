@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "parascale": {
+    "task_type": "multimodal",
+    "model_family": "clip",
+    "target_scale": "single_node",
+    "training_backend": "native_ddp",
+    "precision": "fp32",
+    "data_parallel_size": 4,
+    "ddp_comm_hook": "none",
+    "ddp_find_unused_parameters": true,
+    "ddp_static_graph": false,
+    "grad_clip_norm": null,
+    "checkpoint_keep_last": 2,
+    "metrics_history_limit": 10
+  },
+  "task": {"type": "multimodal", "workload": "clip_contrastive"},
+  "model": {
+    "type": "hf_clip",
+    "pretrained_model_name_or_path": "${PARASCALE_MODEL}"
+  },
+  "data": {
+    "type": "datacomp_wds",
+    "data_dir": "${PARASCALE_DATA}/train",
+    "streaming": true,
+    "cpu_prefetch": true,
+    "num_workers": 0,
+    "text_length": 77
+  },
+  "optimizer": {"type": "adamw", "lr": 0.000001, "weight_decay": 0.01},
+  "hardware_profile": {"num_gpus": 4, "gpus_per_node": 4},
+  "distributed": {"nnodes": 1, "nproc_per_node": 4},
+  "runtime": {"device": "cuda", "run_dir": "${PARASCALE_RUN_DIR}"},
+  "training": {
+    "workload": "clip_contrastive",
+    "batch_size": 32,
+    "gradient_accumulation_steps": 1,
+    "max_steps": 50,
+    "checkpoint_interval": 50,
+    "checkpoint_dir": "${PARASCALE_RUN_DIR}/checkpoints",
+    "seed": 42
+  }
+}

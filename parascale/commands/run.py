@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 from typing import Any, Dict
 
@@ -29,9 +30,11 @@ from parascale.runtime.lifecycle import destroy_distributed_runtime
 from parascale.runtime.serve_runner import (
     run_serve_from_config as _run_serve_from_config,
 )
+from parascale.runtime.stage_plan import build_stage_training_plan, is_native_parallel
 from parascale.runtime.train_runner import (
     run_train_from_config as _run_train_from_config,
 )
+from parascale.runtime.training.coordination import coordinated_call
 from parascale.workloads.inference import build_inference_components
 
 TRAIN_EXAMPLES = """examples:
@@ -62,7 +65,7 @@ def register_run_parsers(subparsers: argparse._SubParsersAction) -> None:
     resume.add_argument(
         "--resume-latest",
         action="store_true",
-        help="Resume the latest complete native/native_ddp checkpoint, reporting skipped candidates.",
+        help="Resume the latest complete native/native_ddp/native_parallel checkpoint, reporting skipped candidates.",
     )
     train_parser.add_argument(
         "--output", help="Optional path to write the dry-run JSON."
@@ -143,6 +146,10 @@ def run_benchmark_from_config(config_data: Dict[str, Any]) -> Dict[str, Any]:
 
 def run_inference_from_config(config_data: Dict[str, Any]) -> Dict[str, Any]:
     model, batches, task = build_inference_components(config_data)
+    if task == "causal_lm_generation":
+        from parascale.runtime.inference.causal_lm import run_causal_lm_inference
+
+        return attach_runtime_evidence(run_causal_lm_inference(model, batches))
     runtime = section(config_data, "runtime")
     inference = section(config_data, "inference")
     device, memory_getter = _resolve_inference_device(runtime)
@@ -205,6 +212,20 @@ def _inference_capability(task: str, device: str) -> str:
 
 
 def build_train_dry_run_payload(config_data: Dict[str, Any]) -> Dict[str, Any]:
+    if is_native_parallel(config_data):
+        plan = build_stage_training_plan(config_data)
+        return {
+            **plan.to_dict(),
+            "mode": "train",
+            "dry_run": True,
+            "runtime_status": "plan_only",
+            "entrypoint_status": "ready",
+            "next_step": (
+                "torchrun --standalone --nnodes=1 "
+                f"--nproc-per-node={plan.topology.world_size} "
+                "-m parascale.cli train --config <config.json>"
+            ),
+        }
     config_data, effective = normalize_execution_config(config_data)
     payload = build_plan_payload(config_data)
     resolved_config = resolve_config(config_data, dry_run=True)
@@ -284,6 +305,32 @@ def build_benchmark_dry_run_payload(config_data: Dict[str, Any]) -> Dict[str, An
 
 def cmd_train(args: argparse.Namespace) -> int:
     config_data = load_config_file(args.config)
+    if is_native_parallel(config_data):
+        if args.dry_run:
+            emit_json(build_train_dry_run_payload(config_data), args.output)
+            return 0
+        try:
+            # Only choose a path here. The runner coordinates artifact writes
+            # after initialization so rank-local I/O cannot strand peers.
+            runtime = config_data.setdefault("runtime", {})
+            if not isinstance(runtime, dict):
+                raise ValueError("runtime must be a mapping")
+            if not runtime.get("run_dir"):
+                output = Path(args.output) if args.output else None
+                runtime["run_dir"] = str(
+                    output.parent / output.stem if output else Path("runs") / "train"
+                )
+            payload = (
+                run_train_from_config(config_data, args.resume_step, resume_latest=True)
+                if getattr(args, "resume_latest", False)
+                else run_train_from_config(config_data, args.resume_step)
+            )
+            coordinated_call(
+                lambda: emit_json(payload, args.output), phase="training output"
+            )
+        finally:
+            destroy_distributed_runtime()
+        return 0
     config_artifacts = _write_command_config_artifacts(
         config_data,
         output_path=args.output,
@@ -337,6 +384,18 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
 def cmd_infer(args: argparse.Namespace) -> int:
     config_data = load_config_file(args.config)
+    causal = section(config_data, "inference").get("workload") == "causal_lm"
+    if causal:
+        from parascale.runtime.inference.causal_lm import validate_command_paths
+        from parascale.workloads.specs.causal_lm_inference import CausalLmInferenceSpec
+
+        spec = CausalLmInferenceSpec.from_config(config_data)
+        validate_command_paths(
+            spec,
+            config_path=args.config,
+            summary_path=args.output,
+            run_dir=_command_run_directory(config_data, args.output, "infer"),
+        )
     config_artifacts = _write_command_config_artifacts(
         config_data,
         output_path=args.output,
@@ -346,7 +405,12 @@ def cmd_infer(args: argparse.Namespace) -> int:
     payload = run_inference_from_config(config_data)
     payload["config_artifacts"] = config_artifacts
     attach_runtime_evidence(payload)
-    emit_json(payload, args.output)
+    if causal and args.output:
+        with Path(args.output).open("x", encoding="utf-8") as stream:
+            json.dump(payload, stream, indent=2, ensure_ascii=False, allow_nan=False)
+            stream.write("\n")
+    else:
+        emit_json(payload, args.output)
     return 0
 
 
@@ -371,6 +435,25 @@ def cmd_benchmark(args: argparse.Namespace) -> int:
     return 0
 
 
+def _command_run_directory(
+    config_data: Dict[str, Any],
+    output_path: str | None,
+    mode: str,
+) -> Path:
+    """Choose the command run directory without writing any files."""
+    runtime = config_data.get("runtime")
+    if not isinstance(runtime, dict):
+        runtime = {}
+        config_data["runtime"] = runtime
+    configured = runtime.get("run_dir")
+    if configured:
+        return Path(str(configured))
+    output = Path(output_path) if output_path else None
+    directory = output.parent / output.stem if output else Path("runs") / mode
+    runtime["run_dir"] = str(directory)
+    return directory
+
+
 def _write_command_config_artifacts(
     config_data: Dict[str, Any],
     *,
@@ -378,20 +461,7 @@ def _write_command_config_artifacts(
     mode: str,
     dry_run: bool,
 ) -> Dict[str, str | None]:
-    runtime = config_data.get("runtime")
-    if not isinstance(runtime, dict):
-        runtime = {}
-        config_data["runtime"] = runtime
-    configured = runtime.get("run_dir")
-    if configured:
-        run_dir = Path(str(configured))
-    elif output_path:
-        output = Path(output_path)
-        run_dir = output.parent / output.stem
-        runtime["run_dir"] = str(run_dir)
-    else:
-        run_dir = Path("runs") / mode
-        runtime["run_dir"] = str(run_dir)
+    run_dir = _command_run_directory(config_data, output_path, mode)
     resolution = config_data.get("_resolution", {})
     emergency = (
         dict(resolution.get("emergency_overrides", {}))

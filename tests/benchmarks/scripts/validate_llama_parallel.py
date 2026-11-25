@@ -21,6 +21,7 @@ import torch.distributed as dist
 import transformers
 from transformers import AutoTokenizer, LlamaConfig, LlamaForCausalLM
 
+from parascale.optimizers import build_optimizer
 from parascale.parallel import CausalLMLoss, DistributedParallelConfig
 from parascale.parallel.execution import DistributedTrainer
 from parascale.parallel.llama import LlamaStage
@@ -187,8 +188,9 @@ def main():
                 trainer.mesh["tp"],
                 native_tensor_plan(model_config.num_hidden_layers),
             )
-        optimizer = torch.optim.AdamW(
-            trainer.parameters(), lr=1e-5, eps=args.adam_eps, foreach=False
+        optimizer = build_optimizer(
+            stage,
+            {"optimizer": {"type": "adamw", "lr": 1e-5, "eps": args.adam_eps}},
         )
         reference_optimizer = torch.optim.AdamW(
             reference.parameters(), lr=1e-5, eps=args.adam_eps, foreach=False
@@ -365,6 +367,9 @@ def main():
                     Path(__file__).parents[1] / "tools" / "parallel_numerics.py"
                 ),
                 "reference_microbatch_size": microbatch_size,
+                "optimizer_driver": "parascale.optimizers.build_optimizer",
+                "optimizer_foreach": optimizer.defaults["foreach"],
+                "optimizer_fused": optimizer.defaults["fused"],
                 "reference_plan_sha256": file_digest(
                     Path(__file__).with_name("benchmark_llama_parallel.py")
                 ),

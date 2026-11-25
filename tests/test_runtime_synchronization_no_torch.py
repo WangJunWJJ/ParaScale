@@ -48,7 +48,7 @@ def test_memory_tracker_propagates_device_execution_failure(operation):
             tracker.elapsed_since(0.0)
 
 
-@pytest.mark.parametrize("fail_on", [1, 2])
+@pytest.mark.parametrize("fail_on", [1, 2, 3])
 def test_inference_does_not_return_success_after_device_failure(fail_on):
     accelerator = Accelerator(fail_on=fail_on)
     model = SimpleNamespace(predict=lambda batch: batch)
@@ -132,14 +132,27 @@ def test_inference_timing_excludes_pending_warmup_and_batch_preparation(monkeypa
     monkeypatch.setattr(
         "parascale.runtime.inference.runner.time.perf_counter", lambda: clock.elapsed
     )
+
+    initialized = []
+
+    def prepare_model():
+        if not initialized:
+            clock.pending += 7.0
+            initialized.append(True)
+
     runner = InferenceRunner(
-        object(), "queued", memory_getter=QueuedAccelerator, task_adapter=Task()
+        SimpleNamespace(eval=prepare_model),
+        "queued",
+        memory_getter=QueuedAccelerator,
+        task_adapter=Task(),
     )
     result = runner.run([0, 1, 2], warmup_steps=1)
     assert result["outputs"] == [1, 2]
     assert result["metrics"]["latency_ms_total"] == 4000.0
     assert result["metrics"]["latency_ms_avg"] == 2000.0
     assert result["metrics"]["images_per_second"] == 0.5
+    assert result["timing"]["setup_seconds"] == 7.0
+    assert result["timing"]["warmup_seconds"] == 23.0
 
 
 @pytest.mark.parametrize("available", [0, 1, 2])
@@ -156,14 +169,18 @@ def test_unsized_short_warmup_reports_actual_completed_batches(available):
     assert window["warmup_steps_effective"] == available
     assert window["warmup_excluded_from_metrics"] is (available > 0)
     assert window["measured_batches"] == 0
-    assert accelerator.calls == (1 if available else 0)
+    # Setup completes before its timer stops; only actual warmup adds a barrier.
+    assert accelerator.calls == 1 + (1 if available else 0)
 
 
 def test_warmup_only_device_failure_is_not_silently_accepted():
+    accelerator = Accelerator(fail_on=2)
+    predicted = []
     runner = InferenceRunner(
-        SimpleNamespace(predict=lambda batch: batch),
+        SimpleNamespace(predict=lambda batch: predicted.append(batch) or batch),
         "vision_detection",
-        memory_getter=lambda: Accelerator(fail_on=1),
+        memory_getter=lambda: accelerator,
     )
     with pytest.raises(RuntimeError, match="asynchronous device failure"):
         runner.run(iter([1]), warmup_steps=4)
+    assert predicted == [1]
