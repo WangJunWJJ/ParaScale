@@ -219,25 +219,13 @@ class NativeDdpTrainingBackend(NativeTrainingBackend):
 
     def _register_comm_hook(self, model: Any) -> None:
         hook_name = self._resolved_comm_hook_name()
-        self._active_checkpoint_policy = deepcopy(
-            self._configured_checkpoint_policy()
-        )
+        self._active_checkpoint_policy = deepcopy(self._configured_checkpoint_policy())
         self._active_checkpoint_policy["ddp"]["comm_hook"] = hook_name
         if hook_name == "none":
             return
-        try:
-            from torch.distributed.algorithms.ddp_comm_hooks import default_hooks
-        except Exception as exc:
-            raise ImportError(
-                "DDP communication hooks require PyTorch distributed hooks."
-            ) from exc
-        hook = {
-            "fp16_compress": default_hooks.fp16_compress_hook,
-            "bf16_compress": default_hooks.bf16_compress_hook,
-        }.get(hook_name)
-        if hook is None:
-            raise ValueError(f"unsupported ddp_comm_hook: {hook_name}")
-        model.register_comm_hook(state=None, hook=hook)
+        from parascale.communication.hooks import get_ddp_comm_hook
+
+        model.register_comm_hook(state=None, hook=get_ddp_comm_hook(hook_name))
 
     def no_sync(self):
         if self.model is not None and hasattr(self.model, "no_sync"):

@@ -33,7 +33,9 @@ def inputs(tmp_path):
         )
     )
     plan = Record(
-        workload=Record(model_path=str(tmp_path)), config=Record(precision="fp32")
+        workload=Record(model_path=str(tmp_path)),
+        config=Record(precision="fp32"),
+        ddp_comm_hook="none",
     )
     plan.optimizer_spec = OptimizerSpec.from_config(
         {"optimizer": {"type": "adamw", "lr": 0.001}}
@@ -45,6 +47,16 @@ def build(*args):
     from parascale.runtime.stage_identity import build_stage_checkpoint_context
 
     return build_stage_checkpoint_context(*args)
+
+
+def test_effective_ddp_policy_and_implementation_bind_context(inputs):
+    original = build(*inputs)
+    assert original["execution"]["ddp_comm_hook"] == "none"
+    assert "communication/hooks.py" in original["execution"]["implementation_sha256"]
+    inputs[2].ddp_comm_hook = "bf16_compress"
+    candidate = build(*inputs)
+    assert candidate["execution"]["ddp_comm_hook"] == "bf16_compress"
+    assert original != candidate
 
 
 def test_effective_configuration_is_detached_before_source_release(monkeypatch):
@@ -347,6 +359,7 @@ def test_real_stage_context_tracks_effective_config_and_releases_source(
     plan = Record(
         workload=Record(model_path=str(model_path)),
         config=Record(precision="fp32"),
+        ddp_comm_hook="none",
         optimizer_spec=OptimizerSpec.from_config(settings),
     )
     context = build(stage, cursor, plan)
@@ -482,6 +495,33 @@ def test_dcp_example_preserves_the_matched_global_budget():
     assert plan.topology.global_batch_size(plan.workload.batch_size) == 64
 
 
+def test_bf16_communication_example_preserves_matched_training_budget():
+    from pathlib import Path
+
+    from parascale.commands.common import load_config_file
+    from parascale.runtime.stage_plan import build_stage_training_plan
+
+    folder = (
+        Path(__file__).resolve().parents[1]
+        / "examples/gpu/example_012_native_parallel_training"
+    )
+    settings = load_config_file(folder / "matched_dp4_bf16_comm.yaml")
+    expected = load_config_file(folder / "matched_dp2_dcp.yaml")
+    expected["parascale"].update(
+        data_parallel_size=4,
+        ddp_comm_hook="bf16_compress",
+        checkpoint_save_path="/data/checkpoints/tinyllama-matched-dp4-bf16-comm",
+    )
+    expected["training"]["gradient_accumulation_steps"] = 4
+    expected["runtime"]["run_dir"] = "/data/runs/tinyllama-matched-dp4-bf16-comm"
+    assert settings == expected
+    plan = build_stage_training_plan(settings)
+    assert plan.ddp_comm_hook == "bf16_compress"
+    assert plan.config.checkpoint_format == "dcp"
+    assert plan.topology.world_size == 4
+    assert plan.topology.global_batch_size(plan.workload.batch_size) == 64
+
+
 def test_shared_assets_config_only_needs_no_float_weights(tmp_path):
     import hashlib
 
@@ -512,6 +552,7 @@ def test_shared_assets_stage_alias_and_implementation_dependencies():
     hashes = stage_identity._implementation_hashes()
     assert "workloads/causal_lm_model.py" in hashes
     assert "workloads/causal_lm_assets.py" in hashes
+    assert "core/distributed/coordination.py" in hashes
 
 
 @pytest.mark.parametrize("as_string", [False, True])

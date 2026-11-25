@@ -6,13 +6,230 @@
 """Explicit autocast scope and FP32 optimizer-state contracts for stage training."""
 
 import copy
+import json
 import weakref
 from contextlib import nullcontext
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
 torch = pytest.importorskip("torch")
+
+
+@pytest.fixture
+def ddp_constructor(monkeypatch):
+    from torch.distributed.algorithms.ddp_comm_hooks.default_hooks import (
+        bf16_compress_hook,
+    )
+
+    from parascale.parallel import execution
+    from parascale.parallel.distributed import DistributedParallelConfig
+
+    dist = torch.distributed
+    group = object()
+    mesh = Mock(return_value={"dp": SimpleNamespace(get_group=lambda: group)})
+    gather = Mock(
+        side_effect=lambda records, value: records.__setitem__(
+            slice(None), [value, value]
+        )
+    )
+    monkeypatch.setattr(dist, "is_initialized", lambda: True)
+    monkeypatch.setattr(dist, "get_world_size", lambda: 2)
+    monkeypatch.setattr(dist, "get_rank", lambda: 0)
+    monkeypatch.setattr(dist, "get_backend", lambda: "nccl")
+    monkeypatch.setattr(dist, "get_global_rank", lambda *args: 0)
+    monkeypatch.setattr(dist, "broadcast", Mock())
+    monkeypatch.setattr(dist, "all_gather_object", gather)
+    monkeypatch.setattr(dist.device_mesh, "init_device_mesh", mesh)
+    monkeypatch.setattr(execution, "_validate_constructor", Mock())
+    monkeypatch.setattr(execution, "validate_precision", Mock())
+    monkeypatch.setattr(torch.cuda.nccl, "version", lambda: (2, 10, 0))
+    register = Mock()
+
+    class DDP:
+        def __init__(self, module, *, device_ids, process_group):
+            self.module = module
+            self.process_group = process_group
+            self._comm_hooks = []
+
+        def register_comm_hook(self, state, hook):
+            register(state, hook)
+            self._comm_hooks.append((hook, state))
+
+    monkeypatch.setattr(torch.nn.parallel, "DistributedDataParallel", DDP)
+
+    def construct(*, config=None, **kwargs):
+        return execution.DistributedTrainer(
+            torch.nn.Linear(2, 2),
+            config or DistributedParallelConfig(dp_size=2),
+            SimpleNamespace(
+                device=torch.device("cuda", 0), shape=(1, 2), dtype=torch.float32
+            ),
+            torch.nn.MSELoss(),
+            **kwargs,
+        )
+
+    return SimpleNamespace(
+        construct=construct,
+        group=group,
+        hook=bf16_compress_hook,
+        mesh=mesh,
+        gather=gather,
+        register=register,
+        execution=execution,
+    )
+
+
+@pytest.mark.parametrize("policy", ["auto", "fp16_compress", True, None])
+def test_ddp_policy_rejects_non_effective_names_before_mesh(ddp_constructor, policy):
+    with pytest.raises(ValueError, match="ddp_comm_hook"):
+        ddp_constructor.construct(ddp_comm_hook=policy)
+    ddp_constructor.mesh.assert_not_called()
+
+
+@pytest.mark.parametrize("axes", [(1, 1, 1), (2, 2, 1), (2, 1, 2)])
+def test_ddp_compression_requires_pure_dp_before_mesh(ddp_constructor, axes):
+    from parascale.parallel.distributed import DistributedParallelConfig
+
+    dp, tp, pp = axes
+    config = DistributedParallelConfig(dp_size=dp, tp_size=tp, pp_size=pp)
+    with pytest.raises(ValueError, match="pure DP"):
+        ddp_constructor.construct(config=config, ddp_comm_hook="bf16_compress")
+    ddp_constructor.mesh.assert_not_called()
+
+
+@pytest.mark.parametrize("failure", ["bf16", "nccl"])
+def test_ddp_compression_validates_capability_before_mesh(
+    ddp_constructor, monkeypatch, failure
+):
+    if failure == "bf16":
+        ddp_constructor.execution.validate_precision.side_effect = ValueError(
+            "no native BF16"
+        )
+    else:
+        monkeypatch.setattr(torch.cuda.nccl, "version", lambda: (2, 9, 6))
+    with pytest.raises(ValueError, match="BF16|NCCL"):
+        ddp_constructor.construct(ddp_comm_hook="bf16_compress")
+    ddp_constructor.mesh.assert_not_called()
+
+
+def test_ddp_hook_preflight_rejects_peer_policy_mismatch(ddp_constructor):
+    def disagree(records, value):
+        error, signature = value
+        assert error is None and signature[-1] == "bf16_compress"
+        records[:] = [value, (None, (*signature[:-1], "none"))]
+
+    ddp_constructor.gather.side_effect = disagree
+    with pytest.raises(ValueError, match="preflight.*ddp_comm_hook.*agree"):
+        ddp_constructor.construct(ddp_comm_hook="bf16_compress")
+    ddp_constructor.mesh.assert_not_called()
+
+
+@pytest.mark.parametrize("peer", [False, True])
+def test_ddp_hook_registration_failure_is_coordinated(ddp_constructor, peer):
+    def gather(records, value):
+        records[:] = (
+            [value, "injected peer failure" if peer else None]
+            if isinstance(value, (str, type(None)))
+            else [value, value]
+        )
+
+    ddp_constructor.gather.side_effect = gather
+    if not peer:
+        ddp_constructor.register.side_effect = RuntimeError(
+            "injected registration failure"
+        )
+    expected = (
+        "DDP hook registration phase failed on another rank:.*injected peer failure"
+        if peer
+        else "injected registration failure"
+    )
+    with pytest.raises(RuntimeError, match=expected):
+        ddp_constructor.construct(ddp_comm_hook="bf16_compress")
+    assert ddp_constructor.gather.call_count == 2
+    assert ddp_constructor.gather.call_args.args[1] == (
+        None if peer else "injected registration failure"
+    )
+
+
+@pytest.mark.parametrize(
+    "drift",
+    [
+        "module",
+        "ddp_module",
+        "wrapper",
+        "group",
+        "hook",
+        "state",
+        "context",
+        "none_hook",
+        "clean",
+    ],
+)
+def test_ddp_execution_policy_checks_registered_binding(ddp_constructor, drift):
+    policy = "none" if drift == "none_hook" else "bf16_compress"
+    context = dict(
+        model="linear",
+        loss="mse",
+        tokenizer="test",
+        data="test",
+        precision="fp32",
+        execution={"torch": "2.9.1"},
+    )
+    trainer = ddp_constructor.construct(
+        ddp_comm_hook=policy, checkpoint_context=context
+    )
+    assert trainer.checkpoint_context["execution"] == {
+        "torch": "2.9.1",
+        "ddp_comm_hook": policy,
+    }
+    assert context["execution"] == {"torch": "2.9.1"}
+    assert trainer.ddp_comm_hook == policy
+    if policy == "none":
+        ddp_constructor.register.assert_not_called()
+    else:
+        ddp_constructor.register.assert_called_once_with(
+            ddp_constructor.group, ddp_constructor.hook
+        )
+    trainer.validate_execution_policy()
+    wrapper = trainer.execution_module
+    if drift == "clean":
+        assert (
+            ddp_constructor.construct(ddp_comm_hook=policy).checkpoint_context is None
+        )
+        return
+    if drift == "module":
+        trainer.module = copy.deepcopy(trainer.module)
+    elif drift == "ddp_module":
+        wrapper.module = copy.deepcopy(wrapper.module)
+    elif drift == "wrapper":
+        trainer.execution_module = object()
+    elif drift == "group":
+        wrapper.process_group = object()
+    elif drift == "context":
+        trainer._checkpoint_context = json.dumps(context)
+    elif drift == "hook":
+        wrapper._comm_hooks[:] = [(object(), ddp_constructor.group)]
+    elif drift == "state":
+        wrapper._comm_hooks[:] = [(ddp_constructor.hook, object())]
+    else:
+        wrapper._comm_hooks.append((ddp_constructor.hook, ddp_constructor.group))
+    with pytest.raises(ValueError, match="policy|module|wrapper|group|hook"):
+        trainer.validate_execution_policy()
+
+
+@pytest.mark.parametrize("registry", [None, (), [None], [(object(),)]])
+def test_ddp_execution_policy_rejects_unreadable_hook_registry(
+    ddp_constructor, registry
+):
+    trainer = ddp_constructor.construct()
+    if registry is None:
+        del trainer.execution_module._comm_hooks
+    else:
+        trainer.execution_module._comm_hooks = registry
+    with pytest.raises(ValueError, match="hook registry"):
+        trainer.validate_execution_policy()
 
 
 def trainer_fixture(precision):

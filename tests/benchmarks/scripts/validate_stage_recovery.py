@@ -72,6 +72,9 @@ def parse_args():
     parser.add_argument("--validate-catalog", action="store_true")
     parser.add_argument("--checkpoint-format", choices=("rank", "dcp"), default="rank")
     parser.add_argument("--checkpoint-state-probe", action="store_true")
+    parser.add_argument(
+        "--ddp-comm-hook", choices=("none", "bf16_compress"), default="none"
+    )
     return parser.parse_args()
 
 
@@ -171,6 +174,7 @@ def main():
             tensor_plan=stage.tensor_parallel_plan() or None,
             precision="bf16",
             checkpoint_context=context,
+            ddp_comm_hook=args.ddp_comm_hook,
         )
         optimizer = build_optimizer(stage, config)
         spec = SchedulerSpec("cosine", total_steps=8, warmup_steps=1)

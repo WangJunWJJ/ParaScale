@@ -227,6 +227,41 @@ This example does not change DDP settings to hide that boundary. Two-rank exact
 recovery and four-rank cross-format equivalence do not replace held-out quality
 or long-run production qualification.
 
+## Opt-In BF16 Gradient Communication
+
+`matched_dp4_bf16_comm.yaml` exposes PyTorch's official BF16 gradient compression
+through the real training CLI. It keeps global batch 64, microbatch 4, length 256
+and 16 updates, using four DP replicas and accumulation 4. FP32 master parameters
+and AdamW state remain unchanged. This is lossy gradient communication, not INT8
+model quantization. Native BF16 hardware and NCCL newer than 2.9.6 are required.
+
+```bash
+EXAMPLE=examples/gpu/example_012_native_parallel_training
+python -m parascale.cli plan --config "$EXAMPLE/matched_dp4_bf16_comm.yaml" --json
+CUDA_VISIBLE_DEVICES=0,1,3,4 torchrun --nnodes=1 --nproc_per_node=4 \
+  --master_addr=127.0.0.1 --master_port=29500 \
+  -m parascale.cli train --config "$EXAMPLE/matched_dp4_bf16_comm.yaml" \
+  --output /data/runs/matched-dp4-bf16-comm-summary.json
+```
+
+Edit GPU IDs and paths for your machine. For a fair control, copy the file, change
+only `ddp_comm_hook` to `none` and output/checkpoint directories, then run fresh
+jobs sequentially. Compare training-span throughput, complete invocation time,
+checkpoint time, peak memory and held-out quality separately. Short-run numeric
+screens do not establish convergence equivalence. Compression can increase peak
+memory because of temporary reduction buffers; it is not a memory-fit guarantee.
+
+Only pure DP2/DP4 supports this option. TP/PP combinations and FP16 communication
+are rejected, not silently downgraded. Omitted/`auto` resolves to `none` on this
+stage backend; no automatic compression recommendation is made.
+
+The effective communication policy is part of checkpoint identity, including
+`none`. A different policy or an older snapshot missing this identity is rejected
+before loading payloads, even with `--resume-latest`. Do not patch old manifests
+to bypass validation. Start a fresh run to change policy. Resume also requires
+the same implementation/runtime identities described below; lossy communication
+does not remove the warmed-versus-fresh DDP bucket determinism boundary.
+
 ## Checkpoint and Resume
 
 Use the canonical `parascale.checkpoint_save_path`, `checkpoint_save_interval`,
@@ -331,8 +366,9 @@ For an explicit communication experiment, keep an uncompressed ParaScale run
 each arm. This diagnostic option requires pure DP with at least two GPUs,
 native CUDA BF16 support and NCCL newer than 2.9.6. It uses PyTorch's official
 BF16 gradient hook on the wrapper's own process group; FP32 parameters and
-optimizer state are unchanged. It is not a `native_parallel` training-config
-option or an automatic recommendation. Define loss/NLL tolerances before testing:
+optimizer state are unchanged. The ParaScale arm uses the same constructor option
+as the training CLI; the native arm registers the official hook directly. This
+is not an automatic recommendation. Define loss/NLL tolerances before testing:
 lossy gradient communication need not reproduce uncompressed updates exactly.
 Compare the two compressed implementations separately from compression versus
 no compression. Initial parameter fingerprints are recorded before the first

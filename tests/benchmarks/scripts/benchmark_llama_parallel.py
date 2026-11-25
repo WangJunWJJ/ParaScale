@@ -378,6 +378,7 @@ def main():
                 summed_loss=CausalLMLoss(model.vocab_size),
                 tensor_plan=plan or None,
                 precision=args.precision,
+                ddp_comm_hook=args.ddp_comm_hook,
             )
         elif args.tp > 1:
             mesh = init_device_mesh("cuda", (world,), mesh_dim_names=("tp",))
@@ -389,11 +390,8 @@ def main():
             ddp_model = torch.nn.parallel.DistributedDataParallel(
                 model, device_ids=[local_rank]
             )
-        _setup_benchmark_ddp_hook(
-            trainer.execution_module if trainer is not None else ddp_model,
-            args.ddp_comm_hook,
-            device,
-        )
+        if trainer is None:
+            _setup_benchmark_ddp_hook(ddp_model, args.ddp_comm_hook, device)
         initial_parameter_sha256 = _initial_parameter_fingerprint(
             model.parameters(), world=world, dp=args.dp
         )

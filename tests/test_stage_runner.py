@@ -140,8 +140,9 @@ def test_recovery_rejects_newer_snapshot_beyond_update_window(tmp_path):
 
 
 @pytest.mark.parametrize("checkpoint_format", ["rank", "dcp"])
+@pytest.mark.parametrize("ddp_comm_hook", ["none", "bf16_compress"])
 def test_runner_wires_real_cursor_optimizer_and_runtime_checkpoint(
-    tmp_path, monkeypatch, checkpoint_format
+    tmp_path, monkeypatch, checkpoint_format, ddp_comm_hook
 ):
     import torch
 
@@ -151,6 +152,7 @@ def test_runner_wires_real_cursor_optimizer_and_runtime_checkpoint(
     from tests.test_text_cursor import corpus
 
     config = settings()
+    config["parascale"]["backend"]["ddp_comm_hook"] = ddp_comm_hook
     config["training"].update(max_steps=2, gradient_accumulation_steps=2)
     config["data"].update(sequence_length=4)
     config["parascale"]["training"] = {
@@ -158,7 +160,7 @@ def test_runner_wires_real_cursor_optimizer_and_runtime_checkpoint(
         "checkpoint_save_interval": 2,
         "checkpoint_format": checkpoint_format,
     }
-    world_size = 2 if checkpoint_format == "dcp" else 1
+    world_size = 2 if checkpoint_format == "dcp" or ddp_comm_hook != "none" else 1
     config["parascale"]["parallel"] = {"data_parallel_size": world_size}
     stage = torch.nn.Linear(4, 1)
     stage.stage_index = 0
@@ -193,6 +195,7 @@ def test_runner_wires_real_cursor_optimizer_and_runtime_checkpoint(
     class CpuExecutor:
         def __init__(self, module, *args, **kwargs):
             self.module = module
+            self.ddp_comm_hook = kwargs["ddp_comm_hook"]
 
         def forward_backward(self, inputs, labels, **kwargs):
             value = self.module(inputs.float()).square().mean()
@@ -210,6 +213,7 @@ def test_runner_wires_real_cursor_optimizer_and_runtime_checkpoint(
     monkeypatch.setattr(runner, "DistributedTrainer", CpuExecutor)
     result = runner.run_stage_train_from_config(config)
     assert result["global_step"] == 2
+    assert result["ddp_comm_hook"] == ddp_comm_hook
     assert result["samples"] == 8 * world_size
     assert result["tokens"] == 32 * world_size
     assert len(captured) == 1

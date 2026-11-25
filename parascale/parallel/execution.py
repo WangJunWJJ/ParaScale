@@ -96,6 +96,17 @@ def _validate_constructor(
             )
 
 
+def _registered_python_ddp_hooks(wrapper: Any) -> list:
+    """Read Torch 2.9.1's Python hook registry, not C++ reducer mutations."""
+    hooks = getattr(wrapper, "_comm_hooks", None)
+    if type(hooks) is not list or any(
+        type(entry) is not tuple or len(entry) != 2 or not callable(entry[0])
+        for entry in hooks
+    ):
+        raise ValueError("Missing or malformed DDP Python hook registry")
+    return hooks
+
+
 @dataclass
 class ParallelStepResult:
     """DP-averaged loss and opt-in output (only on the last pipeline stage)."""
@@ -126,6 +137,7 @@ class DistributedTrainer:
         summed_loss: SummedLoss | None = None,
         checkpoint_context: dict[str, Any] | None = None,
         precision: str = "fp32",
+        ddp_comm_hook: str = "none",
     ) -> None:
         import torch
         import torch.distributed as dist
@@ -134,6 +146,7 @@ class DistributedTrainer:
         if not dist.is_initialized():
             raise RuntimeError("Initialize a CUDA/NCCL process group first")
         error, signature = None, None
+        hook = None
         try:
             _validate_constructor(
                 module,
@@ -144,6 +157,26 @@ class DistributedTrainer:
                 tensor_plan,
                 precision,
             )
+            if type(ddp_comm_hook) is not str or ddp_comm_hook not in (
+                "none",
+                "bf16_compress",
+            ):
+                raise ValueError("ddp_comm_hook must be none or bf16_compress")
+            if ddp_comm_hook == "bf16_compress":
+                if (
+                    config.dp_size not in (2, 4)
+                    or config.tp_size != 1
+                    or config.pp_size != 1
+                ):
+                    raise ValueError("bf16_compress requires pure DP2 or DP4")
+                validate_precision("bf16", example_input.device)
+                if torch.cuda.nccl.version() <= (2, 9, 6):
+                    raise ValueError("bf16_compress requires NCCL newer than 2.9.6")
+                from parascale.communication.hooks import get_ddp_comm_hook
+
+                hook = get_ddp_comm_hook(ddp_comm_hook)
+                if not callable(hook):
+                    raise ValueError("bf16_compress DDP hook is unavailable")
             validate_example = getattr(module, "validate_example_inputs", None)
             if validate_example is not None:
                 validate_example(example_input)
@@ -161,6 +194,19 @@ class DistributedTrainer:
                 raise ValueError(
                     "Checkpoint context precision must match execution precision"
                 )
+            if context is not None:
+                detached = json.loads(context)
+                execution = detached.setdefault("execution", {})
+                if not isinstance(execution, dict):
+                    raise ValueError("Checkpoint context execution must be an object")
+                if (
+                    execution.setdefault("ddp_comm_hook", ddp_comm_hook)
+                    != ddp_comm_hook
+                ):
+                    raise ValueError(
+                        "Checkpoint context ddp_comm_hook must match execution policy"
+                    )
+                context = canonical_checkpoint_context(detached)
             signature = (
                 config.dp_size,
                 config.tp_size,
@@ -170,6 +216,7 @@ class DistributedTrainer:
                 summed_loss is not None,
                 context,
                 precision,
+                ddp_comm_hook,
             )
         except Exception as exc:
             error = str(exc)
@@ -186,7 +233,7 @@ class DistributedTrainer:
             )
         if any(item[1] != records[0][1] for item in records):
             raise ValueError(
-                "Parallel constructor preflight failed: topology, microbatches, schedule, loss mode, checkpoint context and precision must agree"
+                "Parallel constructor preflight failed: topology, microbatches, schedule, loss mode, checkpoint context, precision and ddp_comm_hook must agree"
             )
         self._checkpoint_context = context
         self._precision = precision
@@ -230,6 +277,7 @@ class DistributedTrainer:
 
             parallelize_module(module, self.mesh["tp"], tensor_plan)
         self.execution_module = module
+        ddp_group = None
         if config.dp_size > 1:
             if config.tp_size > 1:
                 from torch.distributed.fsdp import fully_shard
@@ -238,11 +286,27 @@ class DistributedTrainer:
             else:
                 from torch.nn.parallel import DistributedDataParallel
 
+                ddp_group = self.mesh["dp"].get_group()
                 self.execution_module = DistributedDataParallel(
                     module,
                     device_ids=[self.device.index],
-                    process_group=self.mesh["dp"].get_group(),
+                    process_group=ddp_group,
                 )
+        self._ddp_comm_hook = ddp_comm_hook
+        self._execution_binding = (module, self.execution_module, ddp_group, hook)
+        if hook is not None:
+            from parascale.core.distributed.coordination import coordinated_call
+
+            def register_hook():
+                group = self.execution_module.process_group
+                if group is None or group is not ddp_group:
+                    raise ValueError(
+                        "DDP wrapper must use the explicit DP process group"
+                    )
+                self.execution_module.register_comm_hook(state=group, hook=hook)
+                self.validate_execution_policy()
+
+            coordinated_call(register_hook, phase="DDP hook registration")
         self.schedule = None
         if config.pp_size > 1:
             from .pipeline_stage import (
@@ -287,6 +351,42 @@ class DistributedTrainer:
             if self._checkpoint_context is not None
             else None
         )
+
+    @property
+    def ddp_comm_hook(self) -> str:
+        """Return the effective gradient communication policy fixed at setup."""
+        return self._ddp_comm_hook
+
+    def validate_execution_policy(self) -> None:
+        """Reject execution or communication drift before checkpoint IO."""
+        module, wrapper, group, hook = self._execution_binding
+        if self.module is not module:
+            raise ValueError("Execution module changed after setup")
+        if self.execution_module is not wrapper:
+            raise ValueError("Execution wrapper changed after setup")
+        if self.ddp_comm_hook != ("none" if hook is None else "bf16_compress"):
+            raise ValueError("DDP communication policy changed after setup")
+        context = self.checkpoint_context
+        if context is not None:
+            execution = context.get("execution")
+            if (
+                not isinstance(execution, dict)
+                or execution.get("ddp_comm_hook") != self.ddp_comm_hook
+            ):
+                raise ValueError(
+                    "Checkpoint context does not match the active DDP policy"
+                )
+        if group is not None:
+            if wrapper.module is not module:
+                raise ValueError("DDP wrapped module changed after setup")
+            if wrapper.process_group is not group:
+                raise ValueError("DDP process group changed after setup")
+            hooks = _registered_python_ddp_hooks(wrapper)
+            if hook is None:
+                if hooks:
+                    raise ValueError("Unexpected DDP communication hook")
+            elif len(hooks) != 1 or hooks[0][0] is not hook or hooks[0][1] is not group:
+                raise ValueError("DDP communication hook or state changed after setup")
 
     def parameters(self):
         """Return only this rank's local stage parameters for optimizer creation."""

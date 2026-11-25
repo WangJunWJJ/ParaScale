@@ -190,6 +190,24 @@ def test_native_policy_uses_effective_hook_and_static_graph():
     assert backend.checkpoint_policy() == automatic
 
 
+@pytest.mark.parametrize("name", ["fp16_compress", "bf16_compress"])
+def test_native_registration_preserves_official_hook_and_default_group(name):
+    pytest.importorskip("torch")
+    from torch.distributed.algorithms.ddp_comm_hooks import default_hooks
+
+    from parascale.communication.hooks import get_ddp_comm_hook
+    from parascale.runtime.backends.native import NativeDdpTrainingBackend
+
+    hook = getattr(default_hooks, f"{name}_hook")
+    assert get_ddp_comm_hook(name) is hook
+    calls = []
+    model = SimpleNamespace(register_comm_hook=lambda **kwargs: calls.append(kwargs))
+    backend = NativeDdpTrainingBackend(config=SimpleNamespace(ddp_comm_hook=name))
+    backend._register_comm_hook(model)
+    assert calls == [{"state": None, "hook": hook}]
+    assert backend.checkpoint_policy()["ddp"]["comm_hook"] == name
+
+
 @pytest.mark.parametrize("action", ["save", "load"])
 def test_active_native_policy_drift_rejected_before_io(tmp_path, monkeypatch, action):
     from parascale.runtime.backends.native import NativeDdpTrainingBackend

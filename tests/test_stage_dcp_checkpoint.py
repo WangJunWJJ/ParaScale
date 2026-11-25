@@ -169,6 +169,7 @@ def _worker(rank, folder, backend):
             config=DistributedParallelConfig(dp_size=2),
             rank=rank,
             device=device,
+            validate_execution_policy=lambda: None,
             checkpoint_context={
                 "model": {"kind": "linear"},
                 "loss": "sum",
@@ -414,6 +415,7 @@ def _fresh_format_worker(rank, folder, backend):
                 config=DistributedParallelConfig(dp_size=4),
                 rank=rank,
                 device=device,
+                validate_execution_policy=lambda: None,
                 checkpoint_context={
                     "model": {"kind": "linear"},
                     "loss": "sum",
@@ -518,6 +520,7 @@ def _save_fault_worker(rank, folder):
             config=DistributedParallelConfig(dp_size=2),
             rank=rank,
             device=torch.device("cpu"),
+            validate_execution_policy=lambda: None,
             checkpoint_context={
                 "model": {"kind": "linear"},
                 "loss": "sum",

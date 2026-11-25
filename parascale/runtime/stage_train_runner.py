@@ -227,6 +227,7 @@ def run_stage_train_from_config(
         tensor_plan=tensor_plan,
         checkpoint_context=context,
         precision=plan.config.precision,
+        ddp_comm_hook=plan.ddp_comm_hook,
     )
     del example
 
@@ -294,6 +295,7 @@ def run_stage_train_from_config(
         "mock": False,
         "synthetic": False,
         "precision": plan.config.precision,
+        "ddp_comm_hook": trainer.ddp_comm_hook,
         "plan": plan.to_dict(),
         "config_artifacts": artifacts,
         "resume_selection": selection,

@@ -26,6 +26,8 @@ def _implementation_hashes() -> dict[str, str]:
             "workloads/causal_lm.py",
             "workloads/causal_lm_model.py",
             "workloads/causal_lm_assets.py",
+            "communication/hooks.py",
+            "core/distributed/coordination.py",
             "data/text/__init__.py",
             "data/text/artifact.py",
             "data/text/batches.py",
@@ -81,6 +83,7 @@ def build_stage_checkpoint_context(
         },
         "precision": plan.config.precision,
         "execution": {
+            "ddp_comm_hook": plan.ddp_comm_hook,
             "torch": str(torch.__version__),
             "transformers": str(transformers.__version__),
             "implementation_sha256": _implementation_hashes(),

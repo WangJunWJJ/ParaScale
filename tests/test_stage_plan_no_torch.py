@@ -36,6 +36,44 @@ def build(data):
     return build_stage_training_plan(data)
 
 
+@pytest.mark.parametrize("hook", [None, "auto", "none", "bf16_compress"])
+@pytest.mark.parametrize("dp", [2, 4])
+def test_ddp_policy_is_explicit_and_roundtrips(hook, dp):
+    data = settings()
+    data["parascale"]["parallel"] = {"data_parallel_size": dp}
+    if hook is not None:
+        data["parascale"]["backend"]["ddp_comm_hook"] = hook
+    original = copy.deepcopy(data)
+    plan = build(data)
+    expected = "bf16_compress" if hook == "bf16_compress" else "none"
+    assert plan.ddp_comm_hook == plan.to_dict()["ddp_comm_hook"] == expected
+    assert build(plan.config_data).ddp_comm_hook == expected
+    assert data == original
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        plan.ddp_comm_hook = "changed"
+
+
+@pytest.mark.parametrize("dp,tp,pp", [(1, 1, 1), (1, 2, 1), (2, 2, 1), (2, 1, 2)])
+def test_compressed_stage_policy_rejects_unqualified_layouts(dp, tp, pp):
+    data = settings()
+    data["parascale"]["parallel"] = {
+        "data_parallel_size": dp,
+        "tensor_parallel_size": tp,
+        "pipeline_parallel_size": pp,
+    }
+    data["parascale"]["backend"]["ddp_comm_hook"] = "bf16_compress"
+    with pytest.raises(ValueError, match="pure DP"):
+        build(data)
+
+
+def test_stage_policy_rejects_fp16_compression():
+    data = settings()
+    data["parascale"]["parallel"] = {"data_parallel_size": 2}
+    data["parascale"]["backend"]["ddp_comm_hook"] = "fp16_compress"
+    with pytest.raises(ValueError, match="bf16_compress"):
+        build(data)
+
+
 @pytest.mark.parametrize(
     "dp,tp,pp",
     [
@@ -95,7 +133,6 @@ def test_dcp_checkpoint_format_in_resolved_plan(dp, pp):
         ("pipeline_parallel_chunks", 1),
         ("fsdp_use_orig_params", True),
         ("fsdp_cpu_offload", False),
-        ("ddp_comm_hook", "auto"),
         ("ddp_gradient_as_bucket_view", True),
         ("zero_stage", 0),
         ("zero_offload", False),

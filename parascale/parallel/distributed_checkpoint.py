@@ -91,6 +91,7 @@ def _validate_execution(trainer: Any) -> None:
     trainer.config.validate_world_size(dist.get_world_size())
     if type(trainer.rank) is not int or trainer.rank != dist.get_rank():
         raise ValueError("Checkpoint rank does not match process group")
+    trainer.validate_execution_policy()
 
 
 def _optimizer_identity(module: Any, optimizer: Any) -> dict[str, Any]:
@@ -153,9 +154,19 @@ def _validate_manifest(
         and canonical_runtime_identity(metadata["runtime"]) != runtime_identity
     ):
         raise ValueError("Checkpoint runtime identity mismatch")
+    context = getattr(trainer, "checkpoint_context", None)
+    execution = context.get("execution", {}) if isinstance(context, dict) else {}
+    if isinstance(execution, dict) and "ddp_comm_hook" in execution:
+        saved = metadata["context"].get("execution")
+        if not isinstance(saved, dict) or "ddp_comm_hook" not in saved:
+            raise ValueError(
+                "Checkpoint DDP communication policy missing; legacy snapshots cannot resume"
+            )
+        if saved["ddp_comm_hook"] != execution["ddp_comm_hook"]:
+            raise ValueError("Checkpoint DDP communication policy mismatch")
     if canonical_checkpoint_context(
         metadata["context"]
-    ) != canonical_checkpoint_context(getattr(trainer, "checkpoint_context", None)):
+    ) != canonical_checkpoint_context(context):
         raise ValueError("Checkpoint training context mismatch")
 
 
