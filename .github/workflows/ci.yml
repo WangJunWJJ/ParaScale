@@ -87,6 +87,31 @@ jobs:
       - run: PATH="$PWD/.venv-clean/bin:$PATH" parascale doctor --strict --require torch
       - run: PATH="$PWD/.venv-clean/bin:$PATH" .venv-clean/bin/python tests/packaging/verify_clean_install.py
 
+  product-install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        product: [training, inference, "training,inference"]
+    env:
+      OMP_NUM_THREADS: "1"
+      CUDA_VISIBLE_DEVICES: ""
+      HF_HUB_OFFLINE: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install torch==2.9.1 torchvision==0.24.1 --index-url https://download.pytorch.org/whl/cpu
+      - run: python -m pip install ".[${{ matrix.product }}]"
+      - if: contains(matrix.product, 'training')
+        run: python tests/packaging/verify_product_dependencies.py --product training
+      - if: contains(matrix.product, 'inference')
+        run: python tests/packaging/verify_product_dependencies.py --product inference
+      - run: python tests/packaging/verify_clean_install.py
+
   extras-resolution:
     runs-on: ubuntu-latest
     strategy:
@@ -94,7 +119,7 @@ jobs:
       matrix:
         # torch-npu wheels are vendor-managed through Ascend/CANN channels,
         # so public PyPI resolution cannot validate the Ascend environment.
-        extra: [gpu, deepspeed, vlm, parallel, inference-int8, inference-int4]
+        extra: [gpu, deepspeed, vlm, parallel, inference-int8, inference-int4, training, inference]
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
