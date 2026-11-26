@@ -2,6 +2,8 @@
 
 文档基线：2026-11-19，对应当前开发分支；具体发布包能力以其版本文档为准。
 
+2026-11-26交付入口补充：统一工程提供[训练工具](training_tool.md)和[推理优化工具](inference_tool.md)两个命令入口，分别为`parascale-train`和`parascale-infer`。两者复用本手册中的配置和执行逻辑；完整交付以[冻结验收基线V1](production_acceptance.md)为准，不能把安装或功能smoke视为正式性能验收通过。
+
 本文面向第一次使用 ParaScale 的训练工程师和研究人员，重点说明如何安装、检查环境、编写配置、启动训练、比较后端、查看 benchmark 证据以及处理常见问题。
 
 ParaScale 当前是一个面向视觉与多模态任务的轻量级分布式训练控制层，统一配置、运行计划、数据管线、后端选择、benchmark 和 checkpoint/resume，并提供有限的推理入口。它不替代 PyTorch DDP/FSDP、DeepSpeed、Megatron-LM 或通用 RL 框架，也不是完整的生产级训推一体平台。
