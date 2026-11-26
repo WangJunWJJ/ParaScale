@@ -14,7 +14,11 @@ from typing import Any
 import torch
 from torch import nn
 
+from parascale.core.model_transform import validate_artifact
 
+
+@torch.inference_mode(False)
+@torch.no_grad()
 def prune_llama_mlp(
     model: nn.Module, *, keep_ratio: float = 0.75, alignment: int = 128
 ) -> tuple[nn.Module, dict[str, Any]]:
@@ -34,7 +38,8 @@ def prune_llama_mlp(
 
     Returns:
         Copied model with standard Linear layers and matching HF configuration,
-        and a JSON-compatible report. Save using save_pretrained; save the
+        and a JSON-compatible report. Copying does not create inference tensors,
+        even inside inference_mode. Save using save_pretrained; save the
         original tokenizer alongside it. Construct a NEW optimizer afterward;
         old optimizer states and distributed checkpoints are incompatible.
 
@@ -55,10 +60,7 @@ def prune_llama_mlp(
         raise ValueError("Call model.eval() before pruning")
     if getattr(model, "hf_device_map", None) or getattr(model.config, "pretraining_tp", 1) != 1:
         raise ValueError("pruning does not support dispatched or tensor-parallel models")
-    if any(module._forward_hooks or module._forward_pre_hooks or module._backward_hooks
-           or module._backward_pre_hooks
-           for module in model.modules()):
-        raise ValueError("Remove execution hooks before pruning")
+    validate_artifact(model)
     parameters = list(model.parameters())
     if len({p.device for p in parameters}) != 1 or any(
         type(p) is not nn.Parameter or p.device.type not in {"cpu", "cuda"}

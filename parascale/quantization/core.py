@@ -11,13 +11,14 @@ import tempfile
 import torch
 from torch import nn
 
-from .base import QuantizationConfig
-from .execution_contracts import (
+from parascale.core.model_transform import (
     validate_artifact,
     validate_copy,
     validate_replacement,
     validate_serialization_hooks,
 )
+
+from .base import QuantizationConfig
 from .fake_quantize import (
     FakeQuantize,
     FakeQuantizedConv2d,

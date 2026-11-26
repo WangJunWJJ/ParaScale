@@ -87,6 +87,63 @@ def test_unsupported_mutations_rejected(mutation):
         prune_llama_mlp(source, alignment=8)
 
 
+@pytest.mark.parametrize("location", ["mlp", "attention"])
+@pytest.mark.parametrize("kind", ["parameter", "post_accumulate", "forward_override", "compiled", "serialization"])
+def test_pruning_rejects_state_not_preserved_by_copy_or_reload(location, kind):
+    from parascale.pruning import prune_llama_mlp
+
+    source = model()
+    layer = source.model.layers[0]
+    target = layer.mlp.up_proj if location == "mlp" else layer.self_attn.q_proj
+    if kind == "parameter":
+        target.weight.register_hook(lambda grad: grad * 2)
+    elif kind == "post_accumulate":
+        target.weight.register_post_accumulate_grad_hook(lambda parameter: None)
+    elif kind == "forward_override":
+        original = target.forward
+        target.forward = lambda inputs: original(inputs) * 2
+    elif kind == "compiled":
+        target._compiled_call_impl = lambda inputs: target.forward(inputs) * 2
+    else:
+        target.register_state_dict_pre_hook(lambda *args: None)
+    with pytest.raises(ValueError, match="hooks|override"):
+        prune_llama_mlp(source, alignment=8)
+    assert target is (layer.mlp.up_proj if location == "mlp" else layer.self_attn.q_proj)
+    assert source.config.intermediate_size == 64
+
+
+def test_pruning_rejects_global_execution_hooks():
+    from torch.nn.modules.module import register_module_forward_hook
+
+    from parascale.pruning import prune_llama_mlp
+
+    source = model()
+    handle = register_module_forward_hook(lambda *args: None)
+    try:
+        with pytest.raises(ValueError, match="global"):
+            prune_llama_mlp(source, alignment=8)
+    finally:
+        handle.remove()
+
+
+@pytest.mark.parametrize("inference_source", [False, True])
+def test_pruning_inside_inference_mode_returns_trainable_parameters(inference_source):
+    from parascale.pruning import prune_llama_mlp
+
+    with torch.inference_mode(inference_source):
+        source = model()
+    with torch.inference_mode():
+        pruned, _ = prune_llama_mlp(source, keep_ratio=0.5, alignment=8)
+    assert not any(parameter.is_inference() for parameter in pruned.parameters())
+    tokens = torch.tensor([[1, 2, 3]])
+    pruned.train()
+    optimizer = torch.optim.SGD(pruned.parameters(), lr=0.1)
+    before = pruned.model.layers[0].mlp.up_proj.weight.detach().clone()
+    pruned(tokens, labels=tokens).loss.backward()
+    optimizer.step()
+    assert not torch.equal(before, pruned.model.layers[0].mlp.up_proj.weight)
+
+
 @pytest.mark.parametrize("ratio", [0, 1, -1, float("nan"), True])
 def test_invalid_ratio_rejected(ratio):
     from parascale.pruning import prune_llama_mlp

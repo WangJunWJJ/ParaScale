@@ -2,7 +2,7 @@
 # @Time : 2026/11/22 上午6:44
 # @Author : Wang Jun
 # @Email: wj_xd@foxmail.com
-"""Preflight runtime callbacks that reference quantization cannot preserve."""
+"""Preflight callbacks that model copying, replacement or export cannot preserve."""
 
 from torch import nn
 from torch.nn.modules import module as module_runtime
@@ -28,7 +28,7 @@ def validate_serialization_hooks(model: nn.Module) -> None:
             if getattr(module, attribute, None):
                 raise ValueError(
                     f"unsupported serialization hooks: {name or '<root>'} "
-                    f"({attribute}); remove callbacks before reference quantization"
+                    f"({attribute}); remove callbacks before model transformation"
                 )
 
 
@@ -38,13 +38,13 @@ def validate_copy(model: nn.Module) -> None:
         if getattr(module_runtime, "_global" + attribute, None):
             raise ValueError(
                 f"unsupported execution hooks: global {attribute}; "
-                "remove hooks before reference quantization"
+                "remove hooks before model transformation"
             )
     for name, module in model.named_modules():
         if getattr(module, "_compiled_call_impl", None) is not None:
             raise ValueError(
                 f"unsupported execution override: {name or '<root>'}; "
-                "use an uncompiled model for reference quantization"
+                "use an uncompiled model for model transformation"
             )
     for name, parameter in model.named_parameters():
         if getattr(parameter, "_backward_hooks", None) or getattr(
@@ -64,12 +64,12 @@ def validate_replacement(model: nn.Module, prefix: str = "") -> None:
         if any(getattr(module, attr, None) for attr in _EXECUTION_HOOKS):
             raise ValueError(
                 f"unsupported execution hooks: {path}; "
-                "remove hooks or adapt the model before reference quantization"
+                "remove hooks or adapt the model before model transformation"
             )
         if "forward" in vars(module):
             raise ValueError(
                 f"unsupported execution override: {path}; "
-                "use an unmodified, uncompiled model for reference quantization"
+                "use an unmodified, uncompiled model for model transformation"
             )
 
 
