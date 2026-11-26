@@ -240,8 +240,31 @@ def _restore_portable_state(value: Any, device: torch.device) -> Any:
     return value
 
 
+class _ResidualTensor:
+    """Opaque only during loading, so Torch does not cast residual storage."""
+
+    __slots__ = ("tensor",)
+
+    def __init__(self, tensor: torch.Tensor):
+        self.tensor = tensor
+
+
 class _PortableFourBitOptimizer:
     optimizer_type = "four_bit"
+
+    def __setstate__(self, state: Dict[str, Any]) -> None:
+        # Torch has mapped saved slots to live parameters, but has not run
+        # user post-hooks yet. Move residuals without changing their dtype.
+        for parameter, values in state.get("state", {}).items():
+            if isinstance(values, dict):
+                for name, value in values.items():
+                    if isinstance(value, _ResidualTensor):
+                        values[name] = (
+                            value.tensor.to(device=parameter.device)
+                            if isinstance(parameter, torch.Tensor)
+                            else value.tensor
+                        )
+        super().__setstate__(state)
 
     def state_dict(self) -> Dict[str, Any]:
         state = super().state_dict()
@@ -271,7 +294,27 @@ class _PortableFourBitOptimizer:
             for parameter in group["params"]
         )
         state["state"] = _restore_portable_state(state.get("state", {}), device)
-        super().load_state_dict(state)
+
+        def protect_residuals(_optimizer, effective_state):
+            # Run after user pre-hooks and copy containers so transient wrappers
+            # never leak into the caller's checkpoint or a hook's replacement.
+            protected = dict(effective_state["state"])
+            for slot, values in protected.items():
+                if isinstance(values, dict):
+                    protected[slot] = {
+                        name: _ResidualTensor(value)
+                        if name in ("exp_avg_error", "exp_avg_sq_error", "momentum_error")
+                        and isinstance(value, torch.Tensor)
+                        else value
+                        for name, value in values.items()
+                    }
+            return {**effective_state, "state": protected}
+
+        handle = self.register_load_state_dict_pre_hook(protect_residuals)
+        try:
+            super().load_state_dict(state)
+        finally:
+            handle.remove()
 
 
 class ZeroOptimizer:

@@ -179,6 +179,196 @@ def test_memory_stats_separate_cpu_and_cuda_storage():
     assert stats["state_bytes"] == 184
 
 
+@pytest.mark.parametrize("optimizer_type", [FourBitAdamW, FourBitSGD])
+@pytest.mark.parametrize("mode", ["absolute", "block_scaled"])
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_fp16_compensation_checkpoint_preserves_dtype_and_continuation(
+    tmp_path, optimizer_type, mode, device
+):
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("Requires CUDA")
+    values = torch.arange(129, dtype=torch.float32, device=device)
+    parameter = nn.Parameter(torch.sin(values))
+    settings = dict(error_compensation_dtype="fp16", error_compensation_mode=mode)
+    source = optimizer_type([parameter], **settings)
+    for step in range(3):
+        parameter.grad = torch.cos(values * 0.13 + step) * 0.1
+        source.step()
+    checkpoint = tmp_path / "optimizer.pt"
+    torch.save(source.state_dict(), checkpoint)
+    restored = nn.Parameter(parameter.detach().clone())
+    target = optimizer_type([restored], **settings)
+    target.load_state_dict(
+        torch.load(checkpoint, map_location="cpu", weights_only=True)
+    )
+    errors = (
+        ("exp_avg_error", "exp_avg_sq_error")
+        if optimizer_type is FourBitAdamW
+        else ("momentum_error",)
+    )
+    for name in errors:
+        actual = target.state[restored][name]
+        assert actual.dtype == torch.float16
+        assert actual.device == restored.device
+        torch.testing.assert_close(
+            actual, source.state[parameter][name], rtol=0, atol=0
+        )
+    assert source.get_memory_stats() == target.get_memory_stats()
+    for step in range(3, 5):
+        parameter.grad = torch.cos(values * 0.13 + step) * 0.1
+        restored.grad = parameter.grad.clone()
+        source.step()
+        target.step()
+        torch.testing.assert_close(parameter, restored, rtol=0, atol=0)
+        for name in errors:
+            torch.testing.assert_close(
+                source.state[parameter][name],
+                target.state[restored][name],
+                rtol=0,
+                atol=0,
+            )
+
+
+@pytest.fixture(params=[FourBitAdamW, FourBitSGD])
+def residual_checkpoint(request):
+    parameters = [nn.Parameter(torch.ones(129)) for _ in range(2)]
+    settings = dict(error_compensation_dtype="fp16")
+    source = request.param(parameters, **settings)
+    for parameter in parameters:
+        parameter.grad = torch.linspace(-0.1, 0.2, 129)
+    source.step()
+    saved = source.state_dict()
+    names = (
+        ("exp_avg_error", "exp_avg_sq_error")
+        if request.param is FourBitAdamW
+        else ("momentum_error",)
+    )
+    for slot, state in saved["state"].items():
+        for name in names:
+            state[name] = torch.full((129,), (slot + 1) / 8, dtype=torch.float16)
+    live = [nn.Parameter(parameter.detach().clone()) for parameter in parameters]
+    return request.param(live, **settings), live, saved, names
+
+
+def test_residual_load_honors_replacement_prehook_mapping(residual_checkpoint):
+    optimizer, parameters, saved, names = residual_checkpoint
+    events = []
+
+    def remap(_optimizer, state):
+        events.append("remap")
+        return {
+            **state,
+            "param_groups": [
+                {**group, "params": list(reversed(group["params"]))}
+                for group in state["param_groups"]
+            ],
+            "state": {
+                slot: {
+                    **values,
+                    **{name: values[name] + 0.5 for name in names},
+                }
+                for slot, values in state["state"].items()
+            },
+        }
+
+    def observe(_optimizer, state):
+        events.append("observe")
+        assert all(
+            isinstance(values[name], torch.Tensor)
+            for values in state["state"].values()
+            for name in names
+        )
+
+    optimizer.register_load_state_dict_pre_hook(observe)
+    optimizer.register_load_state_dict_pre_hook(remap, prepend=True)
+    optimizer.load_state_dict(saved)
+    assert events == ["remap", "observe"]
+    for parameter, slot in zip(parameters, [1, 0]):
+        for name in names:
+            actual = optimizer.state[parameter][name]
+            assert actual.dtype == torch.float16
+            torch.testing.assert_close(actual, saved["state"][slot][name] + 0.5)
+    assert saved["param_groups"][0]["params"] == [0, 1]
+    _assert_tensor_state_tree(saved)
+
+
+@pytest.mark.parametrize("action", ["observe", "replace", "mutate", "delete"])
+def test_residual_load_preserves_posthook_semantics(residual_checkpoint, action):
+    optimizer, parameters, saved, names = residual_checkpoint
+    observed = []
+    replacement = torch.full((129,), 0.75, dtype=torch.float16)
+
+    def post_hook(actual):
+        for parameter in parameters:
+            for name in names:
+                observed.append(actual.state[parameter][name].dtype)
+                if action == "replace":
+                    actual.state[parameter][name] = replacement
+                elif action == "mutate":
+                    actual.state[parameter][name].add_(1)
+                elif action == "delete":
+                    del actual.state[parameter][name]
+        _assert_tensor_state_tree(actual.state_dict())
+
+    optimizer.register_load_state_dict_post_hook(post_hook)
+    optimizer.load_state_dict(saved)
+    if action == "observe":
+        assert set(observed) == {torch.float16}
+    for slot, parameter in enumerate(parameters):
+        for name in names:
+            if action == "delete":
+                assert name not in optimizer.state[parameter]
+            elif action == "replace":
+                assert optimizer.state[parameter][name] is replacement
+            elif action == "mutate":
+                expected = torch.full((129,), (slot + 1) / 8 + 1, dtype=torch.float16)
+                torch.testing.assert_close(optimizer.state[parameter][name], expected)
+
+
+def test_residual_load_bypasses_parameter_dtype_cast(residual_checkpoint, monkeypatch):
+    optimizer, parameters, saved, names = residual_checkpoint
+    original = torch.optim.Optimizer._process_value_according_to_param_policy
+
+    def check_cast(parameter, value, param_id, param_groups, key=None):
+        assert key not in names, "residual reached parameter dtype cast"
+        return original(parameter, value, param_id, param_groups, key)
+
+    monkeypatch.setattr(
+        torch.optim.Optimizer,
+        "_process_value_according_to_param_policy",
+        staticmethod(check_cast),
+    )
+    optimizer.load_state_dict(saved)
+    for parameter in parameters:
+        assert all(optimizer.state[parameter][name].dtype == torch.float16 for name in names)
+
+
+@pytest.mark.parametrize("failure", ["pre", "validation", "post"])
+def test_residual_load_cleans_up_hooks_after_failure(residual_checkpoint, failure):
+    optimizer, parameters, saved, names = residual_checkpoint
+
+    def fail(*args):
+        raise RuntimeError("injected load failure")
+
+    handle = None
+    if failure == "pre":
+        handle = optimizer.register_load_state_dict_pre_hook(fail)
+    elif failure == "post":
+        handle = optimizer.register_load_state_dict_post_hook(fail)
+    hooks = dict(optimizer._optimizer_load_state_dict_pre_hooks)
+    payload = {**saved, "param_groups": []} if failure == "validation" else saved
+    with pytest.raises((RuntimeError, ValueError)):
+        optimizer.load_state_dict(payload)
+    assert dict(optimizer._optimizer_load_state_dict_pre_hooks) == hooks
+    _assert_tensor_state_tree(saved)
+    if handle is not None:
+        handle.remove()
+    optimizer.load_state_dict(saved)
+    for parameter in parameters:
+        assert all(optimizer.state[parameter][name].dtype == torch.float16 for name in names)
+    _assert_tensor_state_tree(optimizer.state_dict())
+
+
 class SimpleModel(nn.Module):
     def __init__(self, input_dim=10, hidden_dim=20, output_dim=5):
         super().__init__()
