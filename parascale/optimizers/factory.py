@@ -48,6 +48,14 @@ def build_optimizer(model: Any, config_data: Dict[str, Any]) -> Any:
             foreach=False if mixed_parameters else None,
             fused=False if mixed_parameters else None,
         )
+    elif spec.type == "torchao_adamw4bit":
+        from .torchao_adapter import load_optimizer_class
+
+        optimizer = load_optimizer_class()(
+            params, lr=spec.lr, betas=spec.betas, eps=spec.eps,
+            weight_decay=spec.weight_decay, block_size=128,
+            amsgrad=False, bf16_stochastic_round=False,
+        )
     elif spec.type == "four_bit_adamw":
         optimizer = FourBitAdamW(
             params,

@@ -184,6 +184,7 @@ def run_train_from_config(
     optimizer_spec.validate_backend(
         parascale_config.training_backend,
         zero_stage=int(parascale_config.zero_stage or 0),
+        precision=str(parascale_config.precision),
     )
     def parse_scheduler():
         spec = SchedulerSpec.from_config(config_data)
@@ -389,7 +390,7 @@ def run_train_from_config(
                 {
                     **engine.scheduler_metadata,
                     "last_epoch": engine.scheduler.last_epoch,
-                    "next_learning_rates": engine.scheduler.get_last_lr(),
+                    "next_learning_rates": [float(rate) for rate in engine.scheduler.get_last_lr()],
                 }
                 if engine.scheduler is not None else None
             ),

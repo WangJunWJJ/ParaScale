@@ -21,6 +21,7 @@ _COMMON_KEYS = {
 }
 _ALLOWED_KEYS = {
     "adamw": {"type", "lr", "betas", "eps", "weight_decay"},
+    "torchao_adamw4bit": {"type", "lr", "betas", "eps", "weight_decay"},
     "four_bit_adamw": _COMMON_KEYS | {"betas", "eps"},
     "four_bit_sgd": _COMMON_KEYS | {"momentum", "dampening", "nesterov"},
 }
@@ -100,9 +101,11 @@ class OptimizerSpec:
 
     @property
     def is_four_bit(self) -> bool:
-        return self.type in {"four_bit_adamw", "four_bit_sgd"}
+        return self.type in {"four_bit_adamw", "four_bit_sgd", "torchao_adamw4bit"}
 
-    def validate_backend(self, training_backend: str, zero_stage: int = 0) -> None:
+    def validate_backend(
+        self, training_backend: str, zero_stage: int = 0, precision: str = "fp32"
+    ) -> None:
         if not self.is_four_bit:
             return
         backend = str(training_backend)
@@ -114,8 +117,24 @@ class OptimizerSpec:
             raise ValueError(
                 f"optimizer.type={self.type} is not supported with zero_stage={zero_stage}"
             )
+        if self.type == "torchao_adamw4bit" and precision not in {"fp32", "bf16"}:
+            raise ValueError("torchao_adamw4bit requires precision=fp32 or bf16")
 
     def to_metadata(self) -> Dict[str, Any]:
+        if self.type == "torchao_adamw4bit":
+            return {
+                "type": self.type,
+                "state_schema_version": 1,
+                "implementation": "torchao.optim.AdamW4bit",
+                "torch_version": "2.9.1",
+                "torchao_version": "0.15.0",
+                "group_size": 128,
+                "amsgrad": False,
+                "bf16_stochastic_round": False,
+                "compensate_quant_error": None,
+                "error_compensation_dtype": None,
+                "error_compensation_mode": None,
+            }
         return {
             "type": self.type,
             "state_schema_version": 1,

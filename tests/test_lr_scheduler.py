@@ -5,6 +5,7 @@
 
 """Learning-rate schedules bind to optimizer updates, not invocation length."""
 
+import json
 import os
 import time
 from copy import deepcopy
@@ -51,6 +52,24 @@ def load_payload(path, step):
         map_location="cpu",
         weights_only=True,
     )
+
+
+def test_tensor_learning_rates_are_json_scalars_in_report(tmp_path, monkeypatch):
+    from parascale.optimizers.schedule import SchedulerSpec
+
+    original = SchedulerSpec.build
+
+    def tensor_schedule(spec, optimizer):
+        for group in optimizer.param_groups:
+            group["lr"] = torch.tensor(group["lr"])
+        return original(spec, optimizer)
+
+    monkeypatch.setattr(SchedulerSpec, "build", tensor_schedule)
+    result = run_train_from_config(configuration(tmp_path))
+    json.dumps(result, allow_nan=False)
+    assert all(type(rate) is float for rate in result["scheduler"]["next_learning_rates"])
+    payload = load_payload(tmp_path, 2)
+    assert isinstance(payload["scheduler_state_dict"]["base_lrs"][0], torch.Tensor)
 
 
 def test_product_cli_checkpoints_schedule_and_exact_resume(tmp_path):

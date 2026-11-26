@@ -260,6 +260,12 @@ class CheckpointController:
                     self.engine.training_backend.setup_optimizer(optimizer)
                 )
 
+        self._collective_call(
+            lambda: self._validate_optimizer_metadata(
+                manifest, getattr(self.engine.training_backend, "optimizer", None)
+            )
+        )
+
         prepare_scheduler = getattr(self.engine, "prepare_scheduler", None)
         if callable(prepare_scheduler):
             scheduler = prepare_scheduler(
@@ -373,6 +379,8 @@ class CheckpointController:
     def _validate_optimizer_metadata(manifest: Any, optimizer: Any) -> None:
         saved = dict(manifest.metadata.get("optimizer", {}) or {})
         current = dict(getattr(optimizer, "_parascale_optimizer_metadata", {}) or {})
+        if current.get("type") == "torchao_adamw4bit" and not saved:
+            raise ValueError("checkpoint optimizer metadata is required for torchao_adamw4bit")
         if not saved or not current:
             return
         for key in (
@@ -382,6 +390,11 @@ class CheckpointController:
             "compensate_quant_error",
             "error_compensation_dtype",
             "error_compensation_mode",
+            "implementation",
+            "torch_version",
+            "torchao_version",
+            "amsgrad",
+            "bf16_stochastic_round",
         ):
             if key == "error_compensation_mode" and key not in saved:
                 if current.get(key, "absolute") == "absolute":

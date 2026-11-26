@@ -21,6 +21,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+optimizer-4bit = [
+    "torch==2.9.1",
+    "torchvision==0.24.1",
+    "torchao==0.15.0",
+]
+
 parallel = [
     "torch==2.9.1",
     "torchvision==0.24.1",

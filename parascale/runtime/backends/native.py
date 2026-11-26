@@ -68,6 +68,10 @@ class NativeTrainingBackend(TrainingBackend):
     def setup_optimizer(self, optimizer: Any) -> Any:
         if optimizer is None:
             return None
+        if getattr(optimizer, "_parascale_optimizer_metadata", {}).get("type") == "torchao_adamw4bit":
+            from parascale.optimizers.torchao_adapter import validate_execution
+
+            validate_execution(optimizer, self.config)
         zero_stage = int(getattr(self.config, "zero_stage", 0) or 0)
         if zero_stage == 0:
             return optimizer

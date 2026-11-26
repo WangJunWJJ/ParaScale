@@ -46,6 +46,9 @@ def _load_student(manager, manifest, model_path):
         raise ValueError("tokenizer identity does not match checkpoint")
     entry = next(item for item in manifest.files if item.get("role") == "backend_state")
     path = manager.resolve_payload_path(manifest, entry)
+    from parascale.optimizers.torchao_adapter import prepare_checkpoint
+
+    prepare_checkpoint(manifest.metadata.get("optimizer", {}))
     payload = torch.load(path, map_location="cpu", weights_only=True, mmap=True)
     backend = payload.get("backend_state", {})
     if (
