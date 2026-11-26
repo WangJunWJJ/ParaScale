@@ -7,10 +7,44 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
 from .common import _section
+
+
+@dataclass(frozen=True)
+class CausalLmEvaluationSpec:
+    """Local held-out data and a budget measured in full executor windows."""
+
+    data_path: str
+    max_batches: int
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.data_path, str)
+            or not self.data_path.strip()
+            or "://" in self.data_path
+        ):
+            raise ValueError("evaluation data_path must be a nonempty local path")
+        if (
+            isinstance(self.max_batches, bool)
+            or not isinstance(self.max_batches, int)
+            or self.max_batches <= 0
+        ):
+            raise ValueError("evaluation max_batches must be a positive integer")
+
+    @classmethod
+    def from_config(cls, config: Mapping[str, Any]) -> CausalLmEvaluationSpec | None:
+        if "evaluation" not in config:
+            return None
+        section = config["evaluation"]
+        if not isinstance(section, Mapping):
+            raise ValueError("evaluation must be a mapping")
+        if set(section) != {"data_path", "max_batches"}:
+            raise ValueError("evaluation requires exactly data_path and max_batches")
+        return cls(data_path=section["data_path"], max_batches=section["max_batches"])
 
 
 @dataclass(frozen=True)

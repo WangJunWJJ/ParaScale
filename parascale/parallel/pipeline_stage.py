@@ -7,6 +7,7 @@
 
 from typing import Any
 
+import torch
 from torch.distributed.pipelining import PipelineStage, Schedule1F1B, ScheduleGPipe
 
 from .precision import autocast_context
@@ -71,6 +72,42 @@ class PrecisionPipelineStage(PipelineStage):
 
 class _OutputPolicy:
     """Make output ownership independent of the native scheduling algorithm."""
+
+    def eval(
+        self,
+        *args: Any,
+        target: Any = None,
+        losses: Any = None,
+        return_outputs: bool = False,
+        **kwargs: Any,
+    ) -> Any:
+        """Run pinned native evaluation while preserving subsequent training."""
+        if self.scale_grads is not False:
+            raise ValueError("Pipeline evaluation requires scale_grads=False")
+        stage = self._stage
+        original_backward = stage.has_backward
+        original_retain_outputs = stage.retain_outputs
+        try:
+            with torch.no_grad():
+                if not self._stage_initialized:
+                    # PyTorch 2.9.1 must allocate backward-capable receive buffers
+                    # before native eval temporarily disables backward execution.
+                    stage.has_backward = self._has_backward
+                    args_split, kwargs_split = self._split_inputs(args, kwargs)
+                    self._initialize_stage(args_split[0], kwargs_split[0])
+                return super().eval(
+                    *args,
+                    target=target,
+                    losses=losses,
+                    return_outputs=return_outputs,
+                    **kwargs,
+                )
+        finally:
+            stage.fwd_cache.clear()
+            stage.output_chunks.clear()
+            self._internal_losses.clear()
+            stage.has_backward = original_backward
+            stage.retain_outputs = original_retain_outputs
 
     def step(self, *args: Any, return_outputs: bool = False, **kwargs: Any) -> Any:
         self._stage.retain_outputs = return_outputs

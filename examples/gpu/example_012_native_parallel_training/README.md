@@ -377,6 +377,37 @@ This benchmark does not qualify checkpoint recovery with compression enabled.
 
 ## Measurement and Qualification
 
+### Independent Validation
+
+`matched_dp4_bf16_comm.yaml` evaluates a separate corpus before and after training
+(after checkpoint restoration when resuming). Prepare genuine validation-split
+text separately, with the same tokenizer and EOS-per-document policy:
+
+```bash
+python -m parascale.cli prepare-text \
+  --input /data/wikitext/validation.txt \
+  --tokenizer /models/tinyllama \
+  --output /data/wikitext-validation-tokens
+```
+
+The optional root `evaluation` section requires `data_path` and `max_batches`.
+Each evaluation batch is one complete accumulation window, not one microbatch.
+The supplied budget evaluates the first 128 distinct blocks: 32,768 input tokens
+and 32,640 next-token targets at length256, with no shuffled or repeated samples.
+For matched comparisons across layouts, keep the global window size and evaluated
+block prefix identical. Remove the entire section to disable evaluation.
+
+Results appear under `evaluation.initial` and `evaluation.final`, including
+global step, corpus identity, block coverage, excluded tokens, token-weighted NLL,
+perplexity and separate evaluation seconds. These are disjoint-block metrics,
+not standard sliding-window WikiText perplexity. Identical training/validation
+payload or source hashes are rejected; this does not establish semantic
+deduplication or absence of pretraining contamination. Evaluation restores the
+training RNG and uses a separate cursor. Its time is excluded from update-loop
+training throughput but belongs in externally measured complete CLI wall time.
+Source-bound checkpoints from a previous implementation revision cannot be
+resumed by editing their manifest; use the matching source or a fresh run.
+
 FP32 masters, gradients, and AdamW state still consume substantial memory even
 with BF16 computation; PP partitions layers but DP replicates their states.
 Reported valid prediction tokens use `batch * (sequence_length - 1)` per

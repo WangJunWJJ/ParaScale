@@ -36,6 +36,16 @@ def build(data):
     return build_stage_training_plan(data)
 
 
+def test_evaluation_plan_is_optional_explicit_and_roundtrips():
+    data = settings()
+    assert build(data).evaluation is None
+    data["evaluation"] = {"data_path": "/local/validation", "max_batches": 3}
+    plan = build(data)
+    assert plan.evaluation.data_path == "/local/validation"
+    assert plan.to_dict()["evaluation"] == data["evaluation"]
+    assert build(plan.config_data).evaluation == plan.evaluation
+
+
 @pytest.mark.parametrize("hook", [None, "auto", "none", "bf16_compress"])
 @pytest.mark.parametrize("dp", [2, 4])
 def test_ddp_policy_is_explicit_and_roundtrips(hook, dp):

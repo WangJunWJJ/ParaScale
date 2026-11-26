@@ -141,8 +141,9 @@ def test_recovery_rejects_newer_snapshot_beyond_update_window(tmp_path):
 
 @pytest.mark.parametrize("checkpoint_format", ["rank", "dcp"])
 @pytest.mark.parametrize("ddp_comm_hook", ["none", "bf16_compress"])
+@pytest.mark.parametrize("evaluation", [False, True])
 def test_runner_wires_real_cursor_optimizer_and_runtime_checkpoint(
-    tmp_path, monkeypatch, checkpoint_format, ddp_comm_hook
+    tmp_path, monkeypatch, checkpoint_format, ddp_comm_hook, evaluation
 ):
     import torch
 
@@ -164,8 +165,22 @@ def test_runner_wires_real_cursor_optimizer_and_runtime_checkpoint(
     config["parascale"]["parallel"] = {"data_parallel_size": world_size}
     stage = torch.nn.Linear(4, 1)
     stage.stage_index = 0
+    stage.vocab_size = 64
     stage.tensor_parallel_plan = lambda: {}
     cursor = TokenBatchCursor(corpus(tmp_path), batch_size=2, sequence_length=4)
+    if evaluation:
+        config["evaluation"] = {"data_path": "/validation", "max_batches": 1}
+        heldout = TokenBatchCursor(
+            cursor.corpus,
+            batch_size=2,
+            sequence_length=4,
+            world_size=world_size,
+            repeat=False,
+            shuffle=False,
+        )
+        monkeypatch.setattr(
+            runner, "build_causal_lm_evaluation_cursor", lambda *args, **kwargs: heldout
+        )
     monkeypatch.setattr(runner, "_initialize", lambda _: torch.device("cpu"))
     monkeypatch.setattr(
         runner,
@@ -195,7 +210,16 @@ def test_runner_wires_real_cursor_optimizer_and_runtime_checkpoint(
     class CpuExecutor:
         def __init__(self, module, *args, **kwargs):
             self.module = module
+            self.config = args[0]
+            self.device = torch.device("cpu")
             self.ddp_comm_hook = kwargs["ddp_comm_hook"]
+
+        def evaluate(self, inputs, labels, **kwargs):
+            with torch.no_grad():
+                value = self.module(inputs.float()).square().mean()
+            return SimpleNamespace(
+                loss=value.item(), normalization_count=12 * world_size
+            )
 
         def forward_backward(self, inputs, labels, **kwargs):
             value = self.module(inputs.float()).square().mean()
@@ -221,3 +245,10 @@ def test_runner_wires_real_cursor_optimizer_and_runtime_checkpoint(
     assert captured[0]["consumed_samples"] == 8
     assert result["checkpoint"]["step"] == 2
     assert result["checkpoint"]["format"] == expected_format
+    if evaluation:
+        assert result["evaluation"]["initial"]["global_step"] == 0
+        assert result["evaluation"]["final"]["global_step"] == 2
+        assert result["evaluation"]["final"]["scored_tokens"] == 12 * world_size
+        assert heldout.position == 0
+    else:
+        assert result["evaluation"] is None

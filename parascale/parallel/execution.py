@@ -424,7 +424,7 @@ class DistributedTrainer:
             return self._execute_step(inputs, targets, return_outputs=return_outputs)
 
     def _execute_step(
-        self, inputs: Any, targets: Any, *, return_outputs: bool
+        self, inputs: Any, targets: Any, *, return_outputs: bool, backward: bool = True
     ) -> ParallelStepResult:
         """Execute with backward outside autocast, including under caller AMP."""
         import torch
@@ -444,7 +444,7 @@ class DistributedTrainer:
                 accumulate = (
                     self.config.dp_size > 1
                     and self.config.tp_size == 1
-                    and index < self.config.microbatches - 1
+                    and (not backward or index < self.config.microbatches - 1)
                 )
                 context = (
                     self.execution_module.no_sync() if accumulate else nullcontext()
@@ -456,24 +456,30 @@ class DistributedTrainer:
                     if not return_outputs:
                         # Autograd owns required tensors; avoid retaining extra logits.
                         del prediction
-                    loss.backward()
+                    if backward:
+                        loss.backward()
                 losses.append(loss.detach())
                 if return_outputs:
                     outputs.append(prediction.detach())
                     del prediction
                 del loss
             output = torch.cat(outputs) if return_outputs else None
-        elif self.pp_rank == 0:
-            self.schedule.step(inputs, return_outputs=return_outputs)
-        elif self.pp_rank == self.config.pp_size - 1:
-            output = self.schedule.step(
-                target=targets, losses=losses, return_outputs=return_outputs
-            )
         else:
-            self.schedule.step(return_outputs=return_outputs)
-        value = torch.zeros((), device=self.device)
+            step = self.schedule.step if backward else self.schedule.eval
+            if self.pp_rank == 0:
+                step(inputs, return_outputs=return_outputs)
+            elif self.pp_rank == self.config.pp_size - 1:
+                output = step(
+                    target=targets, losses=losses, return_outputs=return_outputs
+                )
+            else:
+                step(return_outputs=return_outputs)
+        value = torch.zeros(
+            (), device=self.device, dtype=torch.float32 if backward else torch.float64
+        )
         if losses:
-            value.copy_(torch.stack([loss.detach() for loss in losses]).sum())
+            stacked = torch.stack([loss.detach() for loss in losses])
+            value.copy_(stacked.sum() if backward else stacked.double().sum())
         if self.config.pp_size > 1:
             source = (
                 self.dp_rank * self.config.pp_size + self.config.pp_size - 1
@@ -490,6 +496,58 @@ class DistributedTrainer:
             output.detach() if return_outputs and output is not None else None,
             self._normalization_count,
         )
+
+    def evaluate(
+        self, inputs: Any, targets: Any, *, return_outputs: bool = False
+    ) -> ParallelStepResult:
+        """Evaluate one fixed-shape window on every rank without backward.
+
+        Uses the same DP-only normalization and explicit precision as training.
+        Preserves parameter gradients, module training flags, loss bookkeeping,
+        CPU/current-device Torch RNG and DDP forward-sync policy. No optimizer or
+        training cursor is consumed. Arbitrary user forward side effects are not
+        rolled back; custom modules must honor eval/no_grad semantics. A distributed
+        execution failure is terminal for the job, not a retryable transaction.
+        """
+        import torch
+        from torch.distributed.fsdp import FSDPModule
+        from torch.nn.parallel import DistributedDataParallel
+
+        modes = [
+            (module, module.training) for module in self.execution_module.modules()
+        ]
+        normalization, scale = self._normalization_count, self._loss_scale
+        wrapper = self.execution_module
+        sync_policy = (
+            (wrapper.require_forward_param_sync, wrapper.require_backward_grad_sync)
+            if isinstance(wrapper, DistributedDataParallel)
+            else None
+        )
+        devices = [self.device.index] if self.device.type == "cuda" else []
+        try:
+            with (
+                torch.random.fork_rng(devices=devices),
+                torch.no_grad(),
+                autocast_context("fp32", self.device),
+            ):
+                self.execution_module.eval()
+                self._prepare_step(inputs, targets)
+                return self._execute_step(
+                    inputs, targets, return_outputs=return_outputs, backward=False
+                )
+        finally:
+            for module, training in modes:
+                module.training = training
+            self._normalization_count, self._loss_scale = normalization, scale
+            if sync_policy is not None:
+                (
+                    wrapper.require_forward_param_sync,
+                    wrapper.require_backward_grad_sync,
+                ) = sync_policy
+            if isinstance(wrapper, FSDPModule):
+                # Root FSDP retains unsharded parameters after a no-grad forward;
+                # expose the optimizer-owned shards and their gradients again.
+                wrapper.reshard()
 
     def _prepare_step(self, inputs: Any, targets: Any) -> None:
         """Agree on preflight errors and DP-only counts before any model work."""

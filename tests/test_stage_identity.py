@@ -514,8 +514,14 @@ def test_bf16_communication_example_preserves_matched_training_budget():
     )
     expected["training"]["gradient_accumulation_steps"] = 4
     expected["runtime"]["run_dir"] = "/data/runs/tinyllama-matched-dp4-bf16-comm"
+    expected["evaluation"] = {
+        "data_path": "/data/wikitext-validation-tokens",
+        "max_batches": 2,
+    }
     assert settings == expected
     plan = build_stage_training_plan(settings)
+    assert plan.evaluation.data_path == expected["evaluation"]["data_path"]
+    assert plan.evaluation.max_batches == 2
     assert plan.ddp_comm_hook == "bf16_compress"
     assert plan.config.checkpoint_format == "dcp"
     assert plan.topology.world_size == 4

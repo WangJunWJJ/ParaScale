@@ -29,6 +29,9 @@ data:
   repeat: false
   shuffle_window_blocks: 65536
   num_workers: 0
+evaluation:
+  data_path: /data/wikitext-validation-tokens
+  max_batches: 2
 optimizer:
   type: adamw
   lr: 0.00001
