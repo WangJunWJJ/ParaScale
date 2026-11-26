@@ -64,6 +64,87 @@ def test_quantized_state_pack_and_unpack_do_not_use_python_range(monkeypatch):
     assert restored.shape == (256,)
 
 
+@pytest.mark.parametrize("group_size", [64, 128, 256])
+@pytest.mark.parametrize("padded", [False, True])
+@pytest.mark.parametrize("signed", [False, True])
+@pytest.mark.parametrize(
+    "dtype,magnitude",
+    [
+        (torch.float32, 1e-10),
+        (torch.float32, 1e-12),
+        (torch.float64, 1e-10),
+        (torch.float64, 1e-12),
+        (torch.bfloat16, 1e-12),
+        (torch.float16, 2**-8),
+    ],
+)
+def test_quantization_preserves_tiny_scale(
+    group_size, padded, signed, dtype, magnitude
+):
+    size = group_size * 2 + (group_size // 3 if padded else 0)
+    values = torch.linspace(-1 if signed else 0, 1, size, dtype=dtype)
+    tiny = values * magnitude
+    unit_state = QuantizedState(values, group_size=group_size)
+    tiny_state = QuantizedState(tiny, group_size=group_size)
+    restored = tiny_state.dequantize()
+    assert restored.shape == tiny.shape
+    assert torch.isfinite(restored).all()
+    assert tiny_state.scale.dtype == tiny_state.zero_point.dtype == dtype
+    epsilon = torch.finfo(dtype).eps
+    span = 2 if signed else 1
+    relative_error = (restored.double() - tiny.double()).abs().max() / tiny.abs().max()
+    assert relative_error.item() <= span / 30 + 4 * epsilon
+    torch.testing.assert_close(
+        restored.double() / magnitude,
+        unit_state.dequantize().double(),
+        rtol=0,
+        atol=span / 15 + 4 * epsilon,
+    )
+    if not padded and dtype in (torch.float32, torch.float64):
+        torch.testing.assert_close(
+            tiny_state.quantized_data, unit_state.quantized_data, rtol=0, atol=0
+        )
+    updated = QuantizedState(torch.zeros_like(tiny), group_size=group_size)
+    updated.update(tiny)
+    torch.testing.assert_close(updated.dequantize(), restored, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("group_size", [64, 128, 256])
+@pytest.mark.parametrize("padded", [False, True])
+@pytest.mark.parametrize("value", [0.0, -0.25, 0.25])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32, torch.float64])
+def test_quantization_preserves_zero_and_constant_groups(group_size, padded, value, dtype):
+    size = group_size * 2 + (1 if padded else 0)
+    values = torch.full((size,), value, dtype=dtype)
+    codes, scale, offset = QuantizedState._quantize(values, group_size)
+    assert torch.count_nonzero(codes[:2]) == 0
+    assert torch.count_nonzero(scale[:2]) == 0
+    torch.testing.assert_close(offset[:2], values[:2], rtol=0, atol=0)
+    restored = QuantizedState(values, group_size).dequantize().to(dtype)
+    if value == 0 or not padded:
+        torch.testing.assert_close(restored, values, rtol=0, atol=0)
+    else:
+        torch.testing.assert_close(
+            restored, values, rtol=2 * torch.finfo(dtype).eps, atol=0
+        )
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_quantization_guards_zero_range_per_group(dtype):
+    values = torch.cat(
+        [
+            torch.full((128,), -1e-12, dtype=dtype),
+            torch.zeros(128, dtype=dtype),
+            torch.full((128,), 1e-12, dtype=dtype),
+            torch.linspace(0, 1e-12, 128, dtype=dtype),
+        ]
+    )
+    state = QuantizedState(values)
+    restored = state.dequantize().to(dtype)
+    torch.testing.assert_close(restored[:384], values[:384], rtol=0, atol=0)
+    assert (restored[384:] - values[384:]).abs().max().item() <= 1e-12 / 30
+
+
 def test_four_bit_adamw_reuses_persistent_quantized_state_buffers():
     model = nn.Linear(4, 2)
     optimizer = FourBitAdamW(model.parameters(), lr=0.01)

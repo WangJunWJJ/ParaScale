@@ -45,10 +45,13 @@ class QuantizedState:
         grouped = flat_tensor.view(num_groups, group_size)
         group_min = grouped.min(dim=1, keepdim=True)[0]
         group_max = grouped.max(dim=1, keepdim=True)[0]
-        scale = ((group_max - group_min) / 15.0).squeeze(1)
+        group_range = group_max - group_min
+        scale = (group_range / 15.0).squeeze(1)
         zero_point = group_min.squeeze(1)
+        # Preserve tiny nonzero ranges; constant groups encode as zero.
+        divisor = torch.where(group_range != 0, group_range, torch.ones_like(group_range))
         quantized = (
-            ((grouped - group_min) / (group_max - group_min + 1e-08) * 15)
+            ((grouped - group_min) / divisor * 15)
             .round()
             .clamp(0, 15)
             .to(torch.uint8)
