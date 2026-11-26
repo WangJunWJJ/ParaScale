@@ -26,3 +26,7 @@ held-out multi-positive retrieval through the product inference adapter.
 Diffusion text-to-image generation with bounded PNG/manifest output, explicit
 sampling budgets and optional UNet compilation. Performance and image-quality
 acceptance require pretrained-model evidence beyond the small component tests.
+
+[Example 017](example_017_llama_pruning/README.md) physically removes coupled
+Llama MLP channels, preserves standard HF export/reload, and demonstrates
+functional validation. Magnitude ranking is a baseline, not a quality guarantee.
