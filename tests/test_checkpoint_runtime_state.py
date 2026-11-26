@@ -85,7 +85,8 @@ def test_full_rng_roundtrip_fake_npu():
 
 
 @pytest.mark.parametrize("use_builder", [False, True])
-def test_resume_validates_final_optimizer_before_payload(tmp_path, monkeypatch, use_builder):
+@pytest.mark.parametrize("identity", ["wrong_version", "missing_metadata", "missing_optimizer"])
+def test_resume_validates_final_optimizer_before_payload(tmp_path, monkeypatch, use_builder, identity):
     from parascale.optimizers.spec import OptimizerSpec
 
     fake_torch = FakeTorch()
@@ -97,6 +98,10 @@ def test_resume_validates_final_optimizer_before_payload(tmp_path, monkeypatch, 
     controller = CheckpointController(worker)
     controller.save(manager)
     wrong = SimpleNamespace(_parascale_optimizer_metadata={**metadata, "torchao_version": "wrong"})
+    if identity == "missing_metadata":
+        wrong = SimpleNamespace()
+    elif identity == "missing_optimizer":
+        wrong = None
     worker.training_backend.optimizer = wrong
 
     def forbidden(*args, **kwargs):
@@ -114,7 +119,7 @@ def test_resume_validates_final_optimizer_before_payload(tmp_path, monkeypatch, 
         )
         worker._local_rank = lambda: 0
         options = {"model": object(), "optimizer_builder": lambda model: wrong}
-    with pytest.raises(ValueError, match="optimizer metadata mismatch.*torchao_version"):
+    with pytest.raises(ValueError, match="optimizer metadata"):
         controller.load(manager, 3, **options)
 
 
@@ -142,6 +147,37 @@ def test_rank_sidecars_and_precision_roundtrip(tmp_path, monkeypatch):
     assert torch.cpu == [11]
     assert worker.precision.value == {"amp_scaler": {"scale": 128.0}}
     assert worker.state.data_state["state"] == {"rank": 1, "position": 6}
+
+
+@pytest.mark.parametrize("provisional", ["missing", "different"])
+def test_resume_validates_builder_result_not_discarded_optimizer(tmp_path, monkeypatch, provisional):
+    from parascale.optimizers.spec import OptimizerSpec
+
+    monkeypatch.setitem(sys.modules, "torch", FakeTorch())
+    worker = engine()
+    optimizer = SimpleNamespace(_parascale_optimizer_metadata=OptimizerSpec().to_metadata())
+    backend = worker.training_backend
+    backend.optimizer = optimizer
+    manager = CheckpointManager(str(tmp_path))
+    controller = CheckpointController(worker)
+    controller.save(manager)
+    backend.setup = lambda: (object(), None)
+    backend.setup_optimizer = lambda value: value
+    monkeypatch.setattr("parascale.runtime.backends.create_runtime_training_backend", lambda **kwargs: backend)
+    worker._local_rank = lambda: 0
+    temporary = SimpleNamespace()
+    if provisional == "different":
+        temporary._parascale_optimizer_metadata = OptimizerSpec(type="four_bit_sgd").to_metadata()
+    built = []
+
+    def builder(model):
+        built.append(model)
+        return optimizer
+
+    restored = controller.load(manager, 3, model=object(), optimizer=temporary, optimizer_builder=builder)
+    assert len(built) == 1
+    assert backend.optimizer is optimizer
+    assert restored.metadata["backend_state_loaded"]
 
 
 @pytest.mark.parametrize(

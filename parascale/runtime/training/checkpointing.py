@@ -211,7 +211,8 @@ class CheckpointController:
                 raise ValueError(
                     "checkpoint training objective does not match the current teacher/configuration"
                 )
-            self._validate_optimizer_metadata(manifest, optimizer)
+            if optimizer_builder is None:
+                self._validate_optimizer_metadata(manifest, optimizer)
             schedule_identity = dict(getattr(self.engine, "scheduler_metadata", {}) or {})
             if manifest.metadata.get("scheduler", {}) != schedule_identity:
                 raise ValueError("checkpoint scheduler configuration mismatch")
@@ -262,7 +263,8 @@ class CheckpointController:
 
         self._collective_call(
             lambda: self._validate_optimizer_metadata(
-                manifest, getattr(self.engine.training_backend, "optimizer", None)
+                manifest, getattr(self.engine.training_backend, "optimizer", None),
+                require_current=True,
             )
         )
 
@@ -376,9 +378,15 @@ class CheckpointController:
         return requested
 
     @staticmethod
-    def _validate_optimizer_metadata(manifest: Any, optimizer: Any) -> None:
+    def _validate_optimizer_metadata(
+        manifest: Any, optimizer: Any, *, require_current: bool = False
+    ) -> None:
         saved = dict(manifest.metadata.get("optimizer", {}) or {})
         current = dict(getattr(optimizer, "_parascale_optimizer_metadata", {}) or {})
+        # The preflight may precede optimizer construction; the bound optimizer
+        # must identify its state format before any backend payload is loaded.
+        if saved and not current and require_current:
+            raise ValueError("current optimizer metadata is required to resume this checkpoint")
         if current.get("type") == "torchao_adamw4bit" and not saved:
             raise ValueError("checkpoint optimizer metadata is required for torchao_adamw4bit")
         if not saved or not current:
