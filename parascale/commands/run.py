@@ -43,9 +43,10 @@ TRAIN_EXAMPLES = """examples:
 """
 
 
-def register_run_parsers(subparsers: argparse._SubParsersAction) -> None:
+def register_train_parser(subparsers: argparse._SubParsersAction, name: str = "train") -> None:
+    """Register the same training contract for unified and product CLIs."""
     train_parser = subparsers.add_parser(
-        "train",
+        name,
         help="Validate and launch a ParaScale training run.",
         epilog=TRAIN_EXAMPLES,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -72,8 +73,11 @@ def register_run_parsers(subparsers: argparse._SubParsersAction) -> None:
     )
     train_parser.set_defaults(func=cmd_train)
 
+
+def register_infer_parser(subparsers: argparse._SubParsersAction, name: str = "infer") -> None:
+    """Register offline inference without training or serving commands."""
     infer_parser = subparsers.add_parser(
-        "infer",
+        name,
         help="Run a ParaScale inference workload through the unified runtime.",
     )
     infer_parser.add_argument(
@@ -84,6 +88,10 @@ def register_run_parsers(subparsers: argparse._SubParsersAction) -> None:
     )
     infer_parser.set_defaults(func=cmd_infer)
 
+
+def register_run_parsers(subparsers: argparse._SubParsersAction) -> None:
+    register_train_parser(subparsers)
+    register_infer_parser(subparsers)
     serve_parser = subparsers.add_parser(
         "serve", help="Validate and launch a ParaScale serving runtime."
     )

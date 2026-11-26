@@ -97,7 +97,28 @@ def main() -> int:
             ["parascale", "plan", "--config", str(migrated_config), "--json"],
             workdir,
         )
-        run(["parascale", "train", "--config", str(config)], workdir)
+        for tool in ("parascale-train", "parascale-infer"):
+            run([tool, "--version"], workdir)
+            run([tool, "--help"], workdir)
+        run(["parascale-train", "run", "--config", str(config)], workdir)
+        resumed = json.loads(config.read_text(encoding="utf-8"))
+        resumed["training"]["max_steps"] = 1
+        config.write_text(json.dumps(resumed), encoding="utf-8")
+        recovery = run(["parascale-train", "run", "--config", str(config), "--resume-latest"], workdir)
+        recovered = json.loads(recovery.stdout)
+        if recovered["global_step"] != 3 or recovered["resumed_from"]["step"] != 2:
+            raise RuntimeError("installed training tool did not resume the previous updates")
+
+        inference = workdir / "inference.json"
+        inference.write_text(json.dumps({
+            "inference": {"workload": "clip_synthetic", "batch_size": 2,
+                          "num_batches": 2, "warmup_steps": 0},
+            "runtime": {"accelerator": "cpu"},
+        }), encoding="utf-8")
+        result = run(["parascale-infer", "run", "--config", str(inference)], workdir)
+        prediction = json.loads(result.stdout)
+        if prediction["task"] != "multimodal_embedding" or not prediction["outputs"]:
+            raise RuntimeError("installed inference entrypoint returned no output")
         validation = run(
             [
                 "parascale",
