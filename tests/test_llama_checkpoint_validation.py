@@ -6,6 +6,7 @@
 """Fingerprint controls for the fresh-process Llama checkpoint validator."""
 
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -153,3 +154,125 @@ def test_checkpoint_validator_declares_actual_execution_precision():
         precision="bf16",
     )
     assert value["precision"] == "bf16"
+
+
+@pytest.mark.parametrize("mode", ["baseline", "resume"])
+def test_recovery_evaluation_is_explicit_and_resume_only(monkeypatch, mode):
+    from tests.benchmarks.scripts.validate_stage_recovery import parse_args
+
+    argv = [
+        "validate",
+        "--mode",
+        mode,
+        "--model-path",
+        "model",
+        "--corpus-path",
+        "train",
+        "--checkpoint-dir",
+        "checkpoint",
+        "--output-dir",
+        "output",
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+    assert parse_args().evaluation_corpus is None
+    monkeypatch.setattr(sys, "argv", [*argv, "--evaluation-corpus", "validation"])
+    if mode == "baseline":
+        with pytest.raises(SystemExit):
+            parse_args()
+    else:
+        args = parse_args()
+        assert args.evaluation_corpus == Path("validation")
+        assert args.evaluation_max_batches == 1
+        for invalid in ("0", "-1"):
+            monkeypatch.setattr(
+                sys,
+                "argv",
+                [
+                    *argv,
+                    "--evaluation-corpus",
+                    "validation",
+                    "--evaluation-max-batches",
+                    invalid,
+                ],
+            )
+            with pytest.raises(SystemExit):
+                parse_args()
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "none",
+        "parameter",
+        "buffer",
+        "optimizer",
+        "gradient",
+        "mode",
+        "rng",
+        "train_cursor",
+        "validation_cursor",
+        "runtime",
+    ],
+)
+def test_recovery_evaluation_rejects_state_mutation(monkeypatch, damage):
+    from parascale.runtime.training import stage_evaluation
+    from tests.benchmarks.scripts.validate_stage_recovery import evaluate_restored_state
+
+    model = torch.nn.Linear(2, 2)
+    model.register_buffer("counter", torch.tensor(0))
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.01)
+    model(torch.ones(1, 2)).sum().backward()
+    optimizer.step()
+    trainer = SimpleNamespace(
+        module=model, execution_module=model, device=torch.device("cpu")
+    )
+    positions = {"train_cursor": 4, "validation_cursor": 0, "runtime": 2}
+    training = SimpleNamespace(
+        state_dict=lambda: {"position": positions["train_cursor"]}
+    )
+    validation = SimpleNamespace(
+        state_dict=lambda: {"position": positions["validation_cursor"]}
+    )
+    runtime = SimpleNamespace(
+        dataloader=training,
+        engine=SimpleNamespace(state=SimpleNamespace(global_step=2)),
+        capture=lambda: {"step": positions["runtime"]},
+    )
+    calls = []
+
+    def evaluate(actual, cursor, *, max_batches, global_step):
+        calls.append((actual, cursor, max_batches, global_step))
+        first = next(model.parameters())
+        with torch.no_grad():
+            if damage == "parameter":
+                first.add_(1)
+            elif damage == "buffer":
+                model.counter.add_(1)
+            elif damage == "optimizer":
+                optimizer.state[first]["exp_avg"].add_(1)
+            elif damage == "gradient":
+                first.grad.add_(1)
+            elif damage == "mode":
+                model.eval()
+            elif damage == "rng":
+                torch.rand(())
+            elif damage in positions:
+                positions[damage] += 1
+        return {"global_step": global_step, "scored_tokens": 12, "nll": 1.5}
+
+    monkeypatch.setattr(stage_evaluation, "evaluate_stage", evaluate)
+    with torch.random.fork_rng(devices=[]):
+        if damage == "none":
+            result = evaluate_restored_state(
+                trainer, optimizer, runtime, validation, max_batches=1
+            )
+            assert result["state_before"] == result["state_after"]
+            assert result["evaluation"]["scored_tokens"] == 12
+        else:
+            with pytest.raises(
+                (AssertionError, RuntimeError), match="evaluation changed"
+            ):
+                evaluate_restored_state(
+                    trainer, optimizer, runtime, validation, max_batches=1
+                )
+    assert calls == [(trainer, validation, 1, 2)]

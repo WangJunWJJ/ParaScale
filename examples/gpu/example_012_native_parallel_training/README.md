@@ -408,6 +408,40 @@ training throughput but belongs in externally measured complete CLI wall time.
 Source-bound checkpoints from a previous implementation revision cannot be
 resumed by editing their manifest; use the matching source or a fresh run.
 
+### Evaluation After Fresh-Process Recovery
+
+The recovery validator compares uninterrupted update3 with update3 in a new
+process restored from update2. Only the resumed process runs held-out evaluation;
+it must preserve parameters, optimizer state, buffers, gradients, module modes,
+training/validation cursors, scheduler and RNG before the next update.
+
+```bash
+common=(
+  --model-path /models/tinyllama
+  --corpus-path /data/wikitext-train-tokens
+  --checkpoint-dir /data/checkpoints/evaluation-recovery
+  --output-dir /data/runs/evaluation-recovery
+  --dp 2 --tp 1 --pp 1 --checkpoint-format dcp
+  --ddp-comm-hook bf16_compress --checkpoint-state-probe
+)
+torchrun --nnodes=1 --nproc_per_node=2 \
+  --master_addr=127.0.0.1 --master_port=29500 \
+  -m tests.benchmarks.scripts.validate_stage_recovery \
+  --mode baseline "${common[@]}"
+torchrun --nnodes=1 --nproc_per_node=2 \
+  --master_addr=127.0.0.1 --master_port=29500 \
+  -m tests.benchmarks.scripts.validate_stage_recovery \
+  --mode resume "${common[@]}" \
+  --evaluation-corpus /data/wikitext-validation-tokens \
+  --evaluation-max-batches 1
+```
+
+Use a new checkpoint/output directory for each comparison. The optional
+evaluation arguments are resume-only; omission preserves the original recovery
+probe. Per-rank evaluation records contain before/after state fingerprints and
+held-out metrics. Continuation records retain the full update3 comparison.
+This instrumented three-update check is not a throughput or convergence test.
+
 FP32 masters, gradients, and AdamW state still consume substantial memory even
 with BF16 computation; PP partitions layers but DP replicates their states.
 Reported valid prediction tokens use `batch * (sequence_length - 1)` per
