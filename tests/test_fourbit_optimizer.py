@@ -11,6 +11,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import unittest
 
+import pytest
 import torch
 import torch.nn as nn
 
@@ -18,8 +19,10 @@ from parascale.optimizers import FourBitAdamW, FourBitSGD, QuantizedState
 
 
 def _assert_tensor_state_tree(value):
-    if torch.is_tensor(value) or value is None or isinstance(
-        value, (bool, int, float, str)
+    if (
+        torch.is_tensor(value)
+        or value is None
+        or isinstance(value, (bool, int, float, str))
     ):
         return
     if isinstance(value, dict):
@@ -102,8 +105,81 @@ def test_block_scaled_fp16_residual_preserves_tiny_second_moment_error():
     torch.testing.assert_close(restored_error, absolute_error, rtol=1e-3, atol=1e-12)
 
 
-class SimpleModel(nn.Module):
+@pytest.mark.parametrize("optimizer_type,slots", [(FourBitAdamW, 2), (FourBitSGD, 1)])
+@pytest.mark.parametrize("size", [1, 127, 129, 32768])
+@pytest.mark.parametrize(
+    "compensate,dtype", [(False, None), (True, None), (True, "fp16"), (True, "fp32")]
+)
+def test_memory_stats_include_all_resident_compensation(
+    optimizer_type, slots, size, compensate, dtype
+):
+    parameter = nn.Parameter(torch.ones(size))
+    unused = nn.Parameter(torch.ones(65536))
+    optimizer = optimizer_type(
+        [parameter, unused],
+        compensate_quant_error=compensate,
+        error_compensation_dtype=dtype,
+    )
+    empty = optimizer.get_memory_stats()
+    assert empty["state_bytes"] == empty["standard_bytes"] == 0
+    assert empty["savings_percent"] == 0
+    parameter.grad = torch.ones_like(parameter)
+    optimizer.step()
+    packed = slots * ((size + 127) // 128) * (64 + 8)
+    residual = slots * size * (2 if dtype == "fp16" else 4) if compensate else 0
+    stats = optimizer.get_memory_stats()
+    assert stats["total_params"] == size + 65536
+    assert stats["initialized_params"] == size
+    assert stats["quantized_bytes"] == packed
+    assert stats["state_bytes"] == packed + residual
+    assert stats["state_bytes_by_device"] == {"cpu": packed + residual}
+    assert stats["standard_bytes"] == slots * size * 4
+    assert stats["savings_percent"] == pytest.approx(
+        100 * (1 - (packed + residual) / (slots * size * 4))
+    )
+    optimizer.state[parameter]["alias"] = optimizer.state[parameter][
+        "exp_avg" if slots == 2 else "momentum_buffer"
+    ].quantized_data[1:2]
+    assert optimizer.get_memory_stats()["state_bytes"] == packed + residual
+    optimizer.state[parameter]["backing_view"] = torch.zeros(100)[17:18]
+    assert optimizer.get_memory_stats()["state_bytes"] == packed + residual + 400
 
+
+def test_quantized_memory_usage_uses_actual_storage_dtype():
+    state = QuantizedState(torch.ones(128, dtype=torch.float16))
+    assert state.memory_usage() == 64 + 2 + 2
+
+
+def test_memory_stats_use_resident_dtype_after_checkpoint_reload():
+    parameter = nn.Parameter(torch.ones(129))
+    source = FourBitAdamW([parameter], error_compensation_dtype="fp16")
+    parameter.grad = torch.ones_like(parameter)
+    source.step()
+    restored_parameter = nn.Parameter(parameter.detach().clone())
+    target = FourBitAdamW([restored_parameter], error_compensation_dtype="fp16")
+    target.load_state_dict(source.state_dict())
+    state = target.state[restored_parameter]
+    expected = sum(state[key].memory_usage() for key in ("exp_avg", "exp_avg_sq"))
+    expected += sum(
+        state[key].numel() * state[key].element_size()
+        for key in ("exp_avg_error", "exp_avg_sq_error")
+    )
+    assert target.get_memory_stats()["state_bytes"] == expected
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="Requires CUDA")
+def test_memory_stats_separate_cpu_and_cuda_storage():
+    parameter = nn.Parameter(torch.ones(128, device="cuda"))
+    optimizer = FourBitAdamW([parameter], compensate_quant_error=False)
+    parameter.grad = torch.ones_like(parameter)
+    optimizer.step()
+    optimizer.state[parameter]["host_state"] = torch.zeros(10)
+    stats = optimizer.get_memory_stats()
+    assert stats["state_bytes_by_device"] == {str(parameter.device): 144, "cpu": 40}
+    assert stats["state_bytes"] == 184
+
+
+class SimpleModel(nn.Module):
     def __init__(self, input_dim=10, hidden_dim=20, output_dim=5):
         super().__init__()
         self.fc1 = nn.Linear(input_dim, hidden_dim)
@@ -118,7 +194,6 @@ class SimpleModel(nn.Module):
 
 
 class TestQuantizedState(unittest.TestCase):
-
     def test_quantize_dequantize(self):
         original = torch.randn(100, 50)
         qs = QuantizedState(tensor=original, group_size=64)
@@ -173,7 +248,6 @@ class TestQuantizedState(unittest.TestCase):
 
 
 class TestFourBitAdamW(unittest.TestCase):
-
     def setUp(self):
         torch.manual_seed(42)
         self.model = SimpleModel()
@@ -208,7 +282,8 @@ class TestFourBitAdamW(unittest.TestCase):
         stats = optimizer.get_memory_stats()
         self.assertIn("total_params", stats)
         self.assertIn("savings_percent", stats)
-        self.assertGreater(stats["savings_percent"], 0)
+        self.assertGreater(stats["state_bytes"], stats["standard_bytes"])
+        self.assertLess(stats["savings_percent"], 0)
 
     def test_state_dict(self):
         optimizer = FourBitAdamW(self.model.parameters(), lr=0.001)
@@ -306,7 +381,6 @@ class TestFourBitAdamW(unittest.TestCase):
 
 
 class TestFourBitSGD(unittest.TestCase):
-
     def setUp(self):
         torch.manual_seed(42)
         self.model = SimpleModel()
@@ -398,7 +472,6 @@ class TestFourBitSGD(unittest.TestCase):
 
 
 class TestComparisonWithStandardOptimizers(unittest.TestCase):
-
     def test_adamw_comparison(self):
         torch.manual_seed(42)
         model1 = SimpleModel()
