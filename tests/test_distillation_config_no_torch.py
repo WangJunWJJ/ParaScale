@@ -2,10 +2,30 @@
 # @Time : 2026/11/13 下午4:30
 # @Author : Wang Jun
 # @Email: wj_xd@foxmail.com
+import json
 import subprocess
 import sys
+from fractions import Fraction
 
 import pytest
+
+
+@pytest.mark.parametrize("field", ["temperature", "alpha"])
+def test_accepted_real_numbers_are_json_serializable(field):
+    from parascale.distillation import DistillationConfig
+
+    config = DistillationConfig(**{field: Fraction(1, 2)})
+    payload = config.to_dict()
+    assert type(payload[field]) is float
+    assert DistillationConfig.from_dict(json.loads(json.dumps(payload))).to_dict() == payload
+
+
+def test_numpy_real_numbers_are_json_serializable():
+    from parascale.distillation import DistillationConfig
+
+    numpy = pytest.importorskip("numpy")
+    config = DistillationConfig(temperature=numpy.float32(2), alpha=numpy.float32(0.5))
+    assert json.loads(json.dumps(config.to_dict()))["alpha"] == 0.5
 
 
 @pytest.mark.parametrize("temperature", [1e-300, 1e-20, 2e19, 1e300])

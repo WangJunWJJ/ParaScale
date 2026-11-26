@@ -32,6 +32,29 @@ def test_analytic_kl_temperature_and_reduction():
     assert t.grad is None and s.grad is not None
 
 
+@pytest.mark.parametrize("task", ["classification", "causal_lm"])
+@pytest.mark.parametrize("dtype,classes,values", [
+    (torch.uint8, 200, [1, 156]),
+    (torch.uint8, 256, [1, 2]),
+    (torch.int8, 128, [1, 2]),
+    (torch.int16, 32768, [1, 2]),
+])
+def test_narrow_labels_match_int64_loss_and_gradients(task, dtype, classes, values):
+    labels = torch.tensor(values, dtype=dtype)
+    if task == "causal_lm":
+        labels = torch.cat((labels[:1], labels)).unsqueeze(0)
+    logits = torch.randn(*labels.shape, classes, requires_grad=True)
+    teacher = torch.randn_like(logits)
+    config = DistillationConfig(task=task)
+    actual = distillation_loss(logits, teacher, labels=labels, config=config)
+    expected = distillation_loss(logits, teacher, labels=labels.long(), config=config)
+    assert actual.valid_count == expected.valid_count == 2
+    torch.testing.assert_close(actual.total, expected.total, rtol=0, atol=0)
+    actual_grad = torch.autograd.grad(actual.total, logits, retain_graph=True)[0]
+    expected_grad = torch.autograd.grad(expected.total, logits)[0]
+    torch.testing.assert_close(actual_grad, expected_grad, rtol=0, atol=0)
+
+
 def test_causal_shift_padding_ignore_and_gradients():
     s = torch.randn(2, 5, 4, requires_grad=True)
     t = torch.randn_like(s)

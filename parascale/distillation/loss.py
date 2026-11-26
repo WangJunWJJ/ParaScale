@@ -92,6 +92,8 @@ def distillation_loss(
             raise TypeError("labels must be an integer tensor (not bool)")
         if labels.shape != shape or labels.device != device:
             raise ValueError("labels must match logits positions and device")
+        # Scalar comparisons in narrow dtypes can wrap ignore_index/class count.
+        labels = labels.long()
         valid = labels != config.ignore_index
         if ((labels[valid] < 0) | (labels[valid] >= student_logits.shape[-1])).any():
             raise ValueError("labels are outside the classes/vocabulary range")
@@ -123,7 +125,7 @@ def distillation_loss(
     hard = s.new_zeros(())
     soft = s.new_zeros(())
     if config.alpha < 1:
-        hard = F.cross_entropy(s, labels[valid].long())
+        hard = F.cross_entropy(s, labels[valid])
     if config.alpha > 0:
         log_s = F.log_softmax(s / config.temperature, dim=-1)
         log_t = F.log_softmax(t / config.temperature, dim=-1)
