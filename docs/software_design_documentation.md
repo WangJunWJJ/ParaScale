@@ -183,6 +183,12 @@ feature_weight=0 跳过特征捕获、投影计算和教师推理。训练结束
 
 scheduler、batcher、KV cache 等工程模块不代表已实现大模型 continuous token batching、paged attention 或生成式 streaming。未来应先完成目标模型的标准化产物与 infer 适配，再讨论网络协议、部署、版本切换和回滚。
 
+### 9.1 Diffusion 工作负载边界
+
+`workloads/specs/diffusion.py` 负责严格配置与采样预算，`workloads/diffusion.py` 负责本地 Diffusers pipeline 加载、按请求种子生成和有限像素校验。`runtime/inference/diffusion.py` 复用通用 `InferenceRunner` 的同步计时与内存统计，负责输出路径检查、逐张 PNG 写入和最终清单发布；CLI 仍通过统一 `infer` 入口路由。
+
+Diffusers 是可选依赖，不影响其他 workload 的基础导入。模型、调度器、安全检查和输入身份记录到执行元数据；编译仅作用于 UNet。生成耗时与图片编码/磁盘 I/O 分离，后者仍包含在任务总耗时中。失败不发布成功清单，模型资源在成功和异常路径均释放；不把这一离线适配声明为 HTTP 服务或任意 diffusion 架构支持。
+
 ## 10. 测试与性能证据
 
 统一入口为 `python tests/run_tests.py`，覆盖语法与 pytest。no-torch 环境验证配置和协议，CPU/GPU 环境验证真实张量行为。功能正确性、预训练精度和吞吐是独立验收维度。

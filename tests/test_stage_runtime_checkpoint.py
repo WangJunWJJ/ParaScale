@@ -28,6 +28,34 @@ from tests.test_text_cursor import corpus  # noqa: E402
 runtime = _checkpoint_runtime
 
 
+@pytest.mark.parametrize("checkpoint_format", ["rank", "dcp"])
+def test_recovery_probe_selects_checkpoint_format(monkeypatch, checkpoint_format):
+    import sys
+
+    from tests.benchmarks.scripts.validate_stage_recovery import parse_args
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "validate_stage_recovery",
+            "--mode",
+            "baseline",
+            "--model-path",
+            "model",
+            "--corpus-path",
+            "corpus",
+            "--checkpoint-dir",
+            "checkpoints",
+            "--output-dir",
+            "results",
+            "--checkpoint-format",
+            checkpoint_format,
+        ],
+    )
+    assert parse_args().checkpoint_format == checkpoint_format
+
+
 def setup_runtime(tmp_path, optimizer, *, schedule=True):
     from parascale.runtime.training.stage_checkpoint import StageTrainingCheckpoint
 

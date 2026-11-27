@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Dict, Tuple
 
@@ -21,9 +23,21 @@ _COMMON_KEYS = {
 }
 _ALLOWED_KEYS = {
     "adamw": {"type", "lr", "betas", "eps", "weight_decay"},
+    "torchao_adamw4bit": {"type", "lr", "betas", "eps", "weight_decay"},
     "four_bit_adamw": _COMMON_KEYS | {"betas", "eps"},
     "four_bit_sgd": _COMMON_KEYS | {"momentum", "dampening", "nesterov"},
 }
+
+
+def _nonnegative_float(value: Any, field: str) -> float:
+    """Parse numeric configuration while rejecting booleans and nonfinite values."""
+    try:
+        result = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"optimizer.{field} must be a finite nonnegative number") from exc
+    if isinstance(value, bool) or not math.isfinite(result) or result < 0:
+        raise ValueError(f"optimizer.{field} must be a finite nonnegative number")
+    return result
 
 
 @dataclass(frozen=True)
@@ -46,7 +60,8 @@ class OptimizerSpec:
     @classmethod
     def from_config(cls, config_data: Dict[str, Any]) -> "OptimizerSpec":
         optimizer = config_data.get("optimizer", {})
-        optimizer = optimizer if isinstance(optimizer, dict) else {}
+        if not isinstance(optimizer, Mapping):
+            raise ValueError("optimizer must be a mapping")
         optimizer_type = str(optimizer.get("type", "adamw") or "adamw").lower()
         if optimizer_type not in _ALLOWED_KEYS:
             supported = ", ".join(sorted(_ALLOWED_KEYS))
@@ -58,12 +73,23 @@ class OptimizerSpec:
             raise ValueError(
                 f"optimizer field {unexpected[0]!r} is not valid for {optimizer_type}"
             )
-        betas = tuple(optimizer.get("betas", (0.9, 0.999)))
-        if len(betas) != 2 or any(not 0.0 <= float(beta) < 1.0 for beta in betas):
+        betas = optimizer.get("betas", (0.9, 0.999))
+        if not isinstance(betas, (list, tuple)) or len(betas) != 2:
             raise ValueError("optimizer.betas must contain two values in [0, 1)")
-        group_size = int(optimizer.get("group_size", 128) or 128)
-        if group_size <= 0 or group_size % 2:
+        betas = tuple(_nonnegative_float(beta, "betas") for beta in betas)
+        if any(beta >= 1.0 for beta in betas):
+            raise ValueError("optimizer.betas must contain two values in [0, 1)")
+        group_size = optimizer.get("group_size", 128)
+        if type(group_size) is not int or group_size <= 0 or group_size % 2:
             raise ValueError("optimizer.group_size must be a positive even integer")
+        for field in ("nesterov", "compensate_quant_error"):
+            if field in optimizer and type(optimizer[field]) is not bool:
+                raise ValueError(f"optimizer.{field} must be a boolean")
+        momentum = _nonnegative_float(optimizer.get("momentum", 0.9), "momentum")
+        dampening = _nonnegative_float(optimizer.get("dampening", 0.0), "dampening")
+        nesterov = optimizer.get("nesterov", False)
+        if nesterov and (momentum <= 0 or dampening != 0):
+            raise ValueError("optimizer.nesterov requires positive momentum and zero dampening")
         compensation_dtype = optimizer.get("error_compensation_dtype")
         if compensation_dtype not in {None, "fp16", "fp32"}:
             raise ValueError(
@@ -83,26 +109,26 @@ class OptimizerSpec:
             )
         return cls(
             type=optimizer_type,
-            lr=float(optimizer.get("lr", 0.001)),
-            betas=(float(betas[0]), float(betas[1])),
-            eps=float(optimizer.get("eps", 1e-8)),
-            weight_decay=float(optimizer.get("weight_decay", 0.01)),
-            momentum=float(optimizer.get("momentum", 0.9)),
-            dampening=float(optimizer.get("dampening", 0.0)),
-            nesterov=bool(optimizer.get("nesterov", False)),
+            lr=_nonnegative_float(optimizer.get("lr", 0.001), "lr"),
+            betas=betas,
+            eps=_nonnegative_float(optimizer.get("eps", 1e-8), "eps"),
+            weight_decay=_nonnegative_float(optimizer.get("weight_decay", 0.01), "weight_decay"),
+            momentum=momentum,
+            dampening=dampening,
+            nesterov=nesterov,
             group_size=group_size,
-            compensate_quant_error=bool(
-                optimizer.get("compensate_quant_error", True)
-            ),
+            compensate_quant_error=optimizer.get("compensate_quant_error", True),
             error_compensation_dtype=compensation_dtype,
             error_compensation_mode=compensation_mode,
         )
 
     @property
     def is_four_bit(self) -> bool:
-        return self.type in {"four_bit_adamw", "four_bit_sgd"}
+        return self.type in {"four_bit_adamw", "four_bit_sgd", "torchao_adamw4bit"}
 
-    def validate_backend(self, training_backend: str, zero_stage: int = 0) -> None:
+    def validate_backend(
+        self, training_backend: str, zero_stage: int = 0, precision: str = "fp32"
+    ) -> None:
         if not self.is_four_bit:
             return
         backend = str(training_backend)
@@ -114,8 +140,24 @@ class OptimizerSpec:
             raise ValueError(
                 f"optimizer.type={self.type} is not supported with zero_stage={zero_stage}"
             )
+        if self.type == "torchao_adamw4bit" and precision not in {"fp32", "bf16"}:
+            raise ValueError("torchao_adamw4bit requires precision=fp32 or bf16")
 
     def to_metadata(self) -> Dict[str, Any]:
+        if self.type == "torchao_adamw4bit":
+            return {
+                "type": self.type,
+                "state_schema_version": 1,
+                "implementation": "torchao.optim.AdamW4bit",
+                "torch_version": "2.9.1",
+                "torchao_version": "0.15.0",
+                "group_size": 128,
+                "amsgrad": False,
+                "bf16_stochastic_round": False,
+                "compensate_quant_error": None,
+                "error_compensation_dtype": None,
+                "error_compensation_mode": None,
+            }
         return {
             "type": self.type,
             "state_schema_version": 1,

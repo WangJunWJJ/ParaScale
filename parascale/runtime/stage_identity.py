@@ -26,6 +26,10 @@ def _implementation_hashes() -> dict[str, str]:
             "workloads/causal_lm.py",
             "workloads/causal_lm_model.py",
             "workloads/causal_lm_assets.py",
+            "workloads/causal_lm_evaluation.py",
+            "workloads/specs/causal_lm.py",
+            "communication/hooks.py",
+            "core/distributed/coordination.py",
             "data/text/__init__.py",
             "data/text/artifact.py",
             "data/text/batches.py",
@@ -38,6 +42,7 @@ def _implementation_hashes() -> dict[str, str]:
             "runtime/training/data_state.py",
             "runtime/training/random_state.py",
             "runtime/training/stage_checkpoint.py",
+            "runtime/training/stage_evaluation.py",
         )
     )
     for relative in ("runtime/stage_train_runner.py", "runtime/training/stage_loop.py"):
@@ -81,6 +86,7 @@ def build_stage_checkpoint_context(
         },
         "precision": plan.config.precision,
         "execution": {
+            "ddp_comm_hook": plan.ddp_comm_hook,
             "torch": str(torch.__version__),
             "transformers": str(transformers.__version__),
             "implementation_sha256": _implementation_hashes(),

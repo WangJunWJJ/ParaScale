@@ -29,6 +29,13 @@ first request and does not consume it. Every request is emitted once to
 Failed/interrupted output keeps a `.partial` suffix and must not be treated as
 complete. Existing output files are rejected, not overwritten.
 
+For CUDA FP16 generation, use `float_fp16.json` with the same command and a
+fresh run directory. It uses floating-point weights, dynamic KV cache and
+uncompiled execution. FP16 is not enabled for reference/GemLite INT8 artifacts
+or static-cache compilation; those combinations fail before model loading.
+CPU generation still requires FP32. This example demonstrates the execution
+path, not a completed LLaMA-7B quality or acceleration acceptance test.
+
 ## Saved PTQ/QAT Artifacts
 
 Set `PARASCALE_ARTIFACT` to an artifact exported by the current product's

@@ -21,3 +21,12 @@ gate, direct PyTorch controls and optional bounded profiling.
 [Example 015](example_015_clip_retrieval_quality/README.md) prepares pinned,
 deduplicated image/text splits and validates real training, checkpoint reload and
 held-out multi-positive retrieval through the product inference adapter.
+
+[Example 016](example_016_diffusion_inference/README.md) runs local Stable
+Diffusion text-to-image generation with bounded PNG/manifest output, explicit
+sampling budgets and optional UNet compilation. Performance and image-quality
+acceptance require pretrained-model evidence beyond the small component tests.
+
+[Example 017](example_017_llama_pruning/README.md) physically removes coupled
+Llama MLP channels, preserves standard HF export/reload, and demonstrates
+functional validation. Magnitude ranking is a baseline, not a quality guarantee.

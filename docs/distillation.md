@@ -347,6 +347,52 @@ evidence that distillation improves a trained model.
 
 ## Recorded Validation
 
+### Standalone Causal-LM Student
+
+For full native causal-LM checkpoints produced by the product `train` command,
+publish an independent Hugging Face model directory:
+
+```bash
+python -m parascale.cli checkpoint export-causal-lm \
+  --checkpoint /runs/student/step-00000256 \
+  --model /models/student-initial \
+  --output /releases/student-256
+```
+
+`--model` supplies the **student's** matching config and fast tokenizer; original
+pretrained weights are not read. Teacher paths, data, optimizer and training
+state are not copied. The output contains safetensors, model/tokenizer configs
+and `release.json` with source/file SHA-256 identities. The source checkpoint is
+preserved for training resume; the release is an inference artifact, not a
+resumable training checkpoint. Point the existing `infer` command's
+`model.pretrained_model_name_or_path` at the release directory.
+
+Export currently requires a Llama-family model, verified full `native` or `native_ddp` state and the causal
+workload's saved config/tokenizer identities. Older checkpoints without those
+identities fail explicitly; do not invent or edit fingerprints to bypass the
+check. Use the same Transformers version as training. Source config dtype hints
+are not model semantics: export checks the actual FP32 tensor dtype instead.
+Sharded FSDP/ZeRO/TP/PP,
+adapter-only and QAT states are not converted by this command. QAT/PTQ retain
+their existing quantized artifact path. Export support for DDP does not relax
+the single-process restriction on online distillation itself.
+
+Inputs must be trusted, immutable local assets. Integrity checks are not digital
+signatures. Use a new output outside the model/checkpoint trees; existing output
+is never intentionally overwritten. A sibling lock prevents concurrent
+ParaScale exporters; no other process may write the destination. Failure before
+publication leaves no partial release. Export loads FP32 models on CPU and
+roundtrips the serialized model before publication, so provision CPU RAM for two
+model copies. It is an explicit offline operation, not part of training timing.
+
+Real tiny-Llama tests exercise CE and KD checkpoints, tied weights, exact state
+roundtrip and fresh-process product inference after removing all source model,
+teacher and checkpoint files. These validate packaging, not held-out quality or
+pretrained-model speed. The standalone validator's `student_state_dict.pt`
+is not a product checkpoint and cannot be passed to this command.
+
+### Earlier Loss-API Smoke
+
 The A6000 FP32 smoke run uses 32 steps, batch size 2, sequence length 128,
 eight training batches and eight independent evaluation batches. The teacher
 has 82,240 parameters and the student has 13,408. Both distillation and CE-only

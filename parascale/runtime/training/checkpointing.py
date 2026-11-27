@@ -211,7 +211,8 @@ class CheckpointController:
                 raise ValueError(
                     "checkpoint training objective does not match the current teacher/configuration"
                 )
-            self._validate_optimizer_metadata(manifest, optimizer)
+            if optimizer_builder is None:
+                self._validate_optimizer_metadata(manifest, optimizer)
             schedule_identity = dict(getattr(self.engine, "scheduler_metadata", {}) or {})
             if manifest.metadata.get("scheduler", {}) != schedule_identity:
                 raise ValueError("checkpoint scheduler configuration mismatch")
@@ -259,6 +260,13 @@ class CheckpointController:
                 self.engine.training_backend.optimizer = (
                     self.engine.training_backend.setup_optimizer(optimizer)
                 )
+
+        self._collective_call(
+            lambda: self._validate_optimizer_metadata(
+                manifest, getattr(self.engine.training_backend, "optimizer", None),
+                require_current=True,
+            )
+        )
 
         prepare_scheduler = getattr(self.engine, "prepare_scheduler", None)
         if callable(prepare_scheduler):
@@ -370,9 +378,17 @@ class CheckpointController:
         return requested
 
     @staticmethod
-    def _validate_optimizer_metadata(manifest: Any, optimizer: Any) -> None:
+    def _validate_optimizer_metadata(
+        manifest: Any, optimizer: Any, *, require_current: bool = False
+    ) -> None:
         saved = dict(manifest.metadata.get("optimizer", {}) or {})
         current = dict(getattr(optimizer, "_parascale_optimizer_metadata", {}) or {})
+        # The preflight may precede optimizer construction; the bound optimizer
+        # must identify its state format before any backend payload is loaded.
+        if saved and not current and require_current:
+            raise ValueError("current optimizer metadata is required to resume this checkpoint")
+        if current.get("type") == "torchao_adamw4bit" and not saved:
+            raise ValueError("checkpoint optimizer metadata is required for torchao_adamw4bit")
         if not saved or not current:
             return
         for key in (
@@ -382,6 +398,11 @@ class CheckpointController:
             "compensate_quant_error",
             "error_compensation_dtype",
             "error_compensation_mode",
+            "implementation",
+            "torch_version",
+            "torchao_version",
+            "amsgrad",
+            "bf16_stochastic_round",
         ):
             if key == "error_compensation_mode" and key not in saved:
                 if current.get(key, "absolute") == "absolute":

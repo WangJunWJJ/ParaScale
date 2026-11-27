@@ -105,6 +105,18 @@ def build_distillation_objective(
     from parascale.distillation import OnlineDistillationLoss
 
     teacher, metadata = _load_teacher(student, teacher_spec)
+    if config.task == "causal_lm":
+        student_tokenizer = getattr(student, "tokenizer_identity", None)
+        teacher_tokenizer = getattr(teacher, "tokenizer_identity", None)
+        if (
+            not isinstance(student_tokenizer, str)
+            or not student_tokenizer
+            or student_tokenizer != teacher_tokenizer
+        ):
+            raise ValueError(
+                "causal distillation requires identical verified tokenizer identities"
+            )
+        metadata["tokenizer_identity"] = student_tokenizer
     objective = OnlineDistillationLoss(student, teacher, config)
     metadata.update(kind="online_logits_distillation", config=config.to_dict())
     return objective, metadata

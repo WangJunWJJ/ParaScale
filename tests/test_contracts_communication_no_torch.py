@@ -7,6 +7,19 @@ from parascale.communication import build_communication_plan, recommend_ddp_hook
 from parascale.contracts import BatchContract, BatchMetadata, MetricContract
 
 
+def test_official_hook_lookup_none_and_invalid_do_not_import_torch(monkeypatch):
+    import sys
+
+    import pytest
+
+    from parascale.communication.hooks import get_ddp_comm_hook
+
+    monkeypatch.setitem(sys.modules, "torch", None)
+    assert get_ddp_comm_hook("none") is None
+    with pytest.raises(ValueError, match="unsupported ddp_comm_hook"):
+        get_ddp_comm_hook("auto")
+
+
 def test_batch_contract_extracts_common_metadata_without_torch():
     batch = {
         "pixel_values": object(),

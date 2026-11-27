@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -69,6 +70,11 @@ def run_distributed_smoke(backend, env):
         )
 
 
+def pytest_options(temp_root):
+    """Preserve drive roots and spaces through pytest's POSIX option parser."""
+    return shlex.join([f"--basetemp={(temp_root / 'pytest').as_posix()}", "-p", "no:cacheprovider"])
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run ParaScale test suites.")
     parser.add_argument(
@@ -94,7 +100,7 @@ def main():
     os.environ["NCCL_DEBUG"] = env["NCCL_DEBUG"]
     env.setdefault("PYTHONPYCACHEPREFIX", str(temp_root / "pycache"))
     env.setdefault(
-        "PYTEST_ADDOPTS", f"--basetemp={temp_root / 'pytest'} -p no:cacheprovider"
+        "PYTEST_ADDOPTS", pytest_options(temp_root)
     )
     if args.backend != "all":
         env["PARASCALE_TEST_BACKEND"] = args.backend

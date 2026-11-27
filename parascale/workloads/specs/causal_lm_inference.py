@@ -60,7 +60,7 @@ class CausalLmInferenceSpec:
                 raise ValueError(f"{name} must be an integer >= {minimum}")
         for name, allowed in (
             ("execution", {"float", "reference", "gemlite_int8"}),
-            ("precision", {"fp32", "bf16"}),
+            ("precision", {"fp32", "bf16", "fp16"}),
             ("attention_policy", {"auto", "math"}),
             ("cache_implementation", {"dynamic", "static"}),
             ("compile_mode", {"off", "max-autotune"}),
@@ -74,6 +74,8 @@ class CausalLmInferenceSpec:
             )
         if self.device == "cpu" and self.precision != "fp32":
             raise ValueError("CPU generation requires precision=fp32")
+        if self.precision == "fp16" and self.execution != "float":
+            raise ValueError("FP16 generation currently requires execution=float")
         if self.execution == "gemlite_int8" and (
             self.device == "cpu" or self.precision != "bf16"
         ):

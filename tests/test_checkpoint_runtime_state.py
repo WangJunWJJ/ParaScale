@@ -84,6 +84,45 @@ def test_full_rng_roundtrip_fake_npu():
     assert torch.npu_state == [[2]]
 
 
+@pytest.mark.parametrize("use_builder", [False, True])
+@pytest.mark.parametrize("identity", ["wrong_version", "missing_metadata", "missing_optimizer"])
+def test_resume_validates_final_optimizer_before_payload(tmp_path, monkeypatch, use_builder, identity):
+    from parascale.optimizers.spec import OptimizerSpec
+
+    fake_torch = FakeTorch()
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    worker = engine()
+    metadata = OptimizerSpec(type="torchao_adamw4bit").to_metadata()
+    worker.training_backend.optimizer = SimpleNamespace(_parascale_optimizer_metadata=metadata)
+    manager = CheckpointManager(str(tmp_path))
+    controller = CheckpointController(worker)
+    controller.save(manager)
+    wrong = SimpleNamespace(_parascale_optimizer_metadata={**metadata, "torchao_version": "wrong"})
+    if identity == "missing_metadata":
+        wrong = SimpleNamespace()
+    elif identity == "missing_optimizer":
+        wrong = None
+    worker.training_backend.optimizer = wrong
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("backend payload must not load before optimizer identity validation")
+
+    monkeypatch.setattr(controller, "_load_portable_backend_state", forbidden)
+    options = {}
+    if use_builder:
+        backend = SimpleNamespace(
+            name="native", optimizer=None, setup=lambda: (object(), None),
+            setup_optimizer=lambda value: value,
+        )
+        monkeypatch.setattr(
+            "parascale.runtime.backends.create_runtime_training_backend", lambda **kwargs: backend
+        )
+        worker._local_rank = lambda: 0
+        options = {"model": object(), "optimizer_builder": lambda model: wrong}
+    with pytest.raises(ValueError, match="optimizer metadata"):
+        controller.load(manager, 3, **options)
+
+
 def test_rank_sidecars_and_precision_roundtrip(tmp_path, monkeypatch):
     torch = FakeTorch()
     monkeypatch.setitem(sys.modules, "torch", torch)
@@ -108,6 +147,37 @@ def test_rank_sidecars_and_precision_roundtrip(tmp_path, monkeypatch):
     assert torch.cpu == [11]
     assert worker.precision.value == {"amp_scaler": {"scale": 128.0}}
     assert worker.state.data_state["state"] == {"rank": 1, "position": 6}
+
+
+@pytest.mark.parametrize("provisional", ["missing", "different"])
+def test_resume_validates_builder_result_not_discarded_optimizer(tmp_path, monkeypatch, provisional):
+    from parascale.optimizers.spec import OptimizerSpec
+
+    monkeypatch.setitem(sys.modules, "torch", FakeTorch())
+    worker = engine()
+    optimizer = SimpleNamespace(_parascale_optimizer_metadata=OptimizerSpec().to_metadata())
+    backend = worker.training_backend
+    backend.optimizer = optimizer
+    manager = CheckpointManager(str(tmp_path))
+    controller = CheckpointController(worker)
+    controller.save(manager)
+    backend.setup = lambda: (object(), None)
+    backend.setup_optimizer = lambda value: value
+    monkeypatch.setattr("parascale.runtime.backends.create_runtime_training_backend", lambda **kwargs: backend)
+    worker._local_rank = lambda: 0
+    temporary = SimpleNamespace()
+    if provisional == "different":
+        temporary._parascale_optimizer_metadata = OptimizerSpec(type="four_bit_sgd").to_metadata()
+    built = []
+
+    def builder(model):
+        built.append(model)
+        return optimizer
+
+    restored = controller.load(manager, 3, model=object(), optimizer=temporary, optimizer_builder=builder)
+    assert len(built) == 1
+    assert backend.optimizer is optimizer
+    assert restored.metadata["backend_state_loaded"]
 
 
 @pytest.mark.parametrize(
@@ -188,6 +258,24 @@ def test_native_policy_uses_effective_hook_and_static_graph():
     config.ddp_comm_hook = automatic["ddp"]["comm_hook"]
     config.ddp_static_graph = False
     assert backend.checkpoint_policy() == automatic
+
+
+@pytest.mark.parametrize("name", ["fp16_compress", "bf16_compress"])
+def test_native_registration_preserves_official_hook_and_default_group(name):
+    pytest.importorskip("torch")
+    from torch.distributed.algorithms.ddp_comm_hooks import default_hooks
+
+    from parascale.communication.hooks import get_ddp_comm_hook
+    from parascale.runtime.backends.native import NativeDdpTrainingBackend
+
+    hook = getattr(default_hooks, f"{name}_hook")
+    assert get_ddp_comm_hook(name) is hook
+    calls = []
+    model = SimpleNamespace(register_comm_hook=lambda **kwargs: calls.append(kwargs))
+    backend = NativeDdpTrainingBackend(config=SimpleNamespace(ddp_comm_hook=name))
+    backend._register_comm_hook(model)
+    assert calls == [{"state": None, "hook": hook}]
+    assert backend.checkpoint_policy()["ddp"]["comm_hook"] == name
 
 
 @pytest.mark.parametrize("action", ["save", "load"])
@@ -464,5 +552,6 @@ def test_native_load_failure_is_synchronized_before_state_advances(
     target.training_backend.load_state_dict = fail_load
     with pytest.raises(OSError, match="local load failed"):
         controller.load(manager, 3)
-    assert barriers == ["sync", "sync"]
+    # Runtime preflight, final optimizer identity, then coordinated payload load.
+    assert barriers == ["sync", "sync", "sync"]
     assert target.state.global_step == 0

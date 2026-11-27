@@ -17,7 +17,7 @@ from parascale.configuration.resolver import normalize_execution_config, resolve
 from parascale.optimizers.schedule import SchedulerSpec
 from parascale.optimizers.spec import OptimizerSpec
 from parascale.parallel.distributed import DistributedParallelConfig
-from parascale.workloads.specs.causal_lm import CausalLmSpec
+from parascale.workloads.specs.causal_lm import CausalLmEvaluationSpec, CausalLmSpec
 
 _FIXED_BATCH_DEFAULTS = {
     "batching_strategy": "sample",
@@ -34,7 +34,9 @@ class StageTrainingPlan:
     config_data: dict
     config: ParaScaleConfig
     topology: DistributedParallelConfig
+    ddp_comm_hook: str
     workload: CausalLmSpec
+    evaluation: CausalLmEvaluationSpec | None
     max_steps: int
     checkpoint_dir: Path
     checkpoint_interval: int
@@ -51,7 +53,9 @@ class StageTrainingPlan:
             "config_data": self.config_data,
             "config": self.config.to_dict(),
             "topology": asdict(self.topology),
+            "ddp_comm_hook": self.ddp_comm_hook,
             "workload": asdict(self.workload),
+            "evaluation": asdict(self.evaluation) if self.evaluation else None,
             "world_size": self.topology.world_size,
             "global_batch_size": self.topology.global_batch_size(
                 self.workload.batch_size
@@ -59,6 +63,7 @@ class StageTrainingPlan:
             "max_steps": self.max_steps,
             "checkpoint_dir": str(self.checkpoint_dir),
             "checkpoint_interval": self.checkpoint_interval,
+            "checkpoint_format": self.config.checkpoint_format,
             "keep_last": self.keep_last,
             "metrics_history_limit": self.metrics_history_limit,
             "timeout_seconds": self.timeout_seconds,
@@ -113,6 +118,7 @@ def build_stage_training_plan(config_data: dict) -> StageTrainingPlan:
         unsupported_backend = path.startswith("backend.") and path not in {
             "backend.training_backend",
             "backend.precision",
+            "backend.ddp_comm_hook",
         }
         if requests and (path in forbidden_axes or unsupported_backend):
             raise ValueError(f"native_parallel does not support explicit {path}")
@@ -189,6 +195,15 @@ def build_stage_training_plan(config_data: dict) -> StageTrainingPlan:
         pipeline_schedule=config.pipeline_schedule,
     )
     topology.global_batch_size(workload.batch_size)
+    ddp_comm_hook = config.ddp_comm_hook
+    if ddp_comm_hook == "auto":
+        ddp_comm_hook = "none"
+    if ddp_comm_hook not in ("none", "bf16_compress"):
+        raise ValueError("native_parallel supports only none or bf16_compress")
+    if ddp_comm_hook != "none" and (
+        topology.dp_size not in (2, 4) or topology.tp_size != 1 or topology.pp_size != 1
+    ):
+        raise ValueError("bf16_compress requires pure DP2 or DP4 (TP1, PP1)")
     for section in ("launch", "distributed"):
         declared = data.get(section, {})
         if not isinstance(declared, dict):
@@ -217,7 +232,9 @@ def build_stage_training_plan(config_data: dict) -> StageTrainingPlan:
         config_data=data,
         config=config,
         topology=topology,
+        ddp_comm_hook=ddp_comm_hook,
         workload=workload,
+        evaluation=CausalLmEvaluationSpec.from_config(data),
         max_steps=_integer(training.get("max_steps"), "training.max_steps"),
         checkpoint_dir=Path(
             _local_path(config.checkpoint_save_path, "checkpoint_save_path")

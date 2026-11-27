@@ -91,6 +91,7 @@ def _validate_execution(trainer: Any) -> None:
     trainer.config.validate_world_size(dist.get_world_size())
     if type(trainer.rank) is not int or trainer.rank != dist.get_rank():
         raise ValueError("Checkpoint rank does not match process group")
+    trainer.validate_execution_policy()
 
 
 def _optimizer_identity(module: Any, optimizer: Any) -> dict[str, Any]:
@@ -129,8 +130,19 @@ def _validate_manifest(
     validate_manifest_structure(metadata)
     topology = metadata["topology"]
     expected = asdict(trainer.config)
+    dcp_format = metadata["schema_version"] == 6
+    if dcp_format:
+        import torch
+
+        if metadata["storage"]["torch_version"] != str(torch.__version__):
+            raise ValueError("DCP checkpoint Torch version mismatch")
+        if (metadata["runtime"] is None) != (runtime_identity is None):
+            raise ValueError("Checkpoint runtime presence mismatch")
     if (
-        metadata["schema_version"] != (5 if runtime_identity is not None else 4)
+        (
+            not dcp_format
+            and metadata["schema_version"] != (5 if runtime_identity is not None else 4)
+        )
         or topology != expected
         or any(
             type(topology[key]) is not type(value) for key, value in expected.items()
@@ -142,9 +154,19 @@ def _validate_manifest(
         and canonical_runtime_identity(metadata["runtime"]) != runtime_identity
     ):
         raise ValueError("Checkpoint runtime identity mismatch")
+    context = getattr(trainer, "checkpoint_context", None)
+    execution = context.get("execution", {}) if isinstance(context, dict) else {}
+    if isinstance(execution, dict) and "ddp_comm_hook" in execution:
+        saved = metadata["context"].get("execution")
+        if not isinstance(saved, dict) or "ddp_comm_hook" not in saved:
+            raise ValueError(
+                "Checkpoint DDP communication policy missing; legacy snapshots cannot resume"
+            )
+        if saved["ddp_comm_hook"] != execution["ddp_comm_hook"]:
+            raise ValueError("Checkpoint DDP communication policy mismatch")
     if canonical_checkpoint_context(
         metadata["context"]
-    ) != canonical_checkpoint_context(getattr(trainer, "checkpoint_context", None)):
+    ) != canonical_checkpoint_context(context):
         raise ValueError("Checkpoint training context mismatch")
 
 
@@ -197,7 +219,7 @@ def _validate_payload(payload: Any, metadata: dict, device: Any) -> None:
         "cuda_rng",
         "step",
     }
-    if metadata["schema_version"] == 5:
+    if metadata.get("runtime") is not None:
         keys.add("runtime")
     if not isinstance(payload, dict) or set(payload) != keys:
         raise ValueError("Checkpoint payload schema mismatch")
@@ -229,6 +251,7 @@ def save_checkpoint(
     *,
     step: int,
     runtime: CheckpointRuntime | None = None,
+    checkpoint_format: str = "rank",
 ) -> None:
     """Publish a manifest only after every rank's atomic file is complete.
 
@@ -236,6 +259,8 @@ def save_checkpoint(
     checkpoint, not a portable inference export. An explicit runtime participant
     includes training progress in schema5; without one, schema4 stores only
     model/optimizer/Torch RNG and must not be treated as full training recovery.
+    The explicit dcp format uses schema6 for DP replicas with TP=1, preserves
+    rank-local state, and requires the exact saved Torch version when loading.
     All ranks must participate; concurrent writers to one directory are unsupported.
     Process death or failures inside native state-dict collectives require job-level
     teardown; Python exception coordination cannot recover a broken process group.
@@ -245,6 +270,14 @@ def save_checkpoint(
 
     with _phase("save preflight"):
         _validate_execution(trainer)
+        if checkpoint_format not in ("rank", "dcp"):
+            raise ValueError("checkpoint_format must be rank or dcp")
+        if checkpoint_format == "dcp":
+            from .checkpoint_dcp import validate_destination
+
+            if trainer.config.dp_size < 2 or trainer.config.tp_size != 1:
+                raise ValueError("DCP checkpoint requires DP>=2 and TP=1")
+            validate_destination(Path(directory))
         if type(step) is not int or step < 0:
             raise ValueError("step must be a nonnegative integer")
         directory = Path(directory).resolve()
@@ -270,6 +303,7 @@ def save_checkpoint(
             step=step,
             context=context,
             runtime=runtime_identity,
+            checkpoint_format=checkpoint_format,
         ),
         "save",
     )
@@ -289,17 +323,22 @@ def save_checkpoint(
         }
         if runtime is not None:
             payload["runtime"] = runtime_state
-    with _phase("rank write"):
-        temporary = path.with_suffix(".tmp")
-        with temporary.open("wb") as stream:
-            torch.save(payload, stream)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-        _fsync_directory(directory)
-        entry = {"path": path.name, "sha256": _digest(path)}
-    entries = [None] * dist.get_world_size()
-    dist.all_gather_object(entries, entry)
+    if checkpoint_format == "dcp":
+        from .checkpoint_dcp import save_state
+
+        entries = save_state(trainer, directory, payload)
+    else:
+        with _phase("rank write"):
+            temporary = path.with_suffix(".tmp")
+            with temporary.open("wb") as stream:
+                torch.save(payload, stream)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+            _fsync_directory(directory)
+            entry = {"path": path.name, "sha256": _digest(path)}
+        entries = [None] * dist.get_world_size()
+        dist.all_gather_object(entries, entry)
     with _phase("manifest publication"):
         metadata = dict(
             schema_version=5 if runtime is not None else 4,
@@ -310,6 +349,12 @@ def save_checkpoint(
         )
         if runtime_identity is not None:
             metadata["runtime"] = json.loads(runtime_identity)
+        if checkpoint_format == "dcp":
+            metadata.update(
+                schema_version=6,
+                runtime=json.loads(runtime_identity) if runtime_identity else None,
+                storage={"kind": "torch_dcp", "torch_version": str(torch.__version__)},
+            )
         _validate_manifest(metadata, trainer, runtime_identity)
         if trainer.rank == 0:
             temporary_manifest = manifest.with_suffix(".tmp")
@@ -319,6 +364,17 @@ def save_checkpoint(
                 os.fsync(stream.fileno())
             os.replace(temporary_manifest, manifest)
             _fsync_directory(directory)
+
+
+def _validate_dcp_paths(directory: Path, metadata: dict) -> Path:
+    from .checkpoint_catalog import _safe_path
+
+    directory = _safe_path(directory)
+    for name in ["manifest.json", *(entry["path"] for entry in metadata["files"])]:
+        path = _safe_path(directory / name)
+        if not path.is_file() or path.stat().st_nlink != 1:
+            raise ValueError("DCP checkpoint requires regular files without hard links")
+    return directory
 
 
 def load_checkpoint(
@@ -338,13 +394,16 @@ def load_checkpoint(
     with _phase("load preflight"):
         _validate_execution(trainer)
         device = torch.device(trainer.device)
-        directory = Path(directory).resolve()
+        original_directory = Path(directory)
+        directory = original_directory.resolve()
         metadata = json.loads(
             (directory / "manifest.json").read_text(encoding="utf-8"),
             object_pairs_hook=_unique_json_object,
         )
         runtime_identity = _runtime_identity(runtime, optimizer)
         _validate_manifest(metadata, trainer, runtime_identity)
+        if metadata["schema_version"] == 6:
+            directory = _validate_dcp_paths(original_directory, metadata)
     _agree_identity(
         dict(
             directory=str(directory),
@@ -353,11 +412,16 @@ def load_checkpoint(
         "load",
     )
     with _phase("payload read"):
-        entry = metadata["files"][trainer.rank]
-        path = directory / entry["path"]
-        if not path.is_file() or _digest(path) != entry["sha256"]:
-            raise ValueError("Checkpoint rank file missing or checksum mismatch")
-        payload = torch.load(path, weights_only=False)
+        if metadata["schema_version"] == 6:
+            from .checkpoint_dcp import load_state
+
+            payload = load_state(trainer, directory, metadata)
+        else:
+            entry = metadata["files"][trainer.rank]
+            path = directory / entry["path"]
+            if not path.is_file() or _digest(path) != entry["sha256"]:
+                raise ValueError("Checkpoint rank file missing or checksum mismatch")
+            payload = torch.load(path, weights_only=False)
         _validate_payload(payload, metadata, device)
         if payload["optimizer_identity"] != _optimizer_identity(
             trainer.module, optimizer

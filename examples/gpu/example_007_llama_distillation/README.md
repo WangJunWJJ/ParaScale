@@ -47,6 +47,43 @@ bash examples/gpu/example_007_llama_distillation/run.sh \
 支持范围为单进程 native FP32；不同 tokenizer、分布式、AMP、QAT+KD 不在本案例内。
 CLI 集成与 checkpoint 恢复要求见[蒸馏指南](../../../docs/distillation.md)。
 
+## 产品训练后的独立部署
+
+通过 `python -m parascale.cli train --config student-kd.json` 训练得到的完整
+native 因果语言模型检查点，可导出为不依赖教师的 Hugging Face 模型目录：
+
+```bash
+python -m parascale.cli checkpoint export-causal-lm \
+  --checkpoint /runs/student/step-00000256 \
+  --model /models/student-initial \
+  --output /releases/student-256
+```
+
+路径需要替换为实际训练产物。`--model` 指向学生原始配置和 tokenizer，
+无需保留原始预训练权重；输出包含学生 safetensors、配置、tokenizer 和校验清单。
+将[因果语言模型推理案例](../example_013_causal_lm_inference/README.md)中的
+`model.pretrained_model_name_or_path` 改为 `/releases/student-256` 即可独立推理。
+教师、训练数据和优化器不进入发布目录。导出不等于质量验收，部署前仍需独立评测。
+
+复用已有推理配置，单张 A6000 上运行：
+
+```bash
+export PARASCALE_MODEL=/releases/student-256
+export PARASCALE_PROMPTS=/datasets/prompts.jsonl
+export PARASCALE_RUN_DIR=/runs/student-infer-new
+python -m parascale.cli infer \
+  --config examples/gpu/example_013_causal_lm_inference/float.json \
+  --output "$PARASCALE_RUN_DIR/summary.json"
+```
+
+该配置使用 BF16、动态 KV cache，输出到新运行目录；提示词 JSONL 格式、
+输入长度与质量/吞吐测量边界见对应推理案例。
+
+本页离线验证脚本产生的 `student_state_dict.pt` 缺少产品 checkpoint manifest，
+不能直接传给此命令。输出必须是新目录；仅完整 native/native-DDP 检查点支持，
+不转换 FSDP/TP/PP 分片、adapter-only 或 QAT 状态。普通 DDP 导出能力不意味着
+在线蒸馏已支持分布式。具体边界及 CPU 内存要求见上述蒸馏指南。
+
 PowerShell 对应入口：
 `python tests/benchmarks/scripts/validate_llama_distillation.py --tiny --steps 16 --device cpu --output runs/examples/llama_kd_windows`。
 

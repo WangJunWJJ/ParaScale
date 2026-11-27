@@ -11,6 +11,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import unittest
 
+import pytest
 import torch
 import torch.nn as nn
 
@@ -18,8 +19,10 @@ from parascale.optimizers import FourBitAdamW, FourBitSGD, QuantizedState
 
 
 def _assert_tensor_state_tree(value):
-    if torch.is_tensor(value) or value is None or isinstance(
-        value, (bool, int, float, str)
+    if (
+        torch.is_tensor(value)
+        or value is None
+        or isinstance(value, (bool, int, float, str))
     ):
         return
     if isinstance(value, dict):
@@ -59,6 +62,87 @@ def test_quantized_state_pack_and_unpack_do_not_use_python_range(monkeypatch):
     restored = state.dequantize()
 
     assert restored.shape == (256,)
+
+
+@pytest.mark.parametrize("group_size", [64, 128, 256])
+@pytest.mark.parametrize("padded", [False, True])
+@pytest.mark.parametrize("signed", [False, True])
+@pytest.mark.parametrize(
+    "dtype,magnitude",
+    [
+        (torch.float32, 1e-10),
+        (torch.float32, 1e-12),
+        (torch.float64, 1e-10),
+        (torch.float64, 1e-12),
+        (torch.bfloat16, 1e-12),
+        (torch.float16, 2**-8),
+    ],
+)
+def test_quantization_preserves_tiny_scale(
+    group_size, padded, signed, dtype, magnitude
+):
+    size = group_size * 2 + (group_size // 3 if padded else 0)
+    values = torch.linspace(-1 if signed else 0, 1, size, dtype=dtype)
+    tiny = values * magnitude
+    unit_state = QuantizedState(values, group_size=group_size)
+    tiny_state = QuantizedState(tiny, group_size=group_size)
+    restored = tiny_state.dequantize()
+    assert restored.shape == tiny.shape
+    assert torch.isfinite(restored).all()
+    assert tiny_state.scale.dtype == tiny_state.zero_point.dtype == dtype
+    epsilon = torch.finfo(dtype).eps
+    span = 2 if signed else 1
+    relative_error = (restored.double() - tiny.double()).abs().max() / tiny.abs().max()
+    assert relative_error.item() <= span / 30 + 4 * epsilon
+    torch.testing.assert_close(
+        restored.double() / magnitude,
+        unit_state.dequantize().double(),
+        rtol=0,
+        atol=span / 15 + 4 * epsilon,
+    )
+    if not padded and dtype in (torch.float32, torch.float64):
+        torch.testing.assert_close(
+            tiny_state.quantized_data, unit_state.quantized_data, rtol=0, atol=0
+        )
+    updated = QuantizedState(torch.zeros_like(tiny), group_size=group_size)
+    updated.update(tiny)
+    torch.testing.assert_close(updated.dequantize(), restored, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("group_size", [64, 128, 256])
+@pytest.mark.parametrize("padded", [False, True])
+@pytest.mark.parametrize("value", [0.0, -0.25, 0.25])
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32, torch.float64])
+def test_quantization_preserves_zero_and_constant_groups(group_size, padded, value, dtype):
+    size = group_size * 2 + (1 if padded else 0)
+    values = torch.full((size,), value, dtype=dtype)
+    codes, scale, offset = QuantizedState._quantize(values, group_size)
+    assert torch.count_nonzero(codes[:2]) == 0
+    assert torch.count_nonzero(scale[:2]) == 0
+    torch.testing.assert_close(offset[:2], values[:2], rtol=0, atol=0)
+    restored = QuantizedState(values, group_size).dequantize().to(dtype)
+    if value == 0 or not padded:
+        torch.testing.assert_close(restored, values, rtol=0, atol=0)
+    else:
+        torch.testing.assert_close(
+            restored, values, rtol=2 * torch.finfo(dtype).eps, atol=0
+        )
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_quantization_guards_zero_range_per_group(dtype):
+    values = torch.cat(
+        [
+            torch.full((128,), -1e-12, dtype=dtype),
+            torch.zeros(128, dtype=dtype),
+            torch.full((128,), 1e-12, dtype=dtype),
+            torch.linspace(0, 1e-12, 128, dtype=dtype),
+        ]
+    )
+    state = QuantizedState(values)
+    restored = state.dequantize().to(dtype)
+    torch.testing.assert_close(restored[:384], values[:384], rtol=0, atol=0)
+    assert (restored[384:] - values[384:]).abs().max().item() <= 1e-12 / 30
 
 
 def test_four_bit_adamw_reuses_persistent_quantized_state_buffers():
@@ -102,8 +186,271 @@ def test_block_scaled_fp16_residual_preserves_tiny_second_moment_error():
     torch.testing.assert_close(restored_error, absolute_error, rtol=1e-3, atol=1e-12)
 
 
-class SimpleModel(nn.Module):
+@pytest.mark.parametrize("optimizer_type,slots", [(FourBitAdamW, 2), (FourBitSGD, 1)])
+@pytest.mark.parametrize("size", [1, 127, 129, 32768])
+@pytest.mark.parametrize(
+    "compensate,dtype", [(False, None), (True, None), (True, "fp16"), (True, "fp32")]
+)
+def test_memory_stats_include_all_resident_compensation(
+    optimizer_type, slots, size, compensate, dtype
+):
+    parameter = nn.Parameter(torch.ones(size))
+    unused = nn.Parameter(torch.ones(65536))
+    optimizer = optimizer_type(
+        [parameter, unused],
+        compensate_quant_error=compensate,
+        error_compensation_dtype=dtype,
+    )
+    empty = optimizer.get_memory_stats()
+    assert empty["state_bytes"] == empty["standard_bytes"] == 0
+    assert empty["savings_percent"] == 0
+    parameter.grad = torch.ones_like(parameter)
+    optimizer.step()
+    packed = slots * ((size + 127) // 128) * (64 + 8)
+    residual = slots * size * (2 if dtype == "fp16" else 4) if compensate else 0
+    stats = optimizer.get_memory_stats()
+    assert stats["total_params"] == size + 65536
+    assert stats["initialized_params"] == size
+    assert stats["quantized_bytes"] == packed
+    assert stats["state_bytes"] == packed + residual
+    assert stats["state_bytes_by_device"] == {"cpu": packed + residual}
+    assert stats["standard_bytes"] == slots * size * 4
+    assert stats["savings_percent"] == pytest.approx(
+        100 * (1 - (packed + residual) / (slots * size * 4))
+    )
+    optimizer.state[parameter]["alias"] = optimizer.state[parameter][
+        "exp_avg" if slots == 2 else "momentum_buffer"
+    ].quantized_data[1:2]
+    assert optimizer.get_memory_stats()["state_bytes"] == packed + residual
+    optimizer.state[parameter]["backing_view"] = torch.zeros(100)[17:18]
+    assert optimizer.get_memory_stats()["state_bytes"] == packed + residual + 400
 
+
+def test_quantized_memory_usage_uses_actual_storage_dtype():
+    state = QuantizedState(torch.ones(128, dtype=torch.float16))
+    assert state.memory_usage() == 64 + 2 + 2
+
+
+def test_memory_stats_use_resident_dtype_after_checkpoint_reload():
+    parameter = nn.Parameter(torch.ones(129))
+    source = FourBitAdamW([parameter], error_compensation_dtype="fp16")
+    parameter.grad = torch.ones_like(parameter)
+    source.step()
+    restored_parameter = nn.Parameter(parameter.detach().clone())
+    target = FourBitAdamW([restored_parameter], error_compensation_dtype="fp16")
+    target.load_state_dict(source.state_dict())
+    state = target.state[restored_parameter]
+    expected = sum(state[key].memory_usage() for key in ("exp_avg", "exp_avg_sq"))
+    expected += sum(
+        state[key].numel() * state[key].element_size()
+        for key in ("exp_avg_error", "exp_avg_sq_error")
+    )
+    assert target.get_memory_stats()["state_bytes"] == expected
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="Requires CUDA")
+def test_memory_stats_separate_cpu_and_cuda_storage():
+    parameter = nn.Parameter(torch.ones(128, device="cuda"))
+    optimizer = FourBitAdamW([parameter], compensate_quant_error=False)
+    parameter.grad = torch.ones_like(parameter)
+    optimizer.step()
+    optimizer.state[parameter]["host_state"] = torch.zeros(10)
+    stats = optimizer.get_memory_stats()
+    assert stats["state_bytes_by_device"] == {str(parameter.device): 144, "cpu": 40}
+    assert stats["state_bytes"] == 184
+
+
+@pytest.mark.parametrize("optimizer_type", [FourBitAdamW, FourBitSGD])
+@pytest.mark.parametrize("mode", ["absolute", "block_scaled"])
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_fp16_compensation_checkpoint_preserves_dtype_and_continuation(
+    tmp_path, optimizer_type, mode, device
+):
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("Requires CUDA")
+    values = torch.arange(129, dtype=torch.float32, device=device)
+    parameter = nn.Parameter(torch.sin(values))
+    settings = dict(error_compensation_dtype="fp16", error_compensation_mode=mode)
+    source = optimizer_type([parameter], **settings)
+    for step in range(3):
+        parameter.grad = torch.cos(values * 0.13 + step) * 0.1
+        source.step()
+    checkpoint = tmp_path / "optimizer.pt"
+    torch.save(source.state_dict(), checkpoint)
+    restored = nn.Parameter(parameter.detach().clone())
+    target = optimizer_type([restored], **settings)
+    target.load_state_dict(
+        torch.load(checkpoint, map_location="cpu", weights_only=True)
+    )
+    errors = (
+        ("exp_avg_error", "exp_avg_sq_error")
+        if optimizer_type is FourBitAdamW
+        else ("momentum_error",)
+    )
+    for name in errors:
+        actual = target.state[restored][name]
+        assert actual.dtype == torch.float16
+        assert actual.device == restored.device
+        torch.testing.assert_close(
+            actual, source.state[parameter][name], rtol=0, atol=0
+        )
+    assert source.get_memory_stats() == target.get_memory_stats()
+    for step in range(3, 5):
+        parameter.grad = torch.cos(values * 0.13 + step) * 0.1
+        restored.grad = parameter.grad.clone()
+        source.step()
+        target.step()
+        torch.testing.assert_close(parameter, restored, rtol=0, atol=0)
+        for name in errors:
+            torch.testing.assert_close(
+                source.state[parameter][name],
+                target.state[restored][name],
+                rtol=0,
+                atol=0,
+            )
+
+
+@pytest.fixture(params=[FourBitAdamW, FourBitSGD])
+def residual_checkpoint(request):
+    parameters = [nn.Parameter(torch.ones(129)) for _ in range(2)]
+    settings = dict(error_compensation_dtype="fp16")
+    source = request.param(parameters, **settings)
+    for parameter in parameters:
+        parameter.grad = torch.linspace(-0.1, 0.2, 129)
+    source.step()
+    saved = source.state_dict()
+    names = (
+        ("exp_avg_error", "exp_avg_sq_error")
+        if request.param is FourBitAdamW
+        else ("momentum_error",)
+    )
+    for slot, state in saved["state"].items():
+        for name in names:
+            state[name] = torch.full((129,), (slot + 1) / 8, dtype=torch.float16)
+    live = [nn.Parameter(parameter.detach().clone()) for parameter in parameters]
+    return request.param(live, **settings), live, saved, names
+
+
+def test_residual_load_honors_replacement_prehook_mapping(residual_checkpoint):
+    optimizer, parameters, saved, names = residual_checkpoint
+    events = []
+
+    def remap(_optimizer, state):
+        events.append("remap")
+        return {
+            **state,
+            "param_groups": [
+                {**group, "params": list(reversed(group["params"]))}
+                for group in state["param_groups"]
+            ],
+            "state": {
+                slot: {
+                    **values,
+                    **{name: values[name] + 0.5 for name in names},
+                }
+                for slot, values in state["state"].items()
+            },
+        }
+
+    def observe(_optimizer, state):
+        events.append("observe")
+        assert all(
+            isinstance(values[name], torch.Tensor)
+            for values in state["state"].values()
+            for name in names
+        )
+
+    optimizer.register_load_state_dict_pre_hook(observe)
+    optimizer.register_load_state_dict_pre_hook(remap, prepend=True)
+    optimizer.load_state_dict(saved)
+    assert events == ["remap", "observe"]
+    for parameter, slot in zip(parameters, [1, 0]):
+        for name in names:
+            actual = optimizer.state[parameter][name]
+            assert actual.dtype == torch.float16
+            torch.testing.assert_close(actual, saved["state"][slot][name] + 0.5)
+    assert saved["param_groups"][0]["params"] == [0, 1]
+    _assert_tensor_state_tree(saved)
+
+
+@pytest.mark.parametrize("action", ["observe", "replace", "mutate", "delete"])
+def test_residual_load_preserves_posthook_semantics(residual_checkpoint, action):
+    optimizer, parameters, saved, names = residual_checkpoint
+    observed = []
+    replacement = torch.full((129,), 0.75, dtype=torch.float16)
+
+    def post_hook(actual):
+        for parameter in parameters:
+            for name in names:
+                observed.append(actual.state[parameter][name].dtype)
+                if action == "replace":
+                    actual.state[parameter][name] = replacement
+                elif action == "mutate":
+                    actual.state[parameter][name].add_(1)
+                elif action == "delete":
+                    del actual.state[parameter][name]
+        _assert_tensor_state_tree(actual.state_dict())
+
+    optimizer.register_load_state_dict_post_hook(post_hook)
+    optimizer.load_state_dict(saved)
+    if action == "observe":
+        assert set(observed) == {torch.float16}
+    for slot, parameter in enumerate(parameters):
+        for name in names:
+            if action == "delete":
+                assert name not in optimizer.state[parameter]
+            elif action == "replace":
+                assert optimizer.state[parameter][name] is replacement
+            elif action == "mutate":
+                expected = torch.full((129,), (slot + 1) / 8 + 1, dtype=torch.float16)
+                torch.testing.assert_close(optimizer.state[parameter][name], expected)
+
+
+def test_residual_load_bypasses_parameter_dtype_cast(residual_checkpoint, monkeypatch):
+    optimizer, parameters, saved, names = residual_checkpoint
+    original = torch.optim.Optimizer._process_value_according_to_param_policy
+
+    def check_cast(parameter, value, param_id, param_groups, key=None):
+        assert key not in names, "residual reached parameter dtype cast"
+        return original(parameter, value, param_id, param_groups, key)
+
+    monkeypatch.setattr(
+        torch.optim.Optimizer,
+        "_process_value_according_to_param_policy",
+        staticmethod(check_cast),
+    )
+    optimizer.load_state_dict(saved)
+    for parameter in parameters:
+        assert all(optimizer.state[parameter][name].dtype == torch.float16 for name in names)
+
+
+@pytest.mark.parametrize("failure", ["pre", "validation", "post"])
+def test_residual_load_cleans_up_hooks_after_failure(residual_checkpoint, failure):
+    optimizer, parameters, saved, names = residual_checkpoint
+
+    def fail(*args):
+        raise RuntimeError("injected load failure")
+
+    handle = None
+    if failure == "pre":
+        handle = optimizer.register_load_state_dict_pre_hook(fail)
+    elif failure == "post":
+        handle = optimizer.register_load_state_dict_post_hook(fail)
+    hooks = dict(optimizer._optimizer_load_state_dict_pre_hooks)
+    payload = {**saved, "param_groups": []} if failure == "validation" else saved
+    with pytest.raises((RuntimeError, ValueError)):
+        optimizer.load_state_dict(payload)
+    assert dict(optimizer._optimizer_load_state_dict_pre_hooks) == hooks
+    _assert_tensor_state_tree(saved)
+    if handle is not None:
+        handle.remove()
+    optimizer.load_state_dict(saved)
+    for parameter in parameters:
+        assert all(optimizer.state[parameter][name].dtype == torch.float16 for name in names)
+    _assert_tensor_state_tree(optimizer.state_dict())
+
+
+class SimpleModel(nn.Module):
     def __init__(self, input_dim=10, hidden_dim=20, output_dim=5):
         super().__init__()
         self.fc1 = nn.Linear(input_dim, hidden_dim)
@@ -118,7 +465,6 @@ class SimpleModel(nn.Module):
 
 
 class TestQuantizedState(unittest.TestCase):
-
     def test_quantize_dequantize(self):
         original = torch.randn(100, 50)
         qs = QuantizedState(tensor=original, group_size=64)
@@ -173,7 +519,6 @@ class TestQuantizedState(unittest.TestCase):
 
 
 class TestFourBitAdamW(unittest.TestCase):
-
     def setUp(self):
         torch.manual_seed(42)
         self.model = SimpleModel()
@@ -208,7 +553,8 @@ class TestFourBitAdamW(unittest.TestCase):
         stats = optimizer.get_memory_stats()
         self.assertIn("total_params", stats)
         self.assertIn("savings_percent", stats)
-        self.assertGreater(stats["savings_percent"], 0)
+        self.assertGreater(stats["state_bytes"], stats["standard_bytes"])
+        self.assertLess(stats["savings_percent"], 0)
 
     def test_state_dict(self):
         optimizer = FourBitAdamW(self.model.parameters(), lr=0.001)
@@ -306,7 +652,6 @@ class TestFourBitAdamW(unittest.TestCase):
 
 
 class TestFourBitSGD(unittest.TestCase):
-
     def setUp(self):
         torch.manual_seed(42)
         self.model = SimpleModel()
@@ -398,7 +743,6 @@ class TestFourBitSGD(unittest.TestCase):
 
 
 class TestComparisonWithStandardOptimizers(unittest.TestCase):
-
     def test_adamw_comparison(self):
         torch.manual_seed(42)
         model1 = SimpleModel()

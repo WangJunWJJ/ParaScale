@@ -134,6 +134,7 @@ class TrainEngine:
         step_fn: Any = None,
         checkpoint_manager: Any = None,
         checkpoint_interval: Optional[int] = None,
+        checkpoint_on_last_step: bool = True,
     ) -> TrainState:
         validate_legacy_parallelism(self.config, self.strategy_plan)
         if dataloader is None:
@@ -180,6 +181,7 @@ class TrainEngine:
             step_fn=step_fn,
             checkpoint_manager=checkpoint_manager,
             checkpoint_interval=checkpoint_interval,
+            checkpoint_on_last_step=checkpoint_on_last_step,
         )
 
     def _bind_loss_data_parallel(self, loss_fn: Any) -> None:

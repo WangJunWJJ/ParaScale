@@ -12,7 +12,7 @@ from .configuration import register_config_parser
 from .doctor import build_doctor_payload, register_doctor_parser
 from .plan import register_plan_parser
 from .quantization import register_quantization_parser
-from .run import register_run_parsers
+from .run import register_infer_parser, register_run_parsers, register_train_parser
 from .smoke import register_smoke_parser
 from .stability import register_stability_parser
 from .text import register_text_parser
@@ -33,9 +33,26 @@ def register_command_parsers(subparsers) -> None:
     register_text_parser(subparsers)
 
 
+def register_product_parsers(subparsers, product: str) -> None:
+    """Expose only implemented commands belonging to the selected tool."""
+    if product not in {"train", "infer"}:
+        raise ValueError(f"unknown ParaScale product: {product}")
+    register_config_parser(subparsers)
+    register_doctor_parser(subparsers)
+    if product == "train":
+        register_train_parser(subparsers, name="run")
+        register_plan_parser(subparsers)
+        register_checkpoint_parser(subparsers)
+        register_text_parser(subparsers)
+    else:
+        register_infer_parser(subparsers, name="run")
+        register_quantization_parser(subparsers)
+
+
 __all__ = [
     "build_doctor_payload",
     "emit_json",
     "load_config_file",
     "register_command_parsers",
+    "register_product_parsers",
 ]

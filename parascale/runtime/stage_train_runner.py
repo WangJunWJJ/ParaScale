@@ -25,6 +25,7 @@ from parascale.parallel.checkpoint_catalog import (
 )
 from parascale.parallel.execution import DistributedTrainer
 from parascale.workloads.causal_lm import build_causal_lm_stage_components
+from parascale.workloads.causal_lm_evaluation import build_causal_lm_evaluation_cursor
 
 from .runner_common import _write_runtime_config_artifacts
 from .stage_identity import build_stage_checkpoint_context
@@ -33,6 +34,7 @@ from .training.coordination import coordinated_call
 from .training.data_state import DataResumeController
 from .training.engine import TrainState
 from .training.stage_checkpoint import StageTrainingCheckpoint
+from .training.stage_evaluation import evaluate_stage
 from .training.stage_loop import StageUpdateLoop
 
 
@@ -198,6 +200,18 @@ def run_stage_train_from_config(
         ),
         phase="stage construction",
     )
+    evaluation_cursor = None
+    if plan.evaluation is not None:
+        evaluation_cursor = coordinated_call(
+            lambda: build_causal_lm_evaluation_cursor(
+                plan.evaluation,
+                cursor,
+                microbatches=plan.topology.microbatches,
+                vocab_size=stage.vocab_size,
+            ),
+            phase="evaluation corpus",
+            identity=lambda value: value.corpus.identity,
+        )
     context = coordinated_call(
         lambda: build_stage_checkpoint_context(stage, cursor, plan),
         phase="training identity",
@@ -227,6 +241,7 @@ def run_stage_train_from_config(
         tensor_plan=tensor_plan,
         checkpoint_context=context,
         precision=plan.config.precision,
+        ddp_comm_hook=plan.ddp_comm_hook,
     )
     del example
 
@@ -261,19 +276,47 @@ def run_stage_train_from_config(
 
     def save(step):
         path = root / f"step-{step:08d}"
-        trainer.save_checkpoint(path, optimizer, step=step, runtime=recovery)
+        trainer.save_checkpoint(
+            path,
+            optimizer,
+            step=step,
+            runtime=recovery,
+            checkpoint_format=plan.config.checkpoint_format,
+        )
         retention = _rank_zero(
             lambda: prune_stage_checkpoints(path, keep_last=plan.keep_last),
             phase="checkpoint retention",
         )
-        last_checkpoint.update(path=str(path), step=step, retention=retention)
+        last_checkpoint.update(
+            path=str(path),
+            step=step,
+            retention=retention,
+            format=plan.config.checkpoint_format,
+        )
 
+    evaluation = None
+    if evaluation_cursor is not None:
+        evaluation = {
+            "initial": evaluate_stage(
+                trainer,
+                evaluation_cursor,
+                max_batches=plan.evaluation.max_batches,
+                global_step=progress.state.global_step,
+            )
+        }
     torch.cuda.reset_peak_memory_stats(device)
     result = StageUpdateLoop(
         trainer, optimizer, progress, cursor, plan, device, save
     ).run()
     peak = torch.tensor(torch.cuda.max_memory_allocated(device), device=device)
     dist.all_reduce(peak, op=dist.ReduceOp.MAX)
+    if evaluation_cursor is not None:
+        evaluation["final"] = evaluate_stage(
+            trainer,
+            evaluation_cursor,
+            max_batches=plan.evaluation.max_batches,
+            global_step=progress.state.global_step,
+        )
     return {
         "mode": "train",
         "dry_run": False,
@@ -283,10 +326,12 @@ def run_stage_train_from_config(
         "mock": False,
         "synthetic": False,
         "precision": plan.config.precision,
+        "ddp_comm_hook": trainer.ddp_comm_hook,
         "plan": plan.to_dict(),
         "config_artifacts": artifacts,
         "resume_selection": selection,
         "checkpoint": last_checkpoint,
         "peak_memory_allocated_bytes": peak.item(),
+        "evaluation": evaluation,
         **result,
     }

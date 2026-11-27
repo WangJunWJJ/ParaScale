@@ -46,7 +46,7 @@ def test_default_float_policy_is_explicit_and_bounded():
         ("do_sample", True),
         ("unknown", 1),
         ("execution", "auto"),
-        ("precision", "fp16"),
+        ("precision", "fp8"),
     ],
 )
 def test_invalid_options_rejected(field, value):
@@ -71,6 +71,26 @@ def test_explicit_cpu_functionality_requires_fp32():
     assert parse({"precision": "fp32"}, runtime={"device": "cpu"}).device == "cpu"
     with pytest.raises(ValueError, match="precision|CPU"):
         parse(runtime={"device": "cpu"})
+
+
+def test_cuda_float_fp16_is_an_explicit_inference_policy():
+    spec = parse({"precision": "fp16"})
+    assert spec.precision == "fp16" and spec.execution == "float"
+    assert spec.cache_implementation == "dynamic"
+
+
+@pytest.mark.parametrize(
+    "policy,runtime",
+    [
+        ({}, {"device": "cpu"}),
+        ({"cache_implementation": "static"}, {}),
+        ({"execution": "reference", "artifact_path": "/artifact.pt"}, {}),
+        ({"execution": "gemlite_int8", "artifact_path": "/artifact.pt"}, {}),
+    ],
+)
+def test_fp16_does_not_enable_unqualified_execution_combinations(policy, runtime):
+    with pytest.raises(ValueError, match="FP16|fp16|CPU|BF16"):
+        parse({"precision": "fp16", **policy}, runtime=runtime)
 
 
 @pytest.mark.parametrize(

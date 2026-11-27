@@ -9,7 +9,8 @@ import copy
 import torch
 from torch import nn
 
-from .execution_contracts import validate_artifact
+from parascale.core.model_transform import validate_artifact
+
 from .fake_quantize import FakeQuantizedConv2d, FakeQuantizedLinear
 from .inference_gemlite import GemliteInt8Linear, _load_gemlite
 from .quantized_layers import QuantizedConv2d, QuantizedLinear

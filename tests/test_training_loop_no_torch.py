@@ -120,7 +120,12 @@ def test_runtime_core_precision_memory_and_step_controllers_without_torch():
     assert result["images"] == 2
     assert result["images_per_second"] > 0
 
-def test_fit_loop_runner_records_wait_memory_and_checkpoint_without_torch():
+@pytest.mark.parametrize("start_step", [0, 10])
+@pytest.mark.parametrize("skip_update", [False, True])
+@pytest.mark.parametrize("caller_saves_final", [False, True])
+def test_fit_loop_runner_records_wait_memory_and_checkpoint_without_torch(
+    start_step, skip_update, caller_saves_final
+):
     from parascale.runtime.training import FitLoopRunner
 
     class State:
@@ -155,6 +160,7 @@ def test_fit_loop_runner_records_wait_memory_and_checkpoint_without_torch():
                 {"training_backend": "native", "gradient_accumulation_steps": 1},
             )()
             self.state = State()
+            self.state.global_step = start_step
             self.memory = FakeMemory()
             self.precision = FakePrecision()
             self.saved_steps = []
@@ -171,7 +177,7 @@ def test_fit_loop_runner_records_wait_memory_and_checkpoint_without_torch():
 
         def _run_step(self, batch, **_kwargs):
             self.seen.append(batch["x"])
-            return {"loss": float(batch["x"])}
+            return {"loss": float(batch["x"]), "optimizer_updated": batch["x"] != 0}
 
         def _add_end_to_end_metrics(self, metrics, batch, dataloader_wait_seconds):
             metrics["dataloader_wait_ms"] = dataloader_wait_seconds * 1000.0
@@ -190,21 +196,29 @@ def test_fit_loop_runner_records_wait_memory_and_checkpoint_without_torch():
     checkpoints = []
     scheduler = object()
     engine = FakeEngine()
+    batches = [{"x": 1, "num_images": 2}, {"x": 2, "num_images": 3}]
+    if skip_update:
+        batches.insert(1, {"x": 0})
+    options = {"checkpoint_on_last_step": False} if caller_saves_final else {}
 
     state = FitLoopRunner(engine).run(
-        [{"x": 1, "num_images": 2}, {"x": 2, "num_images": 3}],
+        batches,
         max_steps=2,
         scheduler=scheduler,
         checkpoint_manager=checkpoints,
         checkpoint_interval=1,
+        **options,
     )
 
-    assert state.global_step == 2
+    assert state.global_step == start_step + 2
     assert engine.memory.reset_called is True
     assert engine.precision.setup_called is True
-    assert engine.seen == [1, 2]
-    assert checkpoints == [1, 2]
-    assert engine.saved_steps == [(1, scheduler), (2, scheduler)]
+    assert engine.seen == ([1, 0, 2] if skip_update else [1, 2])
+    expected = [start_step + 1]
+    if not caller_saves_final:
+        expected.append(start_step + 2)
+    assert checkpoints == expected
+    assert engine.saved_steps == [(step, scheduler) for step in expected]
     assert state.last_metrics["loss"] == 2.0
     assert state.last_metrics["peak_memory_bytes"] == 123
     assert state.last_metrics["allocated_memory_bytes"] == 45

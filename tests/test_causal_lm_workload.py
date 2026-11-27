@@ -8,6 +8,7 @@
 import json
 import os
 import random
+import shutil
 import time
 import weakref
 from datetime import timedelta
@@ -25,6 +26,53 @@ from parascale.runtime.train_runner import (  # noqa: E402
     run_train_from_config,
 )
 from parascale.workloads import build_training_components  # noqa: E402
+
+
+@pytest.mark.parametrize("different_mapping", [False, True])
+def test_product_causal_distillation_checks_token_meanings(
+    tmp_path, model_path, capsys, different_mapping
+):
+    student_data = prepare(tmp_path, model_path, capsys)
+    teacher_root = tmp_path / "teacher-assets"
+    teacher_root.mkdir()
+    teacher_path = teacher_root / "model"
+    shutil.copytree(model_path, teacher_path)
+    if different_mapping:
+        tokenizer_path = teacher_path / "tokenizer.json"
+        definition = json.loads(tokenizer_path.read_text(encoding="utf-8"))
+        vocab = definition["model"]["vocab"]
+        vocab["a"], vocab["b"] = vocab["b"], vocab["a"]
+        tokenizer_path.write_text(json.dumps(definition), encoding="utf-8")
+    teacher_data = prepare(teacher_root, teacher_path, capsys)
+    teacher_config = configuration(
+        teacher_path, teacher_data, tmp_path / "teacher-checkpoints"
+    )
+    teacher, _, _, _ = build_training_components(teacher_config)
+    checkpoint = tmp_path / "teacher.pt"
+    torch.save(teacher.state_dict(), checkpoint)
+    student_config = configuration(
+        model_path, student_data, tmp_path / "student-checkpoints"
+    )
+    student_config["distillation"] = {
+        "enabled": True,
+        "task": "causal_lm",
+        "temperature": 2.0,
+        "alpha": 0.5,
+        "teacher": {"config": teacher_config, "checkpoint": str(checkpoint)},
+    }
+    if different_mapping:
+        with pytest.raises(ValueError, match="tokenizer"):
+            run_train_from_config(student_config)
+        assert not list((tmp_path / "student-checkpoints").glob("step-*"))
+    else:
+        result = run_train_from_config(student_config)
+        assert result["global_step"] == 2
+        assert (
+            result["distillation"]["objective"]["tokenizer_identity"]
+            == teacher.tokenizer_identity
+        )
+        resumed = run_train_from_config(student_config, resume_step=2)
+        assert resumed["global_step"] == 4
 
 
 @pytest.fixture

@@ -43,9 +43,10 @@ TRAIN_EXAMPLES = """examples:
 """
 
 
-def register_run_parsers(subparsers: argparse._SubParsersAction) -> None:
+def register_train_parser(subparsers: argparse._SubParsersAction, name: str = "train") -> None:
+    """Register the same training contract for unified and product CLIs."""
     train_parser = subparsers.add_parser(
-        "train",
+        name,
         help="Validate and launch a ParaScale training run.",
         epilog=TRAIN_EXAMPLES,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -72,8 +73,11 @@ def register_run_parsers(subparsers: argparse._SubParsersAction) -> None:
     )
     train_parser.set_defaults(func=cmd_train)
 
+
+def register_infer_parser(subparsers: argparse._SubParsersAction, name: str = "infer") -> None:
+    """Register offline inference without training or serving commands."""
     infer_parser = subparsers.add_parser(
-        "infer",
+        name,
         help="Run a ParaScale inference workload through the unified runtime.",
     )
     infer_parser.add_argument(
@@ -84,6 +88,10 @@ def register_run_parsers(subparsers: argparse._SubParsersAction) -> None:
     )
     infer_parser.set_defaults(func=cmd_infer)
 
+
+def register_run_parsers(subparsers: argparse._SubParsersAction) -> None:
+    register_train_parser(subparsers)
+    register_infer_parser(subparsers)
     serve_parser = subparsers.add_parser(
         "serve", help="Validate and launch a ParaScale serving runtime."
     )
@@ -146,6 +154,10 @@ def run_benchmark_from_config(config_data: Dict[str, Any]) -> Dict[str, Any]:
 
 def run_inference_from_config(config_data: Dict[str, Any]) -> Dict[str, Any]:
     model, batches, task = build_inference_components(config_data)
+    if task == "diffusion_generation":
+        from parascale.runtime.inference.diffusion import run_diffusion_inference
+
+        return attach_runtime_evidence(run_diffusion_inference(model, batches))
     if task == "causal_lm_generation":
         from parascale.runtime.inference.causal_lm import run_causal_lm_inference
 
@@ -385,6 +397,17 @@ def cmd_serve(args: argparse.Namespace) -> int:
 def cmd_infer(args: argparse.Namespace) -> int:
     config_data = load_config_file(args.config)
     causal = section(config_data, "inference").get("workload") == "causal_lm"
+    diffusion = section(config_data, "inference").get("workload") == "diffusion"
+    if diffusion:
+        from parascale.runtime.inference.diffusion import validate_diffusion_paths
+        from parascale.workloads.specs.diffusion import DiffusionInferenceSpec
+
+        validate_diffusion_paths(
+            DiffusionInferenceSpec.from_config(config_data),
+            config_path=args.config,
+            summary_path=args.output,
+            run_dir=_command_run_directory(config_data, args.output, "infer"),
+        )
     if causal:
         from parascale.runtime.inference.causal_lm import validate_command_paths
         from parascale.workloads.specs.causal_lm_inference import CausalLmInferenceSpec
@@ -396,6 +419,13 @@ def cmd_infer(args: argparse.Namespace) -> int:
             summary_path=args.output,
             run_dir=_command_run_directory(config_data, args.output, "infer"),
         )
+    if (causal or diffusion) and args.output:
+        try:
+            Path(args.output).parent.mkdir(parents=True, exist_ok=True)
+        except OSError as error:
+            raise ValueError(
+                f"Cannot create inference summary directory: {error}"
+            ) from error
     config_artifacts = _write_command_config_artifacts(
         config_data,
         output_path=args.output,
@@ -405,7 +435,7 @@ def cmd_infer(args: argparse.Namespace) -> int:
     payload = run_inference_from_config(config_data)
     payload["config_artifacts"] = config_artifacts
     attach_runtime_evidence(payload)
-    if causal and args.output:
+    if (causal or diffusion) and args.output:
         with Path(args.output).open("x", encoding="utf-8") as stream:
             json.dump(payload, stream, indent=2, ensure_ascii=False, allow_nan=False)
             stream.write("\n")

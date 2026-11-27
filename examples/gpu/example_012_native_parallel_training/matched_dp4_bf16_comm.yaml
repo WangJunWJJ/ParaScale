@@ -1,0 +1,43 @@
+parascale:
+  training_backend: native_parallel
+  precision: bf16
+  ddp_comm_hook: bf16_compress
+  data_parallel_size: 4
+  tensor_parallel_size: 1
+  pipeline_parallel_size: 1
+  pipeline_schedule: gpipe
+  checkpoint_format: dcp
+  checkpoint_save_path: /data/checkpoints/tinyllama-matched-dp4-bf16-comm
+  checkpoint_save_interval: 16
+  checkpoint_keep_last: 2
+  metrics_history_limit: 16
+training:
+  workload: causal_lm
+  max_steps: 16
+  batch_size: 4
+  gradient_accumulation_steps: 4
+  seed: 42
+model:
+  pretrained_model_name_or_path: /models/tinyllama
+  attention_backend: sdpa
+data:
+  type: token_corpus
+  path: /data/wikitext-tokens
+  sequence_length: 256
+  seed: 42
+  shuffle: false
+  repeat: false
+  shuffle_window_blocks: 65536
+  num_workers: 0
+evaluation:
+  data_path: /data/wikitext-validation-tokens
+  max_batches: 2
+optimizer:
+  type: adamw
+  lr: 0.00001
+  betas: [0.9, 0.999]
+  eps: 0.00000001
+  weight_decay: 0.01
+runtime:
+  run_dir: /data/runs/tinyllama-matched-dp4-bf16-comm
+  distributed_timeout_seconds: 300

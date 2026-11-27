@@ -96,6 +96,17 @@ def _validate_constructor(
             )
 
 
+def _registered_python_ddp_hooks(wrapper: Any) -> list:
+    """Read Torch 2.9.1's Python hook registry, not C++ reducer mutations."""
+    hooks = getattr(wrapper, "_comm_hooks", None)
+    if type(hooks) is not list or any(
+        type(entry) is not tuple or len(entry) != 2 or not callable(entry[0])
+        for entry in hooks
+    ):
+        raise ValueError("Missing or malformed DDP Python hook registry")
+    return hooks
+
+
 @dataclass
 class ParallelStepResult:
     """DP-averaged loss and opt-in output (only on the last pipeline stage)."""
@@ -126,6 +137,7 @@ class DistributedTrainer:
         summed_loss: SummedLoss | None = None,
         checkpoint_context: dict[str, Any] | None = None,
         precision: str = "fp32",
+        ddp_comm_hook: str = "none",
     ) -> None:
         import torch
         import torch.distributed as dist
@@ -134,6 +146,7 @@ class DistributedTrainer:
         if not dist.is_initialized():
             raise RuntimeError("Initialize a CUDA/NCCL process group first")
         error, signature = None, None
+        hook = None
         try:
             _validate_constructor(
                 module,
@@ -144,6 +157,26 @@ class DistributedTrainer:
                 tensor_plan,
                 precision,
             )
+            if type(ddp_comm_hook) is not str or ddp_comm_hook not in (
+                "none",
+                "bf16_compress",
+            ):
+                raise ValueError("ddp_comm_hook must be none or bf16_compress")
+            if ddp_comm_hook == "bf16_compress":
+                if (
+                    config.dp_size not in (2, 4)
+                    or config.tp_size != 1
+                    or config.pp_size != 1
+                ):
+                    raise ValueError("bf16_compress requires pure DP2 or DP4")
+                validate_precision("bf16", example_input.device)
+                if torch.cuda.nccl.version() <= (2, 9, 6):
+                    raise ValueError("bf16_compress requires NCCL newer than 2.9.6")
+                from parascale.communication.hooks import get_ddp_comm_hook
+
+                hook = get_ddp_comm_hook(ddp_comm_hook)
+                if not callable(hook):
+                    raise ValueError("bf16_compress DDP hook is unavailable")
             validate_example = getattr(module, "validate_example_inputs", None)
             if validate_example is not None:
                 validate_example(example_input)
@@ -161,6 +194,19 @@ class DistributedTrainer:
                 raise ValueError(
                     "Checkpoint context precision must match execution precision"
                 )
+            if context is not None:
+                detached = json.loads(context)
+                execution = detached.setdefault("execution", {})
+                if not isinstance(execution, dict):
+                    raise ValueError("Checkpoint context execution must be an object")
+                if (
+                    execution.setdefault("ddp_comm_hook", ddp_comm_hook)
+                    != ddp_comm_hook
+                ):
+                    raise ValueError(
+                        "Checkpoint context ddp_comm_hook must match execution policy"
+                    )
+                context = canonical_checkpoint_context(detached)
             signature = (
                 config.dp_size,
                 config.tp_size,
@@ -170,6 +216,7 @@ class DistributedTrainer:
                 summed_loss is not None,
                 context,
                 precision,
+                ddp_comm_hook,
             )
         except Exception as exc:
             error = str(exc)
@@ -186,7 +233,7 @@ class DistributedTrainer:
             )
         if any(item[1] != records[0][1] for item in records):
             raise ValueError(
-                "Parallel constructor preflight failed: topology, microbatches, schedule, loss mode, checkpoint context and precision must agree"
+                "Parallel constructor preflight failed: topology, microbatches, schedule, loss mode, checkpoint context, precision and ddp_comm_hook must agree"
             )
         self._checkpoint_context = context
         self._precision = precision
@@ -230,6 +277,7 @@ class DistributedTrainer:
 
             parallelize_module(module, self.mesh["tp"], tensor_plan)
         self.execution_module = module
+        ddp_group = None
         if config.dp_size > 1:
             if config.tp_size > 1:
                 from torch.distributed.fsdp import fully_shard
@@ -238,11 +286,27 @@ class DistributedTrainer:
             else:
                 from torch.nn.parallel import DistributedDataParallel
 
+                ddp_group = self.mesh["dp"].get_group()
                 self.execution_module = DistributedDataParallel(
                     module,
                     device_ids=[self.device.index],
-                    process_group=self.mesh["dp"].get_group(),
+                    process_group=ddp_group,
                 )
+        self._ddp_comm_hook = ddp_comm_hook
+        self._execution_binding = (module, self.execution_module, ddp_group, hook)
+        if hook is not None:
+            from parascale.core.distributed.coordination import coordinated_call
+
+            def register_hook():
+                group = self.execution_module.process_group
+                if group is None or group is not ddp_group:
+                    raise ValueError(
+                        "DDP wrapper must use the explicit DP process group"
+                    )
+                self.execution_module.register_comm_hook(state=group, hook=hook)
+                self.validate_execution_policy()
+
+            coordinated_call(register_hook, phase="DDP hook registration")
         self.schedule = None
         if config.pp_size > 1:
             from .pipeline_stage import (
@@ -288,6 +352,42 @@ class DistributedTrainer:
             else None
         )
 
+    @property
+    def ddp_comm_hook(self) -> str:
+        """Return the effective gradient communication policy fixed at setup."""
+        return self._ddp_comm_hook
+
+    def validate_execution_policy(self) -> None:
+        """Reject execution or communication drift before checkpoint IO."""
+        module, wrapper, group, hook = self._execution_binding
+        if self.module is not module:
+            raise ValueError("Execution module changed after setup")
+        if self.execution_module is not wrapper:
+            raise ValueError("Execution wrapper changed after setup")
+        if self.ddp_comm_hook != ("none" if hook is None else "bf16_compress"):
+            raise ValueError("DDP communication policy changed after setup")
+        context = self.checkpoint_context
+        if context is not None:
+            execution = context.get("execution")
+            if (
+                not isinstance(execution, dict)
+                or execution.get("ddp_comm_hook") != self.ddp_comm_hook
+            ):
+                raise ValueError(
+                    "Checkpoint context does not match the active DDP policy"
+                )
+        if group is not None:
+            if wrapper.module is not module:
+                raise ValueError("DDP wrapped module changed after setup")
+            if wrapper.process_group is not group:
+                raise ValueError("DDP process group changed after setup")
+            hooks = _registered_python_ddp_hooks(wrapper)
+            if hook is None:
+                if hooks:
+                    raise ValueError("Unexpected DDP communication hook")
+            elif len(hooks) != 1 or hooks[0][0] is not hook or hooks[0][1] is not group:
+                raise ValueError("DDP communication hook or state changed after setup")
+
     def parameters(self):
         """Return only this rank's local stage parameters for optimizer creation."""
         return self.module.parameters()
@@ -324,7 +424,7 @@ class DistributedTrainer:
             return self._execute_step(inputs, targets, return_outputs=return_outputs)
 
     def _execute_step(
-        self, inputs: Any, targets: Any, *, return_outputs: bool
+        self, inputs: Any, targets: Any, *, return_outputs: bool, backward: bool = True
     ) -> ParallelStepResult:
         """Execute with backward outside autocast, including under caller AMP."""
         import torch
@@ -344,7 +444,7 @@ class DistributedTrainer:
                 accumulate = (
                     self.config.dp_size > 1
                     and self.config.tp_size == 1
-                    and index < self.config.microbatches - 1
+                    and (not backward or index < self.config.microbatches - 1)
                 )
                 context = (
                     self.execution_module.no_sync() if accumulate else nullcontext()
@@ -356,24 +456,30 @@ class DistributedTrainer:
                     if not return_outputs:
                         # Autograd owns required tensors; avoid retaining extra logits.
                         del prediction
-                    loss.backward()
+                    if backward:
+                        loss.backward()
                 losses.append(loss.detach())
                 if return_outputs:
                     outputs.append(prediction.detach())
                     del prediction
                 del loss
             output = torch.cat(outputs) if return_outputs else None
-        elif self.pp_rank == 0:
-            self.schedule.step(inputs, return_outputs=return_outputs)
-        elif self.pp_rank == self.config.pp_size - 1:
-            output = self.schedule.step(
-                target=targets, losses=losses, return_outputs=return_outputs
-            )
         else:
-            self.schedule.step(return_outputs=return_outputs)
-        value = torch.zeros((), device=self.device)
+            step = self.schedule.step if backward else self.schedule.eval
+            if self.pp_rank == 0:
+                step(inputs, return_outputs=return_outputs)
+            elif self.pp_rank == self.config.pp_size - 1:
+                output = step(
+                    target=targets, losses=losses, return_outputs=return_outputs
+                )
+            else:
+                step(return_outputs=return_outputs)
+        value = torch.zeros(
+            (), device=self.device, dtype=torch.float32 if backward else torch.float64
+        )
         if losses:
-            value.copy_(torch.stack([loss.detach() for loss in losses]).sum())
+            stacked = torch.stack([loss.detach() for loss in losses])
+            value.copy_(stacked.sum() if backward else stacked.double().sum())
         if self.config.pp_size > 1:
             source = (
                 self.dp_rank * self.config.pp_size + self.config.pp_size - 1
@@ -390,6 +496,58 @@ class DistributedTrainer:
             output.detach() if return_outputs and output is not None else None,
             self._normalization_count,
         )
+
+    def evaluate(
+        self, inputs: Any, targets: Any, *, return_outputs: bool = False
+    ) -> ParallelStepResult:
+        """Evaluate one fixed-shape window on every rank without backward.
+
+        Uses the same DP-only normalization and explicit precision as training.
+        Preserves parameter gradients, module training flags, loss bookkeeping,
+        CPU/current-device Torch RNG and DDP forward-sync policy. No optimizer or
+        training cursor is consumed. Arbitrary user forward side effects are not
+        rolled back; custom modules must honor eval/no_grad semantics. A distributed
+        execution failure is terminal for the job, not a retryable transaction.
+        """
+        import torch
+        from torch.distributed.fsdp import FSDPModule
+        from torch.nn.parallel import DistributedDataParallel
+
+        modes = [
+            (module, module.training) for module in self.execution_module.modules()
+        ]
+        normalization, scale = self._normalization_count, self._loss_scale
+        wrapper = self.execution_module
+        sync_policy = (
+            (wrapper.require_forward_param_sync, wrapper.require_backward_grad_sync)
+            if isinstance(wrapper, DistributedDataParallel)
+            else None
+        )
+        devices = [self.device.index] if self.device.type == "cuda" else []
+        try:
+            with (
+                torch.random.fork_rng(devices=devices),
+                torch.no_grad(),
+                autocast_context("fp32", self.device),
+            ):
+                self.execution_module.eval()
+                self._prepare_step(inputs, targets)
+                return self._execute_step(
+                    inputs, targets, return_outputs=return_outputs, backward=False
+                )
+        finally:
+            for module, training in modes:
+                module.training = training
+            self._normalization_count, self._loss_scale = normalization, scale
+            if sync_policy is not None:
+                (
+                    wrapper.require_forward_param_sync,
+                    wrapper.require_backward_grad_sync,
+                ) = sync_policy
+            if isinstance(wrapper, FSDPModule):
+                # Root FSDP retains unsharded parameters after a no-grad forward;
+                # expose the optimizer-owned shards and their gradients again.
+                wrapper.reshard()
 
     def _prepare_step(self, inputs: Any, targets: Any) -> None:
         """Agree on preflight errors and DP-only counts before any model work."""
@@ -461,12 +619,25 @@ class DistributedTrainer:
         self._loss_scale = self.config.dp_size / self._normalization_count
 
     def save_checkpoint(
-        self, directory: Any, optimizer: Any, *, step: int, runtime: Any = None
+        self,
+        directory: Any,
+        optimizer: Any,
+        *,
+        step: int,
+        runtime: Any = None,
+        checkpoint_format: str = "rank",
     ) -> None:
         """Save a new, same-topology checkpoint; all ranks must participate."""
         from .distributed_checkpoint import save_checkpoint
 
-        save_checkpoint(self, directory, optimizer, step=step, runtime=runtime)
+        save_checkpoint(
+            self,
+            directory,
+            optimizer,
+            step=step,
+            runtime=runtime,
+            checkpoint_format=checkpoint_format,
+        )
 
     def load_checkpoint(
         self, directory: Any, optimizer: Any, *, runtime: Any = None

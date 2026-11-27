@@ -44,6 +44,26 @@ def test_setup_py_is_only_a_compatibility_shim():
         assert duplicate not in source
 
 
+def test_two_products_have_console_scripts_and_dependency_profiles():
+    data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    assert data["scripts"]["parascale-train"] == "parascale.cli:train_main"
+    assert data["scripts"]["parascale-infer"] == "parascale.cli:infer_main"
+    profiles = data["optional-dependencies"]
+    for name in ("training", "inference"):
+        assert "torch==2.9.1" in profiles[name]
+        assert "transformers==4.51.3" in profiles[name]
+        assert not any(item.startswith("deepspeed") for item in profiles[name])
+    assert "diffusers==0.35.1" in profiles["inference"]
+    assert "peft==0.17.0" in profiles["training"]
+
+
+def test_clean_install_verifies_both_product_commands():
+    source = (ROOT / "tests" / "packaging" / "verify_clean_install.py").read_text(encoding="utf-8")
+    assert '"parascale-train"' in source
+    assert '"parascale-infer"' in source
+    assert '"--resume-latest"' in source
+
+
 def test_pyproject_defines_build_and_console_entrypoint():
     data = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 

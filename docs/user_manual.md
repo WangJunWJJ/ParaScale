@@ -2,6 +2,8 @@
 
 文档基线：2026-11-19，对应当前开发分支；具体发布包能力以其版本文档为准。
 
+2026-11-26交付入口补充：统一工程提供[训练工具](training_tool.md)和[推理优化工具](inference_tool.md)两个命令入口，分别为`parascale-train`和`parascale-infer`。两者复用本手册中的配置和执行逻辑；完整交付以[冻结验收基线V1](production_acceptance.md)为准，不能把安装或功能smoke视为正式性能验收通过。
+
 本文面向第一次使用 ParaScale 的训练工程师和研究人员，重点说明如何安装、检查环境、编写配置、启动训练、比较后端、查看 benchmark 证据以及处理常见问题。
 
 ParaScale 当前是一个面向视觉与多模态任务的轻量级分布式训练控制层，统一配置、运行计划、数据管线、后端选择、benchmark 和 checkpoint/resume，并提供有限的推理入口。它不替代 PyTorch DDP/FSDP、DeepSpeed、Megatron-LM 或通用 RL 框架，也不是完整的生产级训推一体平台。
@@ -374,6 +376,24 @@ CLI 在完整学生配置中设置顶层 `distillation`，选择 `task: classifi
 目前配置式调度支持 native/native DDP（含 native ZeRO-1），其他后端显式拒绝，不能静默忽略。检查点保存调度状态及其配置身份；恢复时禁止增删调度器或修改类型、总步数、warmup、下限及基础学习率。所有 rank 在训练/保存前协调校验调度器，单 rank 创建失败或身份不一致时共同失败。
 
 SDK 使用 `TrainEngine.fit(..., scheduler_builder=factory)` 将调度器绑定到后端最终 optimizer；恢复时向 `load_checkpoint` 传递同一配置的 factory，后续 `fit` 不再重复传 factory。引擎保留调度器，最终 `save_checkpoint` 自动包含其状态。直接传入的 scheduler 必须绑定最终 optimizer，不能在训练中替换。调度状态支持有限值 JSON 与 PyTorch Tensor；跨 rank 比较 Tensor 的 dtype、shape 和数值，不比较各 rank 的设备编号。自定义 LambdaLR 等函数型调度器（包括嵌套调度）必须通过 `TrainEngine(scheduler_metadata=...)` 提供稳定配置身份，否则拒绝执行；函数语义不会被 PyTorch 保存，不能仅依赖相同的序列化状态证明函数未改变。
+
+### 7.11 本地 Llama 生成推理
+
+使用 `python -m parascale.cli infer --config CONFIG --output SUMMARY`，设置 `inference.workload: causal_lm`，提供本地 Llama 模型及匹配的 tokenizer，并用 `data.type: prompts_jsonl` 指定提示词文件。每行包含 `prompt` 和可选的字符串 `id`。完整配置见[生成推理示例](../examples/gpu/example_013_causal_lm_inference/README.md)。
+
+浮点执行设置 `inference.execution: float`。CUDA 支持 `precision: fp32/bf16/fp16`；CPU 仅支持 FP32。FP16 使用动态 KV cache 和非编译执行，现阶段拒绝 FP16 与 reference/GemLite INT8 或静态缓存组合。可直接使用示例中的 `float_fp16.json`，每次运行指定新的输出目录，不能覆盖模型、输入或已有结果。
+
+这是单设备离线生成入口，不是 HTTP 服务或连续批处理服务。摘要区分模型准备、预热和稳态生成；输出 token 数按实际 EOS 停止计算。生成链路功能通过不等于指定 LLaMA-7B 的质量、吞吐或整体生产验收通过，目标边界见[生产工具验收基线](production_acceptance.md)。
+
+### 7.12 本地 diffusion 图像生成
+
+`inference.workload: diffusion` 支持本地 Diffusers 格式的 `StableDiffusionPipeline`，不包含 SDXL、DiT 或 diffusion 训练。安装可选依赖 `.[diffusion]`，使用 Diffusers 0.35.1、Transformers 4.51.3；CUDA 编译额外要求 Torch 2.9.1。所有组件使用 safetensors 权重，不隐式下载或加载自定义 pipeline。
+
+通过 `prompts_jsonl` 提供提示词；配置 `height`、`width`、`num_inference_steps`、`guidance_scale` 和 `seed`。保留模型调度器与安全检查配置，过长提示词明确拒绝。CUDA 可用 FP16/FP32，CPU 仅允许 FP32 非编译执行；`compile_mode: max-autotune` 只编译 UNet，不改变采样预算。
+
+必须提供新的 `inference.output_dir`。每张 PNG 的文件名按请求序号生成，最终 `manifest.jsonl` 记录请求 ID、种子、文件名、SHA256 和安全标记；失败留下 `.partial` 清单，不覆盖历史结果。摘要不保留图片数组。预热重放不消耗请求，PNG 编码与落盘不计入稳态生成耗时，但计入整个任务耗时。
+
+可执行配置、命令和对照口径见[diffusion 示例](../examples/gpu/example_016_diffusion_inference/README.md)。小型扩散组件的数值对照不是预训练模型画质或加速证明，后者须使用固定模型、采样预算和独立评估单独验收。
 
 ## 8. 后端选择建议
 

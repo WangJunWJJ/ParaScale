@@ -11,7 +11,7 @@ import argparse
 import os
 
 from parascale._version import __version__
-from parascale.commands import register_command_parsers
+from parascale.commands import register_command_parsers, register_product_parsers
 from parascale.commands.benchmark import (
     add_pipeline_cache_arguments as add_pipeline_cache_arguments,
 )
@@ -87,6 +87,8 @@ __all__ = [
     "cmd_vision_profile",
     "load_config_file",
     "main",
+    "train_main",
+    "infer_main",
     "run_benchmark_from_config",
     "run_inference_from_config",
     "run_serve_from_config",
@@ -94,10 +96,14 @@ __all__ = [
 ]
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, product: str | None = None) -> int:
+    """Run a unified or product-specific parser with shared error handling."""
     parser = argparse.ArgumentParser(
-        prog="parascale",
-        description="ParaScale training utilities.",
+        prog=f"parascale-{product}" if product else "parascale",
+        description=(
+            "ParaScale offline inference and model optimization."
+            if product == "infer" else "ParaScale training utilities."
+        ),
     )
     parser.add_argument(
         "--version",
@@ -113,7 +119,10 @@ def main(argv: list[str] | None = None) -> int:
         help="Local rank injected by distributed launchers.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
-    register_command_parsers(subparsers)
+    if product is None:
+        register_command_parsers(subparsers)
+    else:
+        register_product_parsers(subparsers, product)
 
     args = parser.parse_args(argv)
     command = getattr(args, "command", None)
@@ -125,6 +134,16 @@ def main(argv: list[str] | None = None) -> int:
         failure = classify_exception(exc)
         emit_error_json(failure.to_dict(command))
         return failure.exit_code
+
+
+def train_main(argv: list[str] | None = None) -> int:
+    """Installed training-tool entrypoint."""
+    return main(argv, product="train")
+
+
+def infer_main(argv: list[str] | None = None) -> int:
+    """Installed offline inference-tool entrypoint."""
+    return main(argv, product="infer")
 
 
 if __name__ == "__main__":

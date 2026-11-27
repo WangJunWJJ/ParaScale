@@ -15,6 +15,64 @@ def test_optimizer_spec_defaults_to_adamw_without_torch():
     assert spec.lr == 0.002
 
 
+@pytest.mark.parametrize("value", [None, "adamw", [], False])
+def test_optimizer_spec_rejects_non_mapping_section(value):
+    from parascale.optimizers.spec import OptimizerSpec
+
+    with pytest.raises(ValueError, match="optimizer must be a mapping"):
+        OptimizerSpec.from_config({"optimizer": value})
+
+
+@pytest.mark.parametrize("field", ["lr", "eps", "weight_decay", "momentum", "dampening"])
+@pytest.mark.parametrize("value", [-1, float("nan"), float("inf"), True, None])
+def test_optimizer_spec_rejects_invalid_numeric_fields(field, value):
+    from parascale.optimizers.spec import OptimizerSpec
+
+    kind = "four_bit_sgd" if field in {"momentum", "dampening"} else "adamw"
+    with pytest.raises(ValueError, match=f"optimizer.{field}"):
+        OptimizerSpec.from_config({"optimizer": {"type": kind, field: value}})
+
+
+@pytest.mark.parametrize("value", [0, 2.5, True, "128", None])
+def test_optimizer_spec_rejects_coerced_group_size(value):
+    from parascale.optimizers.spec import OptimizerSpec
+
+    with pytest.raises(ValueError, match="optimizer.group_size"):
+        OptimizerSpec.from_config({"optimizer": {"type": "four_bit_adamw", "group_size": value}})
+
+
+@pytest.mark.parametrize("field", ["nesterov", "compensate_quant_error"])
+@pytest.mark.parametrize("value", ["false", 0, 1, None])
+def test_optimizer_spec_requires_real_booleans(field, value):
+    from parascale.optimizers.spec import OptimizerSpec
+
+    with pytest.raises(ValueError, match=f"optimizer.{field}"):
+        OptimizerSpec.from_config({"optimizer": {"type": "four_bit_sgd", field: value}})
+
+
+@pytest.mark.parametrize("value", [None, 0.9, "09", [True, 0.99], [0.9, "bad"]])
+def test_optimizer_spec_reports_invalid_betas(value):
+    from parascale.optimizers.spec import OptimizerSpec
+
+    with pytest.raises(ValueError, match="optimizer.betas"):
+        OptimizerSpec.from_config({"optimizer": {"betas": value}})
+
+
+@pytest.mark.parametrize("settings", [{"momentum": 0}, {"dampening": 0.1}])
+def test_optimizer_spec_checks_nesterov_before_construction(settings):
+    from parascale.optimizers.spec import OptimizerSpec
+
+    with pytest.raises(ValueError, match="optimizer.nesterov"):
+        OptimizerSpec.from_config({"optimizer": {"type": "four_bit_sgd", "nesterov": True, **settings}})
+
+
+def test_optimizer_spec_preserves_zero_and_scientific_values():
+    from parascale.optimizers.spec import OptimizerSpec
+
+    spec = OptimizerSpec.from_config({"optimizer": {"lr": "1e-4", "eps": 0, "weight_decay": 0}})
+    assert (spec.lr, spec.eps, spec.weight_decay) == (1e-4, 0, 0)
+
+
 @pytest.mark.parametrize("optimizer_type", ["four_bit_adamw", "four_bit_sgd"])
 
 def test_optimizer_spec_accepts_configured_four_bit_types(optimizer_type):

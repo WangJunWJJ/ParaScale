@@ -48,6 +48,44 @@ class RuntimeParticipant:
         self.restored = True
 
 
+@pytest.mark.parametrize("target", ["manifest.json", "shared/__0_0.distcp"])
+def test_dcp_direct_load_rejects_hard_links(tmp_path, target):
+    directory = tmp_path / "snapshot"
+    (directory / "shared").mkdir(parents=True)
+    (directory / "manifest.json").write_text("{}")
+    (directory / "shared/__0_0.distcp").write_bytes(b"data")
+    (tmp_path / "external").hardlink_to(directory / target)
+    with pytest.raises(ValueError, match="hard link"):
+        checkpoint._validate_dcp_paths(
+            directory, {"files": [{"path": "shared/__0_0.distcp"}]}
+        )
+
+
+def test_dcp_direct_load_rejects_unresolved_parent_traversal(tmp_path):
+    (tmp_path / "child").mkdir()
+    with pytest.raises(ValueError, match="traversal"):
+        checkpoint._validate_dcp_paths(tmp_path / "child/..", {"files": []})
+
+
+@pytest.mark.parametrize("target", ["manifest.json", "shared", "snapshot"])
+def test_dcp_direct_load_rejects_symbolic_links(tmp_path, target):
+    directory = tmp_path / "snapshot"
+    (directory / "shared").mkdir(parents=True)
+    (directory / "manifest.json").write_text("{}")
+    (directory / "shared/__0_0.distcp").write_bytes(b"data")
+    source = directory if target == "snapshot" else directory / target
+    moved = tmp_path / "original"
+    source.rename(moved)
+    try:
+        source.symlink_to(moved, target_is_directory=moved.is_dir())
+    except OSError:
+        pytest.skip("Symbolic link permission unavailable")
+    with pytest.raises(ValueError, match="link/reparse"):
+        checkpoint._validate_dcp_paths(
+            directory, {"files": [{"path": "shared/__0_0.distcp"}]}
+        )
+
+
 def test_runtime_checkpoint_roundtrip_and_rng_application_order(
     tmp_path, runtime, monkeypatch
 ):
@@ -203,6 +241,7 @@ def _rank_trainers():
             config=DistributedParallelConfig(dp_size=2),
             device=torch.device("cpu"),
             checkpoint_context=training_context(),
+            validate_execution_policy=lambda: None,
         )
         for rank in range(2)
     ]
@@ -300,6 +339,7 @@ def runtime(monkeypatch):
         config=DistributedParallelConfig(),
         device=torch.device("cpu"),
         checkpoint_context=training_context(),
+        validate_execution_policy=lambda: None,
     )
     optimizer = torch.optim.Adam(trainer.module.parameters())
     calls = []
@@ -322,6 +362,91 @@ def runtime(monkeypatch):
         torch.cuda, "set_rng_state", Mock(side_effect=AssertionError("CUDA"))
     )
     return trainer, optimizer, calls
+
+
+@pytest.mark.parametrize("action", ["save", "load"])
+def test_live_execution_policy_drift_precedes_checkpoint_io(tmp_path, runtime, action):
+    trainer, optimizer, _ = runtime
+    trainer.validate_execution_policy = Mock(side_effect=ValueError("DDP policy drift"))
+    trainer.module.state_dict = Mock(side_effect=AssertionError("state inspection"))
+    with pytest.raises(RuntimeError, match="DDP policy drift"):
+        if action == "save":
+            checkpoint.save_checkpoint(trainer, tmp_path / "new", optimizer, step=1)
+        else:
+            checkpoint.load_checkpoint(trainer, tmp_path / "missing", optimizer)
+    trainer.validate_execution_policy.assert_called_once()
+    trainer.module.state_dict.assert_not_called()
+    assert not (tmp_path / "new").exists()
+
+
+@pytest.mark.parametrize("storage", ["rank", "dcp"])
+@pytest.mark.parametrize(
+    "saved,requested",
+    [
+        (None, "none"),
+        (None, "bf16_compress"),
+        ("none", "bf16_compress"),
+        ("bf16_compress", "none"),
+    ],
+)
+def test_ddp_policy_missing_or_changed_rejects_before_payloads(
+    tmp_path, two_ranks, monkeypatch, storage, saved, requested
+):
+    trainers, optimizers = _rank_trainers()
+    for trainer, optimizer in zip(trainers, optimizers):
+        trainer.checkpoint_context["execution"] = {"ddp_comm_hook": requested}
+        trainer.module.load_state_dict = Mock(
+            side_effect=AssertionError("model mutation")
+        )
+        optimizer.load_state_dict = Mock(
+            side_effect=AssertionError("optimizer mutation")
+        )
+    context = training_context()
+    if saved is not None:
+        context["execution"] = {"ddp_comm_hook": saved}
+    metadata = {
+        "schema_version": 4,
+        "context": context,
+        "topology": asdict(trainers[0].config),
+        "step": 1,
+        "files": [
+            {"path": f"rank-{rank:05d}.pt", "sha256": "0" * 64} for rank in range(2)
+        ],
+    }
+    if storage == "dcp":
+        metadata.update(
+            schema_version=6,
+            runtime=None,
+            storage={"kind": "torch_dcp", "torch_version": str(torch.__version__)},
+        )
+        metadata["files"] = [
+            {"path": path, "sha256": "0" * 64, "size_bytes": 1}
+            for path in (
+                "rank-00000.pt",
+                "rank-00001.pt",
+                "shared/.metadata",
+                "shared/__0_0.distcp",
+            )
+        ]
+    (tmp_path / "manifest.json").write_text(json.dumps(metadata), encoding="utf-8")
+    digest = Mock(side_effect=AssertionError("payload digest"))
+    loader = Mock(side_effect=AssertionError("payload read"))
+    monkeypatch.setattr(checkpoint, "_digest", digest)
+    monkeypatch.setattr(torch, "load", loader)
+    results = two_ranks(
+        lambda rank: checkpoint.load_checkpoint(
+            trainers[rank], tmp_path, optimizers[rank]
+        )
+    )
+    expected = "policy missing" if saved is None else "policy mismatch"
+    assert all(
+        isinstance(error, RuntimeError) and expected in str(error) for error in results
+    )
+    digest.assert_not_called()
+    loader.assert_not_called()
+    for trainer, optimizer in zip(trainers, optimizers):
+        trainer.module.load_state_dict.assert_not_called()
+        optimizer.load_state_dict.assert_not_called()
 
 
 def write_checkpoint(

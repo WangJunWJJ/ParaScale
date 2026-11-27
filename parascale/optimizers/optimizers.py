@@ -18,7 +18,6 @@ import torch.optim as optim
 
 
 class QuantizedState:
-
     def __init__(self, tensor: torch.Tensor, group_size: int = 128):
         self.shape = tensor.shape
         self.group_size = group_size
@@ -46,10 +45,13 @@ class QuantizedState:
         grouped = flat_tensor.view(num_groups, group_size)
         group_min = grouped.min(dim=1, keepdim=True)[0]
         group_max = grouped.max(dim=1, keepdim=True)[0]
-        scale = ((group_max - group_min) / 15.0).squeeze(1)
+        group_range = group_max - group_min
+        scale = (group_range / 15.0).squeeze(1)
         zero_point = group_min.squeeze(1)
+        # Preserve tiny nonzero ranges; constant groups encode as zero.
+        divisor = torch.where(group_range != 0, group_range, torch.ones_like(group_range))
         quantized = (
-            ((grouped - group_min) / (group_max - group_min + 1e-08) * 15)
+            ((grouped - group_min) / divisor * 15)
             .round()
             .clamp(0, 15)
             .to(torch.uint8)
@@ -65,9 +67,11 @@ class QuantizedState:
         packed = self.quantized_data.view(num_groups, self.group_size // 2)
         high_4bit = packed >> 4 & 15
         low_4bit = packed & 15
-        quantized = torch.stack((high_4bit, low_4bit), dim=-1).reshape(
-            num_groups, self.group_size
-        ).float()
+        quantized = (
+            torch.stack((high_4bit, low_4bit), dim=-1)
+            .reshape(num_groups, self.group_size)
+            .float()
+        )
         dequantized = quantized * self.scale.unsqueeze(1) + self.zero_point.unsqueeze(1)
         flat_result = dequantized.flatten()[: torch.prod(torch.tensor(self.shape))]
         return flat_result.view(self.shape)
@@ -106,11 +110,8 @@ class QuantizedState:
         )
 
     def memory_usage(self) -> int:
-        return (
-            self.quantized_data.numel() * 1
-            + self.scale.numel() * 4
-            + self.zero_point.numel() * 4
-        )
+        """Count actual packed state storage, including scale and offset dtype."""
+        return sum(_state_storage_bytes(self).values())
 
     def sparseify(self, threshold: float = 1e-06) -> "QuantizedState":
         dense = self.dequantize()
@@ -153,6 +154,69 @@ class QuantizedState:
         return restored
 
 
+def _state_storage_bytes(value: Any) -> Dict[str, int]:
+    """Count live tensor storage per device once, including aliased views."""
+    seen, totals = set(), {}
+
+    def visit(item):
+        if isinstance(item, QuantizedState):
+            visit(item.state_dict())
+        elif isinstance(item, torch.Tensor):
+            storage = item.untyped_storage()
+            device = str(item.device)
+            key = (device, storage.data_ptr())
+            if storage.nbytes() and key not in seen:
+                seen.add(key)
+                totals[device] = totals.get(device, 0) + storage.nbytes()
+        elif isinstance(item, dict):
+            for child in item.values():
+                visit(child)
+        elif isinstance(item, (list, tuple)):
+            for child in item:
+                visit(child)
+
+    visit(value)
+    return totals
+
+
+def _four_bit_memory_stats(param_groups, states, slots) -> Dict[str, Any]:
+    """Compare complete resident state with initialized FP32 moment tensors.
+
+    This is a storage inventory, not peak allocator memory or a measured AdamW
+    baseline. Python metadata and temporary dequantization buffers are excluded.
+    """
+    by_device = _state_storage_bytes(states)
+    state_bytes = sum(by_device.values())
+    packed = [
+        value
+        for state in states.values()
+        for value in state.values()
+        if isinstance(value, QuantizedState)
+    ]
+    standard = sum(
+        parameter.numel() * 4
+        for parameter, state in states.items()
+        for name in slots
+        if name in state
+    )
+    return {
+        "total_params": sum(
+            p.numel() for group in param_groups for p in group["params"]
+        ),
+        "initialized_params": sum(
+            p.numel()
+            for p, state in states.items()
+            if any(name in state for name in slots)
+        ),
+        "quantized_bytes": sum(_state_storage_bytes(packed).values()),
+        "state_bytes": state_bytes,
+        "state_bytes_by_device": by_device,
+        "standard_bytes": standard,
+        "baseline_scope": "initialized FP32 moment tensors (estimate)",
+        "savings_percent": (1 - state_bytes / standard) * 100 if standard else 0,
+    }
+
+
 def _portable_state(value: Any) -> Any:
     if isinstance(value, QuantizedState):
         return value.state_dict()
@@ -179,8 +243,31 @@ def _restore_portable_state(value: Any, device: torch.device) -> Any:
     return value
 
 
+class _ResidualTensor:
+    """Opaque only during loading, so Torch does not cast residual storage."""
+
+    __slots__ = ("tensor",)
+
+    def __init__(self, tensor: torch.Tensor):
+        self.tensor = tensor
+
+
 class _PortableFourBitOptimizer:
     optimizer_type = "four_bit"
+
+    def __setstate__(self, state: Dict[str, Any]) -> None:
+        # Torch has mapped saved slots to live parameters, but has not run
+        # user post-hooks yet. Move residuals without changing their dtype.
+        for parameter, values in state.get("state", {}).items():
+            if isinstance(values, dict):
+                for name, value in values.items():
+                    if isinstance(value, _ResidualTensor):
+                        values[name] = (
+                            value.tensor.to(device=parameter.device)
+                            if isinstance(parameter, torch.Tensor)
+                            else value.tensor
+                        )
+        super().__setstate__(state)
 
     def state_dict(self) -> Dict[str, Any]:
         state = super().state_dict()
@@ -210,11 +297,30 @@ class _PortableFourBitOptimizer:
             for parameter in group["params"]
         )
         state["state"] = _restore_portable_state(state.get("state", {}), device)
-        super().load_state_dict(state)
+
+        def protect_residuals(_optimizer, effective_state):
+            # Run after user pre-hooks and copy containers so transient wrappers
+            # never leak into the caller's checkpoint or a hook's replacement.
+            protected = dict(effective_state["state"])
+            for slot, values in protected.items():
+                if isinstance(values, dict):
+                    protected[slot] = {
+                        name: _ResidualTensor(value)
+                        if name in ("exp_avg_error", "exp_avg_sq_error", "momentum_error")
+                        and isinstance(value, torch.Tensor)
+                        else value
+                        for name, value in values.items()
+                    }
+            return {**effective_state, "state": protected}
+
+        handle = self.register_load_state_dict_pre_hook(protect_residuals)
+        try:
+            super().load_state_dict(state)
+        finally:
+            handle.remove()
 
 
 class ZeroOptimizer:
-
     def __init__(
         self,
         base_optimizer: optim.Optimizer,
@@ -240,7 +346,9 @@ class ZeroOptimizer:
         self.rank = (
             rank
             if rank is not None
-            else dist.get_rank() if dist.is_available() and dist.is_initialized() else 0
+            else dist.get_rank()
+            if dist.is_available() and dist.is_initialized()
+            else 0
         )
         if self.world_size > 1 and (
             not (dist.is_available() and dist.is_initialized())
@@ -369,7 +477,6 @@ class ZeroOptimizer:
 
 
 class AdamW(optim.AdamW):
-
     def __init__(
         self,
         params: Union[List[torch.Tensor], List[Dict[str, Any]]],
@@ -390,7 +497,6 @@ class AdamW(optim.AdamW):
 
 
 class FourBitAdamW(_PortableFourBitOptimizer, optim.Optimizer):
-
     optimizer_type = "four_bit_adamw"
 
     def __init__(
@@ -498,38 +604,22 @@ class FourBitAdamW(_PortableFourBitOptimizer, optim.Optimizer):
                     exp_avg_sq_q.update(exp_avg_sq)
         return loss
 
-    def get_memory_stats(self) -> Dict[str, float]:
-        total_params = sum(
-            (p.numel() for group in self.param_groups for p in group["params"])
+    def get_memory_stats(self) -> Dict[str, Any]:
+        return _four_bit_memory_stats(
+            self.param_groups, self.state, ("exp_avg", "exp_avg_sq")
         )
-        quantized_bytes = 0
-        for state in self.state.values():
-            if "exp_avg" in state:
-                quantized_bytes += state["exp_avg"].memory_usage()
-            if "exp_avg_sq" in state:
-                quantized_bytes += state["exp_avg_sq"].memory_usage()
-        standard_bytes = total_params * 4 * 2
-        savings_percent = (
-            (1 - quantized_bytes / standard_bytes) * 100 if standard_bytes > 0 else 0
-        )
-        return {
-            "total_params": total_params,
-            "quantized_bytes": quantized_bytes,
-            "standard_bytes": standard_bytes,
-            "savings_percent": savings_percent,
-        }
 
     def print_memory_stats(self):
         stats = self.get_memory_stats()
         print("4bit AdamW memory stats:")
         print(f"  total parameters: {stats['total_params']:,}")
-        print(f"  quantized memory: {stats['quantized_bytes'] / 1024 ** 2:.2f} MB")
-        print(f"  standard AdamW memory: {stats['standard_bytes'] / 1024 ** 2:.2f} MB")
+        print(f"  quantized memory: {stats['quantized_bytes'] / 1024**2:.2f} MB")
+        print(f"  complete state storage: {stats['state_bytes'] / 1024**2:.2f} MB")
+        print(f"  estimated FP32 moments: {stats['standard_bytes'] / 1024**2:.2f} MB")
         print(f"  saving: {stats['savings_percent']:.1f}%")
 
 
 class FourBitSGD(_PortableFourBitOptimizer, optim.Optimizer):
-
     optimizer_type = "four_bit_sgd"
 
     def __init__(
@@ -633,29 +723,16 @@ class FourBitSGD(_PortableFourBitOptimizer, optim.Optimizer):
                     momentum_buffer_q.update(buf)
         return loss
 
-    def get_memory_stats(self) -> Dict[str, float]:
-        total_params = sum(
-            (p.numel() for group in self.param_groups for p in group["params"])
+    def get_memory_stats(self) -> Dict[str, Any]:
+        return _four_bit_memory_stats(
+            self.param_groups, self.state, ("momentum_buffer",)
         )
-        quantized_bytes = 0
-        for state in self.state.values():
-            if "momentum_buffer" in state:
-                quantized_bytes += state["momentum_buffer"].memory_usage()
-        standard_bytes = total_params * 4
-        savings_percent = (
-            (1 - quantized_bytes / standard_bytes) * 100 if standard_bytes > 0 else 0
-        )
-        return {
-            "total_params": total_params,
-            "quantized_bytes": quantized_bytes,
-            "standard_bytes": standard_bytes,
-            "savings_percent": savings_percent,
-        }
 
     def print_memory_stats(self):
         stats = self.get_memory_stats()
         print("4bit SGD memory stats:")
         print(f"  total parameters: {stats['total_params']:,}")
-        print(f"  quantized memory: {stats['quantized_bytes'] / 1024 ** 2:.2f} MB")
-        print(f"  standard SGD memory: {stats['standard_bytes'] / 1024 ** 2:.2f} MB")
+        print(f"  quantized memory: {stats['quantized_bytes'] / 1024**2:.2f} MB")
+        print(f"  complete state storage: {stats['state_bytes'] / 1024**2:.2f} MB")
+        print(f"  estimated FP32 moments: {stats['standard_bytes'] / 1024**2:.2f} MB")
         print(f"  saving: {stats['savings_percent']:.1f}%")

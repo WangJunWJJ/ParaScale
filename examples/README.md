@@ -22,6 +22,10 @@ from another working directory by using an absolute script path.
 Run outputs, checkpoints, datasets, model weights, and benchmark reports must stay
 outside `examples/`.
 
+For local text-to-image generation, see
+[016 Diffusion inference](gpu/example_016_diffusion_inference/README.md).
+It provides eager and compiled product CLI configurations, not a custom sampler.
+
 ## Compression Validation Examples
 
 These examples contain `run.sh` and `README.md`, without a new `config.json`

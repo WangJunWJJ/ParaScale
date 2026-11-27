@@ -81,6 +81,71 @@ def test_real_product_float_generation_matches_hf_greedy(model_path, tmp_path):
     json.dumps(result, allow_nan=False)
 
 
+@pytest.mark.parametrize(
+    "precision,dtype",
+    [("fp32", torch.float32), ("bf16", torch.bfloat16), ("fp16", torch.float16)],
+)
+def test_float_loader_uses_requested_parameter_dtype(
+    model_path, tmp_path, monkeypatch, precision, dtype
+):
+    from parascale.workloads.causal_lm_inference import (
+        CausalLmInferenceModel,
+        build_causal_lm_inference_components,
+    )
+
+    config = infer_config(model_path, tmp_path, precision=precision)
+    config["runtime"]["device"] = "cuda:0"
+    # Test dtype conversion on CPU without pretending to validate CUDA execution.
+    monkeypatch.setattr(
+        CausalLmInferenceModel, "resolve_device", lambda self: ("cpu", lambda: None)
+    )
+    model, _, _ = build_causal_lm_inference_components(config)
+    try:
+        model.eval()
+        assert {parameter.dtype for parameter in model._model.parameters()} == {dtype}
+        assert model.execution_metadata["precision"] == precision
+    finally:
+        model.close()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_cuda_fp16_generation_matches_native_hf(model_path, tmp_path):
+    config = infer_config(model_path, tmp_path, precision="fp16")
+    config["runtime"]["device"] = "cuda:0"
+    result = run_inference_from_config(config)
+    records = [row for batch in result["outputs"] for row in batch["records"]]
+    tokenizer = transformers.AutoTokenizer.from_pretrained(
+        model_path, padding_side="left"
+    )
+    reference = (
+        transformers.AutoModelForCausalLM.from_pretrained(model_path)
+        .eval()
+        .to(device="cuda:0", dtype=torch.float16)
+    )
+    prompts = ["a b", "a b c d", "c d"]
+    expected_ids = []
+    for start in range(0, len(prompts), 2):
+        encoded = tokenizer(
+            prompts[start : start + 2],
+            return_tensors="pt",
+            padding=True,
+            return_token_type_ids=False,
+        ).to("cuda:0")
+        with torch.inference_mode():
+            generated = reference.generate(
+                **encoded, do_sample=False, max_new_tokens=3, use_cache=True
+            )
+        for sequence in generated[:, encoded["input_ids"].shape[1] :].tolist():
+            expected_ids.append(
+                sequence[: sequence.index(1) + 1] if 1 in sequence else sequence
+            )
+    assert [row["generated_token_ids"] for row in records] == expected_ids
+    assert result["execution"]["precision"] == "fp16"
+    assert result["execution"]["device"] == "cuda:0"
+    assert result["metrics"]["requests"] == 3
+    json.dumps(result, allow_nan=False)
+
+
 @pytest.mark.parametrize("mode", ["ptq", "qat"])
 def test_product_export_reloads_without_float_weights_for_inference(
     model_path,

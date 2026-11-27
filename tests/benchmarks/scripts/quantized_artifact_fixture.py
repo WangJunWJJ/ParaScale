@@ -7,8 +7,8 @@
 import torch
 from torch import nn
 
+from parascale.core.model_transform import validate_artifact
 from parascale.quantization import load_quantized_model
-from parascale.quantization.execution_contracts import validate_artifact
 from parascale.quantization.inference_artifact import _select_reference_layers
 
 

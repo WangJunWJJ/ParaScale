@@ -5,6 +5,55 @@
 
 from dataclasses import is_dataclass
 
+import pytest
+
+
+def test_checkpoint_format_default_and_training_owner():
+    from parascale.config import ParaScaleConfig
+    from parascale.configuration.resolver import resolve_config
+
+    assert ParaScaleConfig().checkpoint_format == "rank"
+    resolved = resolve_config(
+        {
+            "parascale": {
+                "training_backend": "native_parallel",
+                "data_parallel_size": 2,
+                "checkpoint_format": "dcp",
+            }
+        }
+    )
+    assert resolved.fields["training.checkpoint_format"].value == "dcp"
+
+
+@pytest.mark.parametrize("value", ["DCP", "", True, False, None, 1])
+def test_checkpoint_format_rejects_invalid_values(value):
+    from parascale.config import ParaScaleConfig
+
+    with pytest.raises(ValueError, match="checkpoint_format"):
+        ParaScaleConfig(checkpoint_format=value)
+
+
+@pytest.mark.parametrize(
+    "backend,dp,tp,invalid_field",
+    [
+        ("native_ddp", 2, 1, "training_backend"),
+        ("native_parallel", 1, 1, "data_parallel_size"),
+        ("native_parallel", 2, 2, "tensor_parallel_size"),
+    ],
+)
+def test_dcp_checkpoint_format_requires_supported_config(
+    backend, dp, tp, invalid_field
+):
+    from parascale.config import ParaScaleConfig
+
+    with pytest.raises(ValueError, match=rf"checkpoint_format.*{invalid_field}"):
+        ParaScaleConfig(
+            checkpoint_format="dcp",
+            training_backend=backend,
+            data_parallel_size=dp,
+            tensor_parallel_size=tp,
+        )
+
 
 def test_backend_config_roundtrip_without_torch():
     from parascale.config import ParaScaleConfig
@@ -79,12 +128,14 @@ def test_config_rejects_invalid_ddp_bucket_cap_without_torch():
     else:
         raise AssertionError("expected invalid ddp_bucket_cap_mb to fail")
 
+
 def test_config_accepts_ascend_native_backend_without_torch():
     from parascale.config import ParaScaleConfig
 
     config = ParaScaleConfig(training_backend="ascend_native")
 
     assert config.training_backend == "ascend_native"
+
 
 def test_device_prefetch_config_is_generic_and_cuda_compatible_without_torch():
     from parascale.config import ParaScaleConfig
@@ -98,6 +149,7 @@ def test_device_prefetch_config_is_generic_and_cuda_compatible_without_torch():
     assert config.to_dict()["device_prefetch"] is True
     assert config.to_dict()["prefetch_device"] == "npu:0"
 
+
 def test_legacy_cuda_prefetch_config_populates_generic_fields_without_torch():
     from parascale.config import ParaScaleConfig
 
@@ -109,6 +161,7 @@ def test_legacy_cuda_prefetch_config_populates_generic_fields_without_torch():
     assert config.prefetch_device == "cuda:1"
     assert config.cuda_prefetch is True
     assert config.cuda_prefetch_device == "cuda:1"
+
 
 def test_layered_config_roundtrip_without_torch():
     from parascale.config import LayeredParaScaleConfig, ParaScaleConfig
@@ -140,6 +193,7 @@ def test_layered_config_roundtrip_without_torch():
     assert layered.training.checkpoint_save_path == "runs/ckpt"
     assert restored.to_dict() == config.to_dict()
 
+
 def test_config_field_map_covers_layered_and_flat_configs():
     from parascale.config import (
         BackendConfig,
@@ -164,10 +218,9 @@ def test_config_field_map_covers_layered_and_flat_configs():
     for section, config_type in section_types.items():
         assert set(fields_by_section[section]) == set(config_type().to_dict())
 
-    mapped_fields = {
-        field for fields in fields_by_section.values() for field in fields
-    }
+    mapped_fields = {field for fields in fields_by_section.values() for field in fields}
     assert mapped_fields == flat_fields
+
 
 def test_parascale_config_defaults_are_derived_from_layered_schema():
     from parascale.config import LayeredParaScaleConfig, ParaScaleConfig
@@ -178,6 +231,7 @@ def test_parascale_config_defaults_are_derived_from_layered_schema():
     assert not is_dataclass(ParaScaleConfig)
     assert config.to_dict() == defaults
     assert config.to_layered_dict() == LayeredParaScaleConfig().to_dict()
+
 
 def test_layered_config_copies_nested_resolution_buckets_without_torch():
     from parascale.config import ParaScaleConfig

@@ -104,8 +104,8 @@ class DistillationConfig:
         return {
             "enabled": self.enabled,
             "task": self.task,
-            "temperature": self.temperature,
-            "alpha": self.alpha,
+            "temperature": float(self.temperature),
+            "alpha": float(self.alpha),
             "ignore_index": self.ignore_index,
             "input_keys": list(self.input_keys),
         }

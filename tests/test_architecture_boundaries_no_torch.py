@@ -3,6 +3,7 @@
 # @Author : Wang Jun
 # @Email: wj_xd@foxmail.com
 
+import ast
 from importlib import import_module
 from pathlib import Path
 
@@ -420,24 +421,15 @@ def test_workload_and_vision_data_use_runtime_device_helpers():
 
 def test_cli_delegates_command_parser_registration():
     cli_source = Path("parascale/cli.py").read_text(encoding="utf-8")
-    command_tokens = [
-        '"config"',
-        '"plan"',
-        '"doctor"',
-        '"smoke"',
-        '"train"',
-        '"infer"',
-        '"serve"',
-        '"benchmark"',
-        '"benchmark-matrix"',
-        '"benchmark-stability"',
-        '"vision-profile"',
-        '"checkpoint"',
-    ]
-
     assert "register_command_parsers(subparsers)" in cli_source
-    for token in command_tokens:
-        assert token not in cli_source
+    assert "register_product_parsers(subparsers, product)" in cli_source
+    # Product names select a registry; subcommand registration stays outside CLI.
+    assert not any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "add_parser"
+        for node in ast.walk(ast.parse(cli_source))
+    )
 
     modules = {
         "parascale.commands.configuration": "register_config_parser",

@@ -11,6 +11,24 @@ from dataclasses import dataclass
 from typing import Any, Dict
 
 
+def get_ddp_comm_hook(name: str) -> Any:
+    """Resolve an explicit policy to PyTorch's hook without importing Torch for none."""
+    if name == "none":
+        return None
+    if name not in ("fp16_compress", "bf16_compress"):
+        raise ValueError(f"unsupported ddp_comm_hook: {name}")
+    try:
+        from torch.distributed.algorithms.ddp_comm_hooks import default_hooks
+    except Exception as exc:
+        raise ImportError(
+            "DDP communication hooks require PyTorch distributed hooks."
+        ) from exc
+    return {
+        "fp16_compress": default_hooks.fp16_compress_hook,
+        "bf16_compress": default_hooks.bf16_compress_hook,
+    }[name]
+
+
 @dataclass(frozen=True)
 class DdpHookPlan:
     hook: str = "none"

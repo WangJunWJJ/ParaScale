@@ -72,10 +72,43 @@ def test_constructor_detaches_context_before_execution(monkeypatch):
         checkpoint_context=value,
     )
     value["model"]["width"] = 64
+    assert "execution" not in value
+    assert trainer.checkpoint_context["execution"] == {"ddp_comm_hook": "none"}
+    assert trainer.ddp_comm_hook == "none"
+    trainer.validate_execution_policy()
+    with pytest.raises(AttributeError):
+        trainer.ddp_comm_hook = "bf16_compress"
     assert trainer.checkpoint_context["model"]["width"] == 32
     trainer.checkpoint_context["model"]["width"] = 99
     assert trainer.checkpoint_context["model"]["width"] == 32
     mesh.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "execution_context", [None, [], {"ddp_comm_hook": "bf16_compress"}]
+)
+def test_constructor_invalid_policy_context_precedes_mesh_creation(
+    monkeypatch, execution_context
+):
+    torch = pytest.importorskip("torch")
+    from parascale.parallel import execution
+    from parascale.parallel.distributed import DistributedParallelConfig
+
+    monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+    monkeypatch.setattr(torch.distributed, "get_world_size", lambda: 1)
+    monkeypatch.setattr(execution, "_validate_constructor", lambda *args: None)
+    mesh = Mock()
+    monkeypatch.setattr(torch.distributed.device_mesh, "init_device_mesh", mesh)
+    value = context() | {"execution": execution_context}
+    with pytest.raises(ValueError, match="context.*execution|context.*ddp_comm_hook"):
+        execution.DistributedTrainer(
+            torch.nn.Linear(2, 2),
+            DistributedParallelConfig(),
+            torch.zeros(1, 2),
+            torch.nn.MSELoss(),
+            checkpoint_context=value,
+        )
+    mesh.assert_not_called()
 
 
 def test_constructor_invalid_context_precedes_mesh_creation(monkeypatch):

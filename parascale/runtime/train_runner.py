@@ -184,6 +184,7 @@ def run_train_from_config(
     optimizer_spec.validate_backend(
         parascale_config.training_backend,
         zero_stage=int(parascale_config.zero_stage or 0),
+        precision=str(parascale_config.precision),
     )
     def parse_scheduler():
         spec = SchedulerSpec.from_config(config_data)
@@ -326,6 +327,7 @@ def run_train_from_config(
         loss_fn=loss_fn,
         checkpoint_manager=manager,
         checkpoint_interval=checkpoint_interval,
+        checkpoint_on_last_step=bool(training.get("skip_final_checkpoint", False)),
     )
     elapsed = max(time.perf_counter() - start, 1e-9)
     execution_identity = collect_execution_identity(engine)
@@ -388,7 +390,7 @@ def run_train_from_config(
                 {
                     **engine.scheduler_metadata,
                     "last_epoch": engine.scheduler.last_epoch,
-                    "next_learning_rates": engine.scheduler.get_last_lr(),
+                    "next_learning_rates": [float(rate) for rate in engine.scheduler.get_last_lr()],
                 }
                 if engine.scheduler is not None else None
             ),
