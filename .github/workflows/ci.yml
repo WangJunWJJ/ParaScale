@@ -28,6 +28,7 @@ jobs:
       - run: python -m pip install --upgrade pip
       - run: python -m pip install --no-deps -e .
       - run: python -m pip install numpy PyYAML pytest ruff build tomli "pillow>=10.0.0"
+      - run: python -m pip install -r examples/acceptance/requirements.txt
       - run: python tests/run_tests.py
       - run: python -m ruff check parascale tests setup.py
 
