@@ -3,6 +3,11 @@
 Examples are organized by hardware target while keeping the framework entrypoint
 and runtime architecture unified.
 
+For requirement-oriented project verification, see [acceptance examples](acceptance/README.md).
+The eight-group runner separates functional probes from formal quality/performance
+acceptance, preserves missing gates as BLOCKED, and uses the installed training
+and inference product commands. Existing hardware examples remain unchanged.
+
 Runtime workload example directories contain:
 
 - `config.json`: a runnable configuration for `python -m parascale.cli`.
